@@ -25,3 +25,19 @@ const PORT = 3000;
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
 });
+
+// POST 요청 받기 위해 필요
+app.use(express.json());
+
+app.post('/api/generate-schedule', (req, res) => {
+    const { prompt } = req.body;
+    console.log('받은 프롬프트:', prompt);
+
+    // 지금은 테스트용으로 고정된 데이터 반환
+    const generatedSchedule = [
+        { title: `${prompt} 준비`, start: '2025-04-30T09:00:00', end: '2025-04-30T11:00:00' },
+        { title: `${prompt} 복습`, start: '2025-04-30T14:00:00', end: '2025-04-30T16:00:00' }
+    ];
+
+    res.json(generatedSchedule);
+});
