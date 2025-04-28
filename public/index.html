@@ -10,11 +10,14 @@
 </head>
 <body>
     <h1>나만의 시간표 캘린더</h1>
-    <input id="promptInput" type="text" placeholder="시간표를 만들어줄 프롬프트를 입력하세요" style="width:300px; padding:8px;">
-    <button id="generateBtn" style="padding:8px 16px;">시간표 생성하기</button>
+    <div class="prompt-wrapper">
+        <div class="prompt-container">
+            <textarea id="promptInput" placeholder="시간표를 만들어줄 프롬프트를 입력하세요"></textarea>
+            <button id="generateBtn">생성</button>
+        </div>
+    </div>
 
     <div id='calendar' style="margin-top:20px;"></div>
-    <button id="saveBtn" style="margin-top:10px;">시간표 저장하기</button>
 
     <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.8/index.global.min.js'></script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
