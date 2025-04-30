@@ -1,11 +1,14 @@
 ﻿
 // FullCalendar 캘린더 생성
 document.addEventListener('DOMContentLoaded', function () {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     var calendarEl = document.getElementById('calendar');
 
     var calendar = new FullCalendar.Calendar(calendarEl, {
         initialView: 'timeGridWeek',
-        initialDate: new Date(),
+        initialDate: new Date(today),
         nowIndicator: true,
         headerToolbar: {
             left: 'prev,next today',
@@ -37,9 +40,10 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             const newSchedule = await response.json();
-            const events = convertScheduleToEvents(newSchedule.schedule, new Date());
-            console.log("받은 시간표:", events);
 
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const events = convertScheduleToEvents(newSchedule.schedule, today);
             calendar.removeAllEvents(); // 기존 시간표 삭제
             calendar.addEventSource(events); // 새로운 시간표 추가
 
@@ -50,103 +54,55 @@ document.addEventListener('DOMContentLoaded', function () {
             console.error('새 시간표 생성 실패:', error);
         }
     });
-
-    // 시간표 저장 버튼
-    document.getElementById('saveBtn').addEventListener('click', function () {
-        html2canvas(calendarEl).then(function (canvas) {
-            var link = document.createElement('a');
-            link.download = 'my_calendar.png';
-            link.href = canvas.toDataURL();
-            link.click();
-        });
-    });
 });
-
-// GPT JSON을 FullCalendar 형식으로 변환
-function convertScheduleToCalendarEvents(schedule) {
-    const events = [];
-    const baseDate = new Date(); // 오늘 날짜 기준
-
-    schedule.forEach((dayObj, index) => {
-        const dayOffset = index; // day 1 = 오늘, day 2 = 내일...
-
-        dayObj.activities.forEach(activity => {
-            const startParts = activity.start.split(':');
-            const endParts = activity.end.split(':');
-
-            const start = new Date(baseDate);
-            start.setDate(baseDate.getDate() + dayOffset);
-            start.setHours(Number(startParts[0]), Number(startParts[1]));
-
-            const end = new Date(baseDate);
-            end.setDate(baseDate.getDate() + dayOffset);
-            end.setHours(Number(endParts[0]), Number(endParts[1]));
-
-            events.push({
-                title: activity.title,
-                start: start.toISOString(),
-                end: end.toISOString()
-            });
-        });
-    });
-
-    return events;
-}
-
 
 // day -> 실제 날짜로 변환
 function convertScheduleToEvents(gptSchedule, today = new Date()) {
     const events = [];
 
-    const todayIndex = today.getDay(); // 일: 0, 월: 1, ..., 토: 6
-    const gptDayToday = todayIndex === 0 ? 7 : todayIndex; // GPT 기준 day: 1 = 월 → 일요일(getDay=0)은 7로 보정
+    const todayIndex = today.getDay(); // 일(0), 월(1), ..., 토(6)
+    const gptDayToday = todayIndex === 0 ? 7 : todayIndex; // GPT 기준: 월(1) ~ 일(7) // 오늘 날짜 
 
     gptSchedule.forEach(dayBlock => {
-        const targetDate = new Date(today);
-
         // 지난 요일이면 다음 주로 넘김
         const dateOffset = (dayBlock.day - gptDayToday + 7) % 7;
-        targetDate.setDate(today.getDate() + dateOffset);
-        const dateStr = targetDate.toISOString().split('T')[0];
+        const targetDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + dateOffset);
+        const dateStr = formatLocalISO(targetDate).split('T')[0];
 
         dayBlock.activities.forEach(activity => {
             const start = new Date(`${dateStr}T${activity.start}`);
             let end = new Date(`${dateStr}T${activity.end}`);
 
             if (end < start) {
-                if (activity.title.includes("수면")) {
-                    // 수면은 두 개의 이벤트로 나눠서 표시
-                    const midnight = new Date(start);
-                    midnight.setHours(0, 0, 0, 0);
+                if (activity.title.includes("수면")) {    // ex) 23:30~07:00 
+                    const startOfToday = new Date(start);
+                    startOfToday.setHours(0, 0, 0, 0);
 
-                    const earlyMorningEnd = new Date(`${dateStr}T${activity.end}`);
-                    const lateNightStart = new Date(`${dateStr}T${activity.start}`);
-                    const lateNightEnd = new Date(start);
-                    lateNightEnd.setHours(23, 59, 59, 999);
+                    const endOfToday = new Date(start);
+                    endOfToday.setHours(23, 59, 59, 999);
 
                     // 00:00 ~ 07:00 수면
                     events.push({
                         title: activity.title,
-                        start: midnight.toISOString(),
-                        end: earlyMorningEnd.toISOString()
+                        start: formatLocalISO(startOfToday),
+                        end: formatLocalISO(end)
                     });
 
                     // 23:30 ~ 23:59 수면
                     events.push({
                         title: activity.title,
-                        start: lateNightStart.toISOString(),
-                        end: lateNightEnd.toISOString()
+                        start: formatLocalISO(start),
+                        end: formatLocalISO(endOfToday)
                     });
                     return;
                 } else {
                     end.setDate(end.getDate() + 1);
                 }
             }
-
             events.push({
                 title: activity.title,
-                start: start.toISOString(),
-                end: end.toISOString()
+                start: formatLocalISO(start),
+                end: formatLocalISO(end)
             });
         });
     });
@@ -154,4 +110,10 @@ function convertScheduleToEvents(gptSchedule, today = new Date()) {
     return events;
 }
 
+function pad(n) {
+    return n.toString().padStart(2, '0');
+}
 
+function formatLocalISO(date) {
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:00`;
+}
