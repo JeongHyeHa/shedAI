@@ -1,36 +1,11 @@
-﻿// 최종 자동 포맷 변환 & 시간표 생성
-
-// 자동 포맷 변환 함수
-function autoFormatInput(rawInput) {
-    const lines = rawInput.split('\n');
-    let result = '';
-    let currentSection = '';
-
-    lines.forEach(line => {
-        const trimmedLine = line.trim();
-
-        if (trimmedLine.includes('생활패턴') || trimmedLine.includes('생활 패턴')) {
-            currentSection = '[생활 패턴]';
-            result += `${currentSection}\n`;
-        } else if (trimmedLine.includes('할 일 목록')) {
-            currentSection = '[할 일 목록]';
-            result += `\n${currentSection}\n`;
-        } else if (trimmedLine !== '') {
-            if (currentSection) {
-                result += `- ${trimmedLine}\n`;
-            }
-        }
-    });
-
-    return result;
-}
-
+﻿
 // FullCalendar 캘린더 생성
 document.addEventListener('DOMContentLoaded', function () {
     var calendarEl = document.getElementById('calendar');
 
     var calendar = new FullCalendar.Calendar(calendarEl, {
         initialView: 'timeGridWeek',
+        initialDate: new Date(),
         nowIndicator: true,
         headerToolbar: {
             left: 'prev,next today',
@@ -44,29 +19,33 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // 새로운 시간표 생성 버튼
     document.getElementById('generateBtn').addEventListener('click', async function () {
-        const promptInput = document.getElementById('promptInput');
-        let prompt = promptInput.value.trim();
+        const lifestyle = document.getElementById('lifestyleInput').value.trim();
+        const tasks = document.getElementById('taskInput').value.trim();
 
-        if (!prompt) {
-            alert('프롬프트를 입력해주세요!');
+        if (!lifestyle || !tasks) {
+            alert("생활 패턴과 할 일 목록을 모두 입력해주세요!");
             return;
         }
 
-        const formattedPrompt = autoFormatInput(prompt);
-        console.log('자동 변환된 프롬프트:', formattedPrompt);
+        const prompt = `[생활 패턴]\n${lifestyle}\n\n[할 일 목록]\n${tasks}`;
 
         try {
             const response = await fetch('/api/generate-schedule', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt: formattedPrompt })
+                body: JSON.stringify({ prompt })
             });
+
             const newSchedule = await response.json();
-            const convertedEvents = convertScheduleToCalendarEvents(newSchedule.schedule); // 변환 로직
+            const events = convertScheduleToEvents(newSchedule.schedule, new Date());
+            console.log("받은 시간표:", events);
 
             calendar.removeAllEvents(); // 기존 시간표 삭제
-            calendar.addEventSource(convertedEvents); // 새로운 시간표 추가
-            promptInput.value = '';
+            calendar.addEventSource(events); // 새로운 시간표 추가
+
+            document.getElementById('lifestyleInput').value = '';
+            document.getElementById('taskInput').value = '';
+
         } catch (error) {
             console.error('새 시간표 생성 실패:', error);
         }
@@ -113,3 +92,66 @@ function convertScheduleToCalendarEvents(schedule) {
 
     return events;
 }
+
+
+// day -> 실제 날짜로 변환
+function convertScheduleToEvents(gptSchedule, today = new Date()) {
+    const events = [];
+
+    const todayIndex = today.getDay(); // 일: 0, 월: 1, ..., 토: 6
+    const gptDayToday = todayIndex === 0 ? 7 : todayIndex; // GPT 기준 day: 1 = 월 → 일요일(getDay=0)은 7로 보정
+
+    gptSchedule.forEach(dayBlock => {
+        const targetDate = new Date(today);
+
+        // 지난 요일이면 다음 주로 넘김
+        const dateOffset = (dayBlock.day - gptDayToday + 7) % 7;
+        targetDate.setDate(today.getDate() + dateOffset);
+        const dateStr = targetDate.toISOString().split('T')[0];
+
+        dayBlock.activities.forEach(activity => {
+            const start = new Date(`${dateStr}T${activity.start}`);
+            let end = new Date(`${dateStr}T${activity.end}`);
+
+            if (end < start) {
+                if (activity.title.includes("수면")) {
+                    // 수면은 두 개의 이벤트로 나눠서 표시
+                    const midnight = new Date(start);
+                    midnight.setHours(0, 0, 0, 0);
+
+                    const earlyMorningEnd = new Date(`${dateStr}T${activity.end}`);
+                    const lateNightStart = new Date(`${dateStr}T${activity.start}`);
+                    const lateNightEnd = new Date(start);
+                    lateNightEnd.setHours(23, 59, 59, 999);
+
+                    // 00:00 ~ 07:00 수면
+                    events.push({
+                        title: activity.title,
+                        start: midnight.toISOString(),
+                        end: earlyMorningEnd.toISOString()
+                    });
+
+                    // 23:30 ~ 23:59 수면
+                    events.push({
+                        title: activity.title,
+                        start: lateNightStart.toISOString(),
+                        end: lateNightEnd.toISOString()
+                    });
+                    return;
+                } else {
+                    end.setDate(end.getDate() + 1);
+                }
+            }
+
+            events.push({
+                title: activity.title,
+                start: start.toISOString(),
+                end: end.toISOString()
+            });
+        });
+    });
+
+    return events;
+}
+
+
