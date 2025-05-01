@@ -1,8 +1,37 @@
-﻿
+﻿// 시간 리셋하는 함수
+function resetToStartOfDay(date, isEnd = false) {
+    const newDate = new Date(date);
+    if(isEnd)
+        newDate.setHours(23, 59, 59, 999); 
+    else 
+        newDate.setHours(0, 0, 0, 0);
+
+    return newDate;
+}
+
+// JS 기준 요일(day:0=일) -> GPT 요일로 변환(day:1=일)
+function getGptDayIndex(date) {
+    const jsDay = date.getDay(); // 0 = 일요일, 1 = 월요일 ...
+    return jsDay === 0 ? 7 : jsDay; // GPT 기준: 월(1)~일(7)
+}
+
+function buildShedAIPrompt(lifestyleText, taskText, today) {
+    const dayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+    const dayIndex = today.getDay(); // 일(0) ~ 토(6)
+    const gptDayIndex = getGptDayIndex(today); // GPT 기준: 일(day:1) ~ 토(day:7)
+    const dayName = dayNames[dayIndex];
+    const prefix =
+        `오늘은 GPT 기준 ${dayName}(day:${gptDayIndex})입니다. 
+        가능한 한 오늘(day:${gptDayIndex})부터 day:7까지를 이번 주로 간주하고, 
+        중요하거나 마감이 임박한 일은 가능한 한 오늘부터 바로 시작해주세요.  
+        부족한 경우 다음 주 월요일부터 이어서 할 일을 배치해주세요.`;
+
+    return `${prefix}\n[생활 패턴]\n${lifestyleText}\n\n[할 일 목록]\n${taskText}`;
+}
+
 // FullCalendar 캘린더 생성
 document.addEventListener('DOMContentLoaded', function () {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = resetToStartOfDay(new Date());
 
     var calendarEl = document.getElementById('calendar');
 
@@ -30,7 +59,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        const prompt = `[생활 패턴]\n${lifestyle}\n\n[할 일 목록]\n${tasks}`;
+        const prompt = buildShedAIPrompt(lifestyle, tasks, new Date());
 
         try {
             const response = await fetch('/api/generate-schedule', {
@@ -41,8 +70,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             const newSchedule = await response.json();
 
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            const today = resetToStartOfDay(new Date());
             const events = convertScheduleToEvents(newSchedule.schedule, today);
             calendar.removeAllEvents(); // 기존 시간표 삭제
             calendar.addEventSource(events); // 새로운 시간표 추가
@@ -59,9 +87,7 @@ document.addEventListener('DOMContentLoaded', function () {
 // day -> 실제 날짜로 변환
 function convertScheduleToEvents(gptSchedule, today = new Date()) {
     const events = [];
-
-    const todayIndex = today.getDay(); // 일(0), 월(1), ..., 토(6)
-    const gptDayToday = todayIndex === 0 ? 7 : todayIndex; // GPT 기준: 월(1) ~ 일(7) // 오늘 날짜 
+    const gptDayToday = getGptDayIndex(today);  // GPT 기준 오늘 날짜 
 
     gptSchedule.forEach(dayBlock => {
         // 지난 요일이면 다음 주로 넘김
@@ -75,11 +101,8 @@ function convertScheduleToEvents(gptSchedule, today = new Date()) {
 
             if (end < start) {
                 if (activity.title.includes("수면")) {    // ex) 23:30~07:00 
-                    const startOfToday = new Date(start);
-                    startOfToday.setHours(0, 0, 0, 0);
-
-                    const endOfToday = new Date(start);
-                    endOfToday.setHours(23, 59, 59, 999);
+                    const startOfToday = resetToStartOfDay(start)   // 자정으로 초기화(00:00)
+                    const endOfToday = resetToStartOfDay(start, true);  // 하루 끝으로 초기화(23:59)
 
                     // 00:00 ~ 07:00 수면
                     events.push({
