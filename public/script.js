@@ -22,18 +22,20 @@ function formatLocalISO(date) {
 // 프롬프트 생성
 function buildShedAIPrompt(lifestyleText, taskText, today) {
     const dayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
-    const dayIndex = today.getDay(); // 일(0) ~ 토(6)
-    const gptDayIndex = getGptDayIndex(today); // GPT 기준: 일(day:1) ~ 토(day:7)
-    const dayName = dayNames[dayIndex];
+    const gptDayIndex = getGptDayIndex(today); // 월=1 ~ 일=7
+    const dayName = dayNames[today.getDay()];
+    const dateStr = `${today.getFullYear()}년 ${today.getMonth() + 1}월 ${today.getDate()}일`;
+
     const prefix =
-        `오늘은 GPT 기준 ${dayName}(day:${gptDayIndex})입니다. 
+        `오늘 날짜는 ${dateStr}이며, 요일은 ${dayName}(day:${gptDayIndex})입니다.
         모든 할 일은 반드시 오늘(day:${gptDayIndex})을 기준으로 상대적 마감일을 day 숫자로 환산하여, 
-        해당 마감일까지 day:14, day:15 등 필요한 만큼 스케줄을 생성해야 합니다.
-        중요하거나 마감이 임박한 일은 오늘부터 바로 시작하고,
-        **절대로 day:7까지만 출력하거나 중간에 멈추지 마세요.`;
+         해당 마감일까지 day:14, day:15 등 필요한 만큼 스케줄을 생성해야 합니다.
+         중요하거나 마감이 임박한 일은 오늘부터 바로 시작하고,
+         **절대로 day:7까지만 출력하거나 중간에 멈추지 마세요.`;
 
     return `${prefix}\n[생활 패턴]\n${lifestyleText}\n\n[할 일 목록]\n${taskText}`;
 }
+
 
 // GPT 스케줄 → FullCalendar 캘린더 생성
 function convertScheduleToEvents(gptSchedule, today = new Date()) {

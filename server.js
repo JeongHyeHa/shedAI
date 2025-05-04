@@ -32,7 +32,7 @@ app.post('/api/generate-schedule', async (req, res) => {
                     { role: 'user', content: prompt }
                 ],
                 temperature: 0.7,
-                max_tokens: 5000
+                max_tokens: 8000
             },
             {
                 headers: {
