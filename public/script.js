@@ -113,6 +113,8 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         const prompt = buildShedAIPrompt(lifestyle, tasks, new Date());
+        const statusDiv = document.getElementById('statusMessage');
+        statusDiv.innerText = "스케줄을 설계합니다...";
 
         try {
             const response = await fetch('/api/generate-schedule', {
@@ -122,15 +124,26 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             const newSchedule = await response.json();
+            console.log("받은 GPT 응답: ", newSchedule);
+
             const events = convertScheduleToEvents(newSchedule.schedule, today);
-            calendar.removeAllEvents(); // 기존 시간표 삭제
+            calendar.removeAllEvents();      // 기존 시간표 삭제
             calendar.addEventSource(events); // 새로운 시간표 추가
 
-            document.getElementById('lifestyleInput').value = '';
+            // notes 출력
+            if (typeof newSchedule.notes === 'string') { 
+                statusDiv.innerHTML = newSchedule.notes.replace(/\n/g, '<br>');
+            } else if (Array.isArray(newSchedule.notes)) {
+                statusDiv.innerHTML = newSchedule.notes.join('<br>');
+            }  
+
+            // 입력창 초기화
+            document.getElementById('lifestyleInput').value = '';  
             document.getElementById('taskInput').value = '';
 
         } catch (error) {
             console.error('새 시간표 생성 실패:', error);
+            statusDiv.innerText = "출력에 실패했습니다.";
         }
     });
 });
