@@ -5,7 +5,8 @@ body {
     margin: 20px;
 }
 
-#calendar {
+#calendar,
+#statusMessage {
     max-width: 900px;
     margin: 40px auto;
 }
@@ -17,6 +18,7 @@ button {
     cursor: pointer;
 }
 
+/*캘린더 밑에 모든 공간*/
 .prompt-wrapper {
     display: flex;
     flex-direction: column;
@@ -53,22 +55,31 @@ button {
     box-shadow: 0 0 0 2px rgba(0,0,0,0.2);
 }
 
+/*버튼*/
 .button-right {
     width: 100%;
     display: flex;
     justify-content: flex-end; 
 }
 
-#generateBtn {
+#newScheduleBtn,
+#updateScheduleBtn {
     background-color: #000;
     color: #fff;
     border: none;
     border-radius: 6px;
     padding: 10px 24px;
+    margin-left: 10px;
     font-size: 14px;
     cursor: pointer;
 }
 
-#generateBtn:hover {
+#newScheduleBtn:hover,
+#updateScheduleBtn:hover {
     background-color: #333;
+}
+
+.lifestyle-event {
+    background-color: #c0c0c0 !important;
+    color: black !important;
 }
