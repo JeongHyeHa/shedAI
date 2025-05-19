@@ -1,0 +1,92 @@
+body {
+    background-color: #F6F3EB;
+    font-family: 'Arial', sans-serif;
+    color: #1C2D5A;
+  }
+  
+  /* 캘린더 전체 레이아웃 */
+  .calendar-page {
+    max-width: 1000px;
+    margin: 0 auto;           
+    padding: 2rem;
+    background-color: #F6F3EB;
+    min-height: 100vh;
+    min-width: 360px;  
+    overflow-x: auto;   
+  }
+
+  /* 헤더 로고와 툴바 정렬 */
+  .custom-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 1rem;
+  }
+
+  .logo {
+    font-size: 2.2rem;
+    font-weight: bold;
+    color: #1C2D5A;
+  }
+
+/* FullCalendar 내부 툴바 스타일 개선 */
+.fc .fc-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.fc .fc-toolbar-title {
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.fc .fc-button {
+  background-color: #1C2D5A;
+  color: white;
+  border: none;
+  padding: 0.3rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.fc .fc-button:hover {
+  opacity: 0.9;
+}
+
+/* 캘린더 박스 */
+.month-title {
+  min-height: 600px;
+}
+  
+/* 플로팅 버튼 */
+.floating-buttons {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.float-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: none;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.float-btn img {
+  width: 22px;
+}
+.float-btn.yellow { background: #F2B94A; }
+.float-btn.green  { background: #8BAA9E; }
+.float-btn.red    { background: #FF7660; }
