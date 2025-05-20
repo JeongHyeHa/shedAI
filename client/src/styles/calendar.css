@@ -31,7 +31,10 @@ html, body {
   .calendar-container {
     flex: 1;
     margin: 0 auto;
-    max-width: 1100px;
+    width: 100%;             /* ← 반응형으로 바뀜 */
+    max-width: 1100px;       /* ← 최대 너비는 유지 */
+    box-sizing: border-box;
+    padding: 0 1rem;         /* ← 모바일 환경에서 좌우 여백 */
   }
   
   /* 상단 헤더 패딩 */
