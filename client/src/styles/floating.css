@@ -4,7 +4,7 @@
   right: 20px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 28px;
 }
 
 .float-btn {
@@ -23,16 +23,4 @@
 
 .float-btn:hover {
   transform: scale(1.1);
-}
-
-.float-btn.yellow {
-  background-color: #FFD700;
-}
-
-.float-btn.green {
-  background-color: #4CAF50;
-}
-
-.float-btn.red {
-  background-color: #FF5252;
 }
