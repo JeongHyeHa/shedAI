@@ -1,0 +1,54 @@
+/* FullCalendar 커스텀 스타일 */
+.fc .fc-button:focus {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.fc .fc-button-primary {
+  background-color: #1C2D5A !important;
+  border-color: #1C2D5A !important;
+}
+
+.fc .fc-button-primary:hover {
+  background-color: #374d7c !important;
+  border-color: #374d7c !important;
+}
+
+.fc .fc-button-primary:not(:disabled):active,
+.fc .fc-button-primary:not(:disabled).fc-button-active {
+  background-color: #0f1b3a !important;
+  border-color: #0f1b3a !important;
+}
+
+/* 이벤트 스타일 */
+.fc-event {
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  margin-bottom: 1px;
+}
+
+.fc-timegrid-event {
+  margin: 1px 0;
+}
+
+/* 월간 뷰에서 빈 줄 제거 */
+.fc .fc-daygrid-body-natural .fc-daygrid-day-events {
+  margin-bottom: 0;
+}
+
+/* 이벤트 내 체크박스 스타일 */
+.fc-event input[type="checkbox"] {
+  cursor: pointer;
+}
+
+/* 이벤트 텍스트 스타일 */
+.fc .fc-daygrid-event {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  display: block;
+  padding: 2px 4px;
+  font-size: 13px;
+} 

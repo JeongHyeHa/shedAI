@@ -92,30 +92,54 @@ function convertScheduleToEvents(gptSchedule, today = new Date()) {
             const start = new Date(`${dateStr}T${activity.start}`);
             let end = new Date(`${dateStr}T${activity.end}`);
 
-            if (end < start) {
-                const startOfToday = resetToStartOfDay(start);   // 자정으로 초기화(00:00)
-                const endOfToday = resetToStartOfDay(start, true);  // 하루 끝으로 초기화(23:59)
+            const startHour = Number(activity.start.split(":")[0]);
+            const endHour = Number(activity.end.split(":")[0]);
 
-                // 00:00 ~ 07:00 수면
-                events.push({
-                    title: activity.title,
-                    start: formatLocalISO(startOfToday),
-                    end: formatLocalISO(end)
-                });
-
-                // 23:30 ~ 23:59 수면
+            // 하루를 넘어가는 활동 처리 (예: 수면)
+            if (endHour < startHour || (startHour >= 23 && endHour <= 6)) {
+                // 다음 날짜 생성
+                const nextDay = new Date(targetDate);
+                nextDay.setDate(nextDay.getDate() + 1);
+                const nextDateStr = formatLocalISO(nextDay).split('T')[0];
+                
+                // 시작 시간부터 자정까지
+                const endOfDay = new Date(`${dateStr}T23:59:59`);
                 events.push({
                     title: activity.title,
                     start: formatLocalISO(start),
-                    end: formatLocalISO(endOfToday)
+                    end: formatLocalISO(endOfDay),
+                    allDay: false,
+                    extendedProps: {
+                        type: activity.type || "lifestyle"
+                    }
                 });
-                return;
+                
+                // 자정부터 종료 시간까지는 다음 날에 표시 (첫날이 아닌 경우에만)
+                if (dateOffset > 0 || dayBlock.day > gptDayToday) {
+                    const nextDayStart = new Date(`${nextDateStr}T00:00:00`);
+                    const nextDayEnd = new Date(`${nextDateStr}T${activity.end}`);
+                    events.push({
+                        title: activity.title,
+                        start: formatLocalISO(nextDayStart),
+                        end: formatLocalISO(nextDayEnd),
+                        allDay: false,
+                        extendedProps: {
+                            type: activity.type || "lifestyle"
+                        }
+                    });
+                }
+            } else {
+                // 일반 활동 처리
+                events.push({
+                    title: activity.title,
+                    start: formatLocalISO(start),
+                    end: formatLocalISO(end),
+                    allDay: false,
+                    extendedProps: {
+                        type: activity.type || "lifestyle"
+                    }
+                });
             }
-            events.push({
-                title: activity.title,
-                start: formatLocalISO(start),
-                end: formatLocalISO(end)
-            });
         });
     });
 

@@ -12,8 +12,10 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@fullcalendar/core": "^6.1.17",
     "@fullcalendar/daygrid": "^6.1.17",
     "@fullcalendar/react": "^6.1.17",
+    "@fullcalendar/timegrid": "^6.1.17",
     "axios": "^1.9.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
