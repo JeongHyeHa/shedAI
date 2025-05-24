@@ -47,7 +47,13 @@ export function resetToStartOfDay(date, isEnd = false) {
     반드시 오늘 날짜를 기준으로 day:x 값을 계산하여 사용해야 합니다.
   - 예: 오늘이 5월 15일(day:4)이고, 마감일이 5월 19일이면 → day:8입니다.
   - 모든 할 일은 이 상대 day:x 값을 기준으로 정확히 스케줄링해야 하며,
-    마감일을 초과한 일정 배치는 절대로 하지 마세요.`;
+    마감일을 초과한 일정 배치는 절대로 하지 마세요.
+    
+    각 활동(activity)에는 반드시 다음 중 하나의 type 값을 포함해야 합니다:
+- 생활 패턴에서 유래한 일정: "type": "lifestyle"
+- 할 일이나 유동적인 작업: "type": "task"
+이 값은 반드시 JSON 객체의 각 activity에 포함되어야 하며, 렌더링 및 필터링에 사용됩니다.
+`;
   
     return `${prefix}\n[생활 패턴]\n${lifestyleText}\n\n[할 일 목록]\n${taskText}`;
   }
@@ -82,43 +88,49 @@ export function resetToStartOfDay(date, isEnd = false) {
   export function convertScheduleToEvents(gptSchedule, today = new Date()) {
     const events = [];
     const gptDayToday = gptSchedule[0].day;
-  
+
     gptSchedule.forEach(dayBlock => {
       const dateOffset = dayBlock.day - gptDayToday;
       const targetDate = new Date(today);
       targetDate.setDate(today.getDate() + dateOffset);
       const dateStr = formatLocalISO(targetDate).split('T')[0];
-  
+
       dayBlock.activities.forEach(activity => {
         const start = new Date(`${dateStr}T${activity.start}`);
         let end = new Date(`${dateStr}T${activity.end}`);
-  
+        const extendedProps = {
+          type: activity.type || "task"
+        };
+
         if (end < start) {
           const startOfToday = resetToStartOfDay(start);
           const endOfToday = resetToStartOfDay(start, true);
-  
+
           events.push({
             title: activity.title,
             start: formatLocalISO(startOfToday),
-            end: formatLocalISO(end)
+            end: formatLocalISO(end),
+            extendedProps
           });
-  
+
           events.push({
             title: activity.title,
             start: formatLocalISO(start),
-            end: formatLocalISO(endOfToday)
+            end: formatLocalISO(endOfToday),
+            extendedProps
           });
           return;
         }
-  
+
         events.push({
           title: activity.title,
           start: formatLocalISO(start),
-          end: formatLocalISO(end)
+          end: formatLocalISO(end),
+          extendedProps
         });
       });
     });
-  
+
     return events;
   }
   
