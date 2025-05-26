@@ -9,6 +9,14 @@
   flex-direction: column;
 }
 
+.chatbot-title {
+  margin-top: 0;
+  margin-bottom: 16px;
+  color: #1C2D5A;
+  text-align: center;
+  font-size: 22px;
+}
+
 /* 채팅 메시지 컨테이너 */
 .chat-container {
   flex: 1;
@@ -61,54 +69,68 @@
   overflow: hidden;
   background-color: white;
   padding: 5px;
+  align-items: center;
 }
 
 /* 메시지 입력창 */
 .chat-input {
   flex: 1;  
-  border: none;
+  border: none !important;
   padding: 10px;
   outline: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  appearance: none;
-  box-shadow: none;
+  background-color: transparent;
 }
 
 .chat-input:focus {
-  outline: none;
-  border: none;
-  box-shadow: none;
+  outline: none !important;
+  box-shadow: none !important; 
 }
 
-/* 첨부파일 버튼 */
-.attachment-btn {
-  background: none;
-  border: none;
+/* 챗봇 첨부파일 버튼 */
+.chat-attach-btn {
+  background: none !important;
+  border: none !important;
   cursor: pointer;
   font-size: 18px;
-  width: 40px;
+  width: 25px;
   opacity: 0.7;
   transition: all 0.2s;
+  padding: 0 !important;
+  margin-left: 10px ;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
 }
 
-.attachment-btn:hover {
+.chat-attach-btn:hover {
   opacity: 1;
+  background-color: rgba(0,0,0,0.05) !important;
+}
+
+.chat-attach-btn span {
+  font-size: 18px;
+  line-height: 1;
 }
 
 /* 전송 버튼 */
 .chat-send-button {
-  background-color: #1C2D5A;
-  color: white;
-  border: none;
-  border-radius: 15px;
-  padding: 8px 15px;
-  cursor: pointer;
-  font-weight: bold;
+    background-color: #1C2D5A;
+    color: white;
+    border: none;
+    border-radius: 15px;
+    padding: 8px 15px;
+    margin-right: 10px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.chat-send-button:hover {
+  background-color: #2a3f74 !important;
 }
 
 .chat-send-button:disabled {
-  background-color: #cccccc;
+  background-color: #cccccc !important;
 }
 
 /* 첨부파일 미리보기 영역 */
@@ -207,4 +229,17 @@
 
 .reset-button:hover {
   background-color: #ff3030;
+}
+
+/* 챗봇 닫기 버튼 */
+.chatbot-close-btn {
+  background-color: #f2f2f2 !important;
+  color: #333 !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 8px 16px !important;
+  cursor: pointer;
+  font-size: 14px !important;
+  margin-top: 16px !important;
+  align-self: center;
 } 

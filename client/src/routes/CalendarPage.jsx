@@ -380,7 +380,7 @@ function CalendarPage() {
       {showTaskModal && (
         <div className="modal-overlay" onClick={() => setShowTaskModal(false)}>
           <div className="modal chatbot-modal" onClick={(e) => e.stopPropagation()}>
-            <h2>ShedAI 챗봇</h2>
+            <h2 className="chatbot-title">ShedAI 챗봇</h2>
             
             {/* 메시지 표시 영역 */}
             <div className="chat-container" ref={chatContainerRef}>
@@ -449,12 +449,14 @@ function CalendarPage() {
                 onChange={handleAudioUpload}
               />
               
-              <button className="attachment-btn" onClick={() => fileInputRef.current?.click()}>
-                🖼️
+              <button className="chat-attach-btn" onClick={() => fileInputRef.current?.click()}>
+                <span role="img" aria-label="이미지 첨부">🖼️</span>
               </button>
-              <button className="attachment-btn" onClick={() => audioInputRef.current?.click()}>
-                🎤
+              <button className="chat-attach-btn" onClick={() => audioInputRef.current?.click()}>
+                <span role="img" aria-label="음성 첨부">🎤</span>
               </button>
+              
+              <div style={{ width: '8px' }}></div>
               
               <input
                 type="text"
@@ -479,7 +481,7 @@ function CalendarPage() {
               </button>
             </div>
             
-            <button className="close-btn" onClick={() => setShowTaskModal(false)}>닫기</button>
+            <button className="chatbot-close-btn" onClick={() => setShowTaskModal(false)}>닫기</button>
           </div>
         </div>
       )}
@@ -487,23 +489,43 @@ function CalendarPage() {
       {/* 생활 패턴 입력 모달 */}
       {showLifestyleModal && (
         <div className="modal-overlay" onClick={() => setShowLifestyleModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>생활 패턴 입력</h2>
+          <div className="modal lifestyle-modal" onClick={(e) => e.stopPropagation()}>
+            <h2 className="lifestyle-title">생활 패턴 입력</h2>
+            <p className="modal-description">일상적인 생활 패턴을 입력하면 AI가 이를 고려하여 시간표를 생성합니다.</p>
+            
             <div className="lifestyle-grid">
               {lifestyleList.map((item, index) => (
                 <div key={index} className="lifestyle-item">
-                  {item}
-                  <button onClick={() => handleDeleteLifestyle(index)}>삭제</button>
+                  <span>{item}</span>
+                  <button className="lifestyle-delete-btn" onClick={() => handleDeleteLifestyle(index)}>삭제</button>
                 </div>
               ))}
+              {lifestyleList.length === 0 && (
+                <div className="empty-message">등록된 생활 패턴이 없습니다. 아래에서 추가해주세요.</div>
+              )}
             </div>
-            <input
-              value={lifestyleInput}
-              onChange={(e) => setLifestyleInput(e.target.value)}
-              placeholder="예: 00시~08시 수면"
-            />
-            <button onClick={handleAddLifestyle}>추가</button>
-            <button className="close-btn" onClick={() => setShowLifestyleModal(false)}>닫기</button>
+            
+            <div className="lifestyle-input-row">
+              <input
+                className="lifestyle-input"
+                value={lifestyleInput}
+                onChange={(e) => setLifestyleInput(e.target.value)}
+                placeholder="예: 평일 00시~08시 수면"
+                onKeyDown={(e) => e.key === 'Enter' && handleAddLifestyle()}
+              />
+              <button className="lifestyle-add-btn" onClick={handleAddLifestyle}>추가</button>
+            </div>
+            
+            <div className="lifestyle-examples">
+              <h3>입력 예시</h3>
+              <ul>
+                <li>평일 07:00~08:00 아침 식사</li>
+                <li>주말 10:00~12:00 운동</li>
+                <li>매일 23:00~07:00 수면</li>
+              </ul>
+            </div>
+            
+            <button className="lifestyle-close-btn" onClick={() => setShowLifestyleModal(false)}>닫기</button>
           </div>
         </div>
       )}
