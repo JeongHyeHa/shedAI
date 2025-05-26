@@ -7,24 +7,30 @@ import FloatingButtons from "../components/FloatingButtons.jsx";
 import "../styles/calendar.css"; 
 import "../styles/modal.css"; 
 import "../styles/fullcalendar-custom.css";
+import "../styles/chatbot.css";
 import {buildShedAIPrompt, buildFeedbackPrompt, convertScheduleToEvents, resetToStartOfDay} from "../utils/scheduleUtils";
 
 function CalendarPage() {
   const calendarRef = useRef(null);
   const today = resetToStartOfDay(new Date());
+  const fileInputRef = useRef(null);
+  const audioInputRef = useRef(null);
+  const chatContainerRef = useRef(null);
 
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showLifestyleModal, setShowLifestyleModal] = useState(false);
   const [taskText, setTaskText] = useState("");
   const [lifestyleInput, setLifestyleInput] = useState("");
   const [lifestyleList, setLifestyleList] = useState([]);
-  const [statusMessage, setStatusMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [allEvents, setAllEvents] = useState([]);
   const [lastSchedule, setLastSchedule] = useState(
     JSON.parse(localStorage.getItem("lastSchedule")) || null
   );
+  const [messages, setMessages] = useState([]);
+  const [attachments, setAttachments] = useState([]);
+  const [currentMessage, setCurrentMessage] = useState("");
 
   // 로딩 시 진행 효과를 위한 타이머
   useEffect(() => {
@@ -39,6 +45,13 @@ function CalendarPage() {
     }
     return () => timer && clearInterval(timer);
   }, [isLoading]);
+
+  // 채팅창이 열릴 때마다 스크롤을 아래로 이동
+  useEffect(() => {
+    if (chatContainerRef.current && showTaskModal) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [messages, showTaskModal]);
 
   const handleAddLifestyle = () => {
     if (!lifestyleInput.trim()) return;
@@ -68,19 +81,118 @@ function CalendarPage() {
     calendarApi.addEventSource(filtered);
   };
 
+  // 사진 업로드 핸들러
+  const handleImageUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const newAttachment = {
+        type: 'image',
+        data: e.target.result,
+        file: file
+      };
+      setAttachments(prev => [...prev, newAttachment]);
+    };
+    reader.readAsDataURL(file);
+    event.target.value = null; // 같은 파일 다시 선택 가능하도록
+  };
+
+  // 음성 녹음 핸들러
+  const handleAudioUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const newAttachment = {
+        type: 'audio',
+        data: e.target.result,
+        file: file
+      };
+      setAttachments(prev => [...prev, newAttachment]);
+    };
+    reader.readAsDataURL(file);
+    event.target.value = null; // 같은 파일 다시 선택 가능하도록
+  };
+
+  // 첨부파일 제거 핸들러
+  const handleRemoveAttachment = (index) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // 사용자 메시지 추가
+  const addUserMessage = (text, userAttachments = []) => {
+    const newMessage = {
+      type: 'user',
+      text,
+      attachments: [...userAttachments],
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, newMessage]);
+    setAttachments([]);
+    setCurrentMessage('');
+  };
+
+  // AI 메시지 추가
+  const addAIMessage = (text) => {
+    const newMessage = {
+      type: 'ai',
+      text,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, newMessage]);
+  };
+
+  // 메시지 제출 핸들러
+  const handleSubmitMessage = () => {
+    if (!currentMessage.trim() && attachments.length === 0) {
+      return;
+    }
+    
+    // 사용자 메시지 추가
+    addUserMessage(currentMessage, attachments);
+    
+    // 메시지 내용을 taskText에 저장 (AI 요청용)
+    setTaskText(currentMessage);
+    
+    // AI 응답으로 일정 생성 요청
+    handleGenerateSchedule();
+  };
+
+  // 캘린더 초기화 함수
+  const handleResetCalendar = () => {
+    if (window.confirm("모든 일정을 초기화하시겠습니까?")) {
+      localStorage.removeItem("lastSchedule");
+      setLastSchedule(null);
+      setAllEvents([]);
+      calendarRef.current?.getApi().removeAllEvents();
+      setMessages([]);
+      addAIMessage("캘린더가 초기화되었습니다. 새로운 일정을 추가해주세요.");
+    }
+  };
+
   {/* AI에게 스케줄 생성 요청 */}
-  const handleGenerateSchedule = useCallback(async (isNew = true) => {
-    if (!taskText.trim()) return alert("할 일을 입력해주세요!");
-    if (lifestyleList.length === 0) return alert("생활 패턴을 입력해주세요!");
+  const handleGenerateSchedule = useCallback(async () => {
+    if (!taskText.trim() && attachments.length === 0) {
+      addAIMessage("할 일을 입력해주세요!");
+      return;
+    }
+    
+    if (lifestyleList.length === 0) {
+      addAIMessage("생활 패턴을 먼저 설정해주세요!");
+      setShowLifestyleModal(true);
+      return;
+    }
 
     setIsLoading(true);
-    setShowTaskModal(false);
-    setStatusMessage("스케줄을 설계하는 중입니다...");
+    addAIMessage("스케줄을 설계하는 중입니다...");
 
     const lifestyleText = lifestyleList.join("\n");
-    const prompt = isNew  
-      ? buildShedAIPrompt(lifestyleText, taskText, today)
-      : buildFeedbackPrompt(lifestyleText, taskText, lastSchedule);
+    const prompt = lastSchedule 
+      ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule)
+      : buildShedAIPrompt(lifestyleText, taskText, today);
 
     try {
       const controller = new AbortController();
@@ -116,18 +228,21 @@ function CalendarPage() {
       // 캘린더에 이벤트 적용
       applyEventsToCalendar(events);
 
-      setStatusMessage(
-        typeof newSchedule.notes === "string"
-          ? newSchedule.notes.replace(/\n/g, "<br>")
-          : (newSchedule.notes || []).join("<br>")
-      );
+      // AI 응답 추가
+      const aiResponse = typeof newSchedule.notes === "string"
+        ? newSchedule.notes.replace(/\n/g, "<br>")
+        : (newSchedule.notes || []).join("<br>");
+      
+      addAIMessage("스케줄을 생성했습니다!");
+      addAIMessage(aiResponse);
+      
       setTaskText("");
     } catch (e) {
-      setStatusMessage("요청 실패: 다시 시도해주세요.");
+      addAIMessage("요청 실패: 다시 시도해주세요.");
     } finally {
       setIsLoading(false);
     }
-  }, [taskText, lifestyleList, lastSchedule, today]);
+  }, [taskText, lifestyleList, lastSchedule, today, attachments]);
 
   // 초기 로딩 시 생활 패턴 불러오기 및 마지막 스케줄 적용
   useEffect(() => {
@@ -171,7 +286,9 @@ function CalendarPage() {
             end: "dayGridMonth,timeGridWeek,timeGridDay"
           }}
           events={[]}
-          height="100%"
+          height="auto"
+          aspectRatio={1.35}
+          fixedWeekCount={true}
           contentHeight="auto"
           dayMaxEventRows={3} 
           slotMinTime="00:00:00"
@@ -238,6 +355,11 @@ function CalendarPage() {
         />
       </div>
 
+      {/* 초기화 버튼 (좌측 하단) */}
+      <button className="reset-button" onClick={handleResetCalendar}>
+        캘린더 초기화
+      </button>
+
       {/* 플로팅 버튼 (오른쪽 하단) */}
       <FloatingButtons
         onClickPlus={() => setShowTaskModal(true)}
@@ -253,27 +375,110 @@ function CalendarPage() {
           <p className="loading-text">AI가 스케줄을 생성하고 있습니다... {loadingProgress}%</p>
         </div>
       )}
-
-      <div className="status-message" dangerouslySetInnerHTML={{ __html: statusMessage }} />
       
-      {/* 할 일 / 피드백 입력 모달 */}
+      {/* 챗봇 스타일의 할 일 입력 모달 */}
       {showTaskModal && (
         <div className="modal-overlay" onClick={() => setShowTaskModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>할 일 / 피드백 입력</h2>
-            <textarea
-              value={taskText}
-              onChange={(e) => setTaskText(e.target.value)}
-              placeholder="오늘 할 일이나 피드백을 입력하세요"
-            />
-            <div className="modal-buttons">
-              <button onClick={() => handleGenerateSchedule(true)} disabled={isLoading}>
-                {isLoading ? "처리 중..." : "새로 생성"}
+          <div className="modal chatbot-modal" onClick={(e) => e.stopPropagation()}>
+            <h2>ShedAI 챗봇</h2>
+            
+            {/* 메시지 표시 영역 */}
+            <div className="chat-container" ref={chatContainerRef}>
+              {messages.length === 0 && (
+                <div className="chat-welcome">
+                  <p>안녕하세요! 오늘의 할 일이나 피드백을 알려주세요.</p>
+                  <p>시간표를 생성하거나 업데이트해 드릴게요!</p>
+                </div>
+              )}
+              
+              {messages.map((msg, idx) => (
+                <div key={idx} className={`chat-message ${msg.type}-message`}>
+                  {msg.attachments && msg.attachments.length > 0 && (
+                    <div className="message-attachments">
+                      {msg.attachments.map((attachment, attIdx) => (
+                        <div key={attIdx} className="attachment-preview">
+                          {attachment.type === 'image' && (
+                            <img src={attachment.data} alt="첨부 이미지" />
+                          )}
+                          {attachment.type === 'audio' && (
+                            <audio controls src={attachment.data}></audio>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="message-text" dangerouslySetInnerHTML={{ __html: msg.text.replace(/\n/g, '<br>') }}></div>
+                  <div className="message-time">
+                    {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            {/* 첨부파일 미리보기 */}
+            {attachments.length > 0 && (
+              <div className="attachments-preview">
+                {attachments.map((attachment, idx) => (
+                  <div key={idx} className="attachment-item">
+                    {attachment.type === 'image' && (
+                      <img src={attachment.data} alt="첨부 이미지" />
+                    )}
+                    {attachment.type === 'audio' && (
+                      <audio controls src={attachment.data}></audio>
+                    )}
+                    <button className="remove-attachment" onClick={() => handleRemoveAttachment(idx)}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            
+            {/* 메시지 입력 영역 */}
+            <div className="chat-input-container">
+              <input
+                type="file"
+                accept="image/*"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                onChange={handleImageUpload}
+              />
+              <input
+                type="file"
+                accept="audio/*"
+                ref={audioInputRef}
+                style={{ display: 'none' }}
+                onChange={handleAudioUpload}
+              />
+              
+              <button className="attachment-btn" onClick={() => fileInputRef.current?.click()}>
+                🖼️
               </button>
-              <button onClick={() => handleGenerateSchedule(false)} disabled={isLoading} >
-                {isLoading ? "처리 중..." : "업데이트"}
+              <button className="attachment-btn" onClick={() => audioInputRef.current?.click()}>
+                🎤
+              </button>
+              
+              <input
+                type="text"
+                className="chat-input"
+                value={currentMessage}
+                onChange={(e) => setCurrentMessage(e.target.value)}
+                placeholder="할 일이나 피드백을 입력하세요..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSubmitMessage();
+                  }
+                }}
+              />
+              
+              <button 
+                className="chat-send-button"
+                onClick={handleSubmitMessage}
+                disabled={isLoading}
+              >
+                전송
               </button>
             </div>
+            
             <button className="close-btn" onClick={() => setShowTaskModal(false)}>닫기</button>
           </div>
         </div>
