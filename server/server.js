@@ -8,7 +8,7 @@ require('dotenv').config();
 
 app.use(cors());    // CORS 허용
 app.use(express.json());    
-app.use(express.static('public'));  
+//app.use(express.static('public'));  
 
 // 지시문 파일 호출
 let systemPrompt = '';
