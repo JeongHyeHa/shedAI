@@ -8,7 +8,7 @@ import "../styles/calendar.css";
 import "../styles/modal.css"; 
 import "../styles/fullcalendar-custom.css";
 import "../styles/chatbot.css";
-import {buildShedAIPrompt, buildFeedbackPrompt, convertScheduleToEvents, resetToStartOfDay} from "../utils/scheduleUtils";
+import {buildShedAIPrompt, buildFeedbackPrompt, convertScheduleToEvents, resetToStartOfDay, parseDateString, convertToRelativeDay} from "../utils/scheduleUtils";
 
 function CalendarPage() {
   const calendarRef = useRef(null);
@@ -16,10 +16,10 @@ function CalendarPage() {
   const fileInputRef = useRef(null);
   const audioInputRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const sessionIdRef = useRef(`session_${Date.now()}`);
 
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showLifestyleModal, setShowLifestyleModal] = useState(false);
-  const [taskText, setTaskText] = useState("");
   const [lifestyleInput, setLifestyleInput] = useState("");
   const [lifestyleList, setLifestyleList] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -31,28 +31,52 @@ function CalendarPage() {
   const [messages, setMessages] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [currentMessage, setCurrentMessage] = useState("");
+  const [conversationContext, setConversationContext] = useState([]);
 
-  // 로딩 시 진행 효과를 위한 타이머
+  // 초기 로딩 시 생활패턴 불러오기
+  useEffect(() => {
+    const savedLifestyle = JSON.parse(localStorage.getItem("lifestyleList"));
+    if (savedLifestyle) {
+      setLifestyleList(savedLifestyle);
+    }
+    const savedSchedule = JSON.parse(localStorage.getItem("lastSchedule"));
+    if (savedSchedule) {
+      setLastSchedule(savedSchedule);
+      const events = convertScheduleToEvents(savedSchedule, today).map(event => ({
+        ...event,
+        extendedProps: {
+          ...event.extendedProps,
+          isDone: false,
+          type: event.extendedProps?.type || "task"
+        }
+      }));
+      setAllEvents(events);
+      setTimeout(() => applyEventsToCalendar(events), 100);
+    }
+  }, []);
+
+  // 로딩 페이지- 타이머
   useEffect(() => {
     let timer;
     if (isLoading) {
-      setLoadingProgress(1);  // 1부터 시작 
+      setLoadingProgress(1);  
       timer = setInterval(() => {
         setLoadingProgress((prev) => (prev < 90 ? prev + 1 : prev));
       }, 300);
     } else {
-      setLoadingProgress(100); // 로딩 완료 시
+      setLoadingProgress(100);
     }
     return () => timer && clearInterval(timer);
   }, [isLoading]);
 
-  // 채팅창이 열릴 때마다 스크롤을 아래로 이동
+  // 채팅창이 열릴 때마다 스크롤 아래로 이동
   useEffect(() => {
     if (chatContainerRef.current && showTaskModal) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
   }, [messages, showTaskModal]);
 
+  // localStorage에 생활패턴 추가 
   const handleAddLifestyle = () => {
     if (!lifestyleInput.trim()) return;
     const updatedList = [...lifestyleList, lifestyleInput.trim()];
@@ -61,24 +85,38 @@ function CalendarPage() {
     localStorage.setItem("lifestyleList", JSON.stringify(updatedList));
   };
 
+  // 생활패턴 삭제 
   const handleDeleteLifestyle = (index) => {
     const updatedList = lifestyleList.filter((_, i) => i !== index);
     setLifestyleList(updatedList);
     localStorage.setItem("lifestyleList", JSON.stringify(updatedList));
   };
 
-  // 캘린더에 이벤트 적용하는 함수
+  // 캘린더에 이벤트 처리: 모두 제거 후 다시 렌더링 
+  // 일반 이벤트 스타일 설정  / 월간, 주간 뷰 처리  / 생활패턴 이벤트 처리 
   const applyEventsToCalendar = (events) => {
     const calendarApi = calendarRef.current?.getApi();
     if (!calendarApi) return;
     
-    const viewType = calendarApi.view.type;
-    const filtered = viewType === "dayGridMonth"
-            ? events.filter(e => e.extendedProps.type !== "lifestyle")
-            : events;
-    
     calendarApi.removeAllEvents();
-    calendarApi.addEventSource(filtered);
+    calendarApi.removeAllEvents();
+    const viewType = calendarApi.view.type;
+    
+    const processedEvents = events.map(event => {
+      const newEvent = { ...event };      
+      if (event.extendedProps?.type === "lifestyle") {
+          if (viewType === "dayGridMonth") {
+          newEvent.display = "none"; // 아예 렌더링에서 제외 (fullcalendar 공식 속성)
+        } else {
+          newEvent.backgroundColor = "#CFCFCF";
+          newEvent.borderColor = "#AAAAAA";
+          newEvent.textColor = "#333333";
+        }
+      }
+      return newEvent;
+    });
+  
+    calendarApi.addEventSource(processedEvents);
   };
 
   // 사진 업로드 핸들러
@@ -122,8 +160,22 @@ function CalendarPage() {
     setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
-  // 사용자 메시지 추가
-  const addUserMessage = (text, userAttachments = []) => {
+  // AI 메시지 추가
+  const addAIMessage = (text) => {
+    const newMessage = {
+      type: 'ai',
+      text,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, newMessage]);
+    setConversationContext(prev => [
+      ...prev,
+      { role: 'assistant', content: text }
+    ]);
+  };
+  
+ // 사용자 메시지 추가
+ const addUserMessage = (text, userAttachments = []) => {
     const newMessage = {
       type: 'user',
       text,
@@ -133,32 +185,123 @@ function CalendarPage() {
     setMessages(prev => [...prev, newMessage]);
     setAttachments([]);
     setCurrentMessage('');
-  };
-
-  // AI 메시지 추가
-  const addAIMessage = (text) => {
-    const newMessage = {
-      type: 'ai',
-      text,
-      timestamp: new Date()
-    };
-    setMessages(prev => [...prev, newMessage]);
+    setConversationContext(prev => [
+      ...prev,
+      { role: 'user', content: text }
+    ]);
   };
 
   // 메시지 제출 핸들러
   const handleSubmitMessage = () => {
-    if (!currentMessage.trim() && attachments.length === 0) {
+    addUserMessage(currentMessage, attachments);  // 사용자 메시지 추가
+    handleProcessMessageWithAI(currentMessage);  // AI 응답으로 일정 생성 요청
+  };
+  
+  // 메시지를 AI로 처리하는 함수
+  const handleProcessMessageWithAI = async (messageText) => {
+    if (lifestyleList.length === 0) {   // 생활패턴이 없는 경우 
+      addAIMessage("생활 패턴을 먼저 설정해주세요!");
+      setShowLifestyleModal(true);
       return;
     }
+
+    // 날짜 인식 전처리(예: 이번주 토요일, 다음주 월요일)
+    const preprocessMessage = (text) => {
+      const patterns = [
+        /이번\s*주\s*(월|화|수|목|금|토|일)요일/g,
+        /다음\s*주\s*(월|화|수|목|금|토|일)요일/g,
+        /(\d{1,2})월\s*(\d{1,2})일/g,
+        /(\d+)일\s*(후|뒤)/g,
+        /(\d+)주\s*(후|뒤)/g,
+        /다음\s*(월|화|수|목|금|토|일)요일/g,
+        /오는\s*(월|화|수|목|금|토|일)요일/g,
+        /이번\s*(월|화|수|목|금|토|일)요일/g,
+        /(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/g
+      ];
     
-    // 사용자 메시지 추가
-    addUserMessage(currentMessage, attachments);
+      let foundDates = [];
+      let processed = text;
     
-    // 메시지 내용을 taskText에 저장 (AI 요청용)
-    setTaskText(currentMessage);
+      for (const pattern of patterns) {
+        processed = processed.replaceAll(pattern, (match) => {
+          const parsed = parseDateString(match, today);
+          if (!parsed) return match;
     
-    // AI 응답으로 일정 생성 요청
-    handleGenerateSchedule();
+          const day = convertToRelativeDay(parsed, today);
+          foundDates.push({ original: match, date: parsed, relativeDay: day });
+          return `${match} (day:${day})`;
+        });
+      }
+    
+      return processed;
+    };
+    
+    // 메시지 전처리
+    const processedMessage = preprocessMessage(messageText);
+    
+    // 로딩 시작
+    setIsLoading(true);
+    addAIMessage("스케줄을 생성하는 중입니다...");
+
+    const calendarApi = calendarRef.current?.getApi();
+    if (calendarApi) {
+      const currentView = calendarApi.view.type;
+      calendarApi.changeView(currentView);
+    }
+    
+    const lifestyleText = lifestyleList.join("\n");
+    
+    // 최종 프롬프트 생성 (전처리된 메시지 사용)
+    const prompt = lastSchedule 
+      ? buildFeedbackPrompt(lifestyleText, processedMessage, lastSchedule)
+      : buildShedAIPrompt(lifestyleText, processedMessage, today);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);  // 60초 타임아웃
+      
+      // 대화 컨텍스트를 포함하여 서버에 전송
+      const response = await fetch("http://localhost:3001/api/generate-schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          prompt,
+          conversationContext: conversationContext.slice(-6), // 최근 6개 메시지만 전송
+          sessionId: sessionIdRef.current // 세션 ID 전송
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      // 스케줄 생성 결과 Json 형식으로 받아옴 -> localstorage에 저장 
+      const newSchedule = await response.json();
+      setLastSchedule(newSchedule.schedule);
+      localStorage.setItem("lastSchedule", JSON.stringify(newSchedule.schedule));
+
+      // 이벤트 객체 생성
+      const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
+        ...event,
+        extendedProps: {
+          ...event.extendedProps,
+          isDone: false,
+        }
+      }));
+
+      setAllEvents(events);           // 모든 이벤트 상태 저장
+      applyEventsToCalendar(events);  // 캘린더에 이벤트 적용
+
+      // AI 응답 추가
+      const aiResponse = typeof newSchedule.notes === "string"
+        ? newSchedule.notes.replace(/\n/g, "<br>")
+        : (newSchedule.notes || []).join("<br>");
+      
+      addAIMessage("스케줄을 생성했습니다!");
+      addAIMessage(aiResponse);
+    } catch (e) {
+      addAIMessage("요청 실패: 다시 시도해주세요.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // 캘린더 초기화 함수
@@ -169,106 +312,13 @@ function CalendarPage() {
       setAllEvents([]);
       calendarRef.current?.getApi().removeAllEvents();
       setMessages([]);
+      setConversationContext([]);
+      
+      // 새 세션 ID 생성
+      sessionIdRef.current = `session_${Date.now()}`;      
       addAIMessage("캘린더가 초기화되었습니다. 새로운 일정을 추가해주세요.");
     }
   };
-
-  {/* AI에게 스케줄 생성 요청 */}
-  const handleGenerateSchedule = useCallback(async () => {
-    if (!taskText.trim() && attachments.length === 0) {
-      addAIMessage("할 일을 입력해주세요!");
-      return;
-    }
-    
-    if (lifestyleList.length === 0) {
-      addAIMessage("생활 패턴을 먼저 설정해주세요!");
-      setShowLifestyleModal(true);
-      return;
-    }
-
-    setIsLoading(true);
-    addAIMessage("스케줄을 설계하는 중입니다...");
-
-    const lifestyleText = lifestyleList.join("\n");
-    const prompt = lastSchedule 
-      ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule)
-      : buildShedAIPrompt(lifestyleText, taskText, today);
-
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);  // 60초 타임아웃
-      const response = await fetch("http://localhost:3001/api/generate-schedule", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      // 스케줄 생성 결과 Json 형식으로 받아옴 -> localstorage에 저장 
-      const newSchedule = await response.json();
-      setLastSchedule(newSchedule.schedule);
-      localStorage.setItem("lastSchedule", JSON.stringify(newSchedule.schedule));
-
-      // 이벤트 객체 생성 
-      const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
-        ...event,
-        backgroundColor:
-        event.extendedProps?.type === "lifestyle" ? "#CFCFCF" : undefined,
-        extendedProps: {
-          ...event.extendedProps,
-          isDone: false,
-          type: event.extendedProps?.type || "task"
-        }
-      }));
-
-      // 모든 이벤트 상태 저장
-      setAllEvents(events);
-      
-      // 캘린더에 이벤트 적용
-      applyEventsToCalendar(events);
-
-      // AI 응답 추가
-      const aiResponse = typeof newSchedule.notes === "string"
-        ? newSchedule.notes.replace(/\n/g, "<br>")
-        : (newSchedule.notes || []).join("<br>");
-      
-      addAIMessage("스케줄을 생성했습니다!");
-      addAIMessage(aiResponse);
-      
-      setTaskText("");
-    } catch (e) {
-      addAIMessage("요청 실패: 다시 시도해주세요.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [taskText, lifestyleList, lastSchedule, today, attachments]);
-
-  // 초기 로딩 시 생활 패턴 불러오기 및 마지막 스케줄 적용
-  useEffect(() => {
-    const saved = JSON.parse(localStorage.getItem("lifestyleList"));
-    if (saved) setLifestyleList(saved);
-    
-    // 마지막 스케줄이 있다면 이벤트로 변환
-    if (lastSchedule) {
-      const events = convertScheduleToEvents(lastSchedule, today).map(event => ({
-        ...event,
-        extendedProps: {
-          ...event.extendedProps,
-          isDone: false,
-          type: event.extendedProps?.type || "task"
-        }
-      }));
-
-      // 모든 이벤트 상태 저장
-      setAllEvents(events);
-
-      // 약간의 지연 후 이벤트 추가 (캘린더가 완전히 초기화된 후)
-      setTimeout(() => {
-        applyEventsToCalendar(events);
-      }, 100);
-    }
-  }, []);
 
   return (
     <div className="calendar-page">
@@ -288,14 +338,38 @@ function CalendarPage() {
           events={[]}
           height="auto"
           aspectRatio={1.35}
-          fixedWeekCount={true}
           contentHeight="auto"
           dayMaxEventRows={3} 
-          slotMinTime="00:00:00"
-          slotMaxTime="24:00:00"
+          allDaySlot={true}
+          navLinks={true}
+          nowIndicator={true}
+          eventDidMount={(info) => {
+            // 이벤트 마운트될 때 생활패턴 타입에 따른 스타일 적용
+            if (info.event.extendedProps?.type === "lifestyle") {
+              // DOM 직접 스타일링 (CSS 속성 오버라이드 가능성 있는 경우 대비)
+              info.el.style.backgroundColor = "#CFCFCF";
+              info.el.style.borderColor = "#AAAAAA";
+              info.el.style.color = "#333333";
+              info.el.style.fontWeight = "normal";
+              
+              // 월간 뷰에서는 표시하지 않음
+              const viewType = calendarRef.current?.getApi().view.type;
+              if (viewType === "dayGridMonth") {
+                info.el.style.display = "none";
+              }
+            }
+          }}
+          viewClassNames={(arg) => {
+            // 뷰 클래스 이름만 반환하고 이벤트 호출하지 않음
+            return [`view-${arg.view.type}`];
+          }}
           datesSet={(arg) => {
-            // 뷰 변경 시 이벤트 필터링하여 다시 적용
-            applyEventsToCalendar(allEvents);
+            // 뷰 변경 시에만 이벤트 다시 적용 
+            if (allEvents.length > 0) {
+              const calendarApi = calendarRef.current?.getApi();
+              calendarApi.removeAllEventSources(); 
+              applyEventsToCalendar(allEvents);
+            }
           }}
           dayHeaderContent={(args) => {
             const weekday = args.date.toLocaleDateString("en-US", { weekday: "short" });
@@ -319,12 +393,12 @@ function CalendarPage() {
             if (viewType !== "dayGridMonth" && arg.event.extendedProps?.type === "task") {
               const checkbox = document.createElement("input");
               checkbox.type = "checkbox";
-              checkbox.checked = !!isDone;
+              checkbox.checked = isDone ?? false;
               checkbox.style.marginRight = "5px";
               checkbox.addEventListener("change", () => {
                 // 현재 표시되는 이벤트의 속성 변경
                 arg.event.setExtendedProp("isDone", checkbox.checked);    
-                // allEvents 상태도 업데이트하여 뷰 간 동기화
+                // allEvents 상태도 업데이트하여 뷰 간 동일화
                 setAllEvents(prevEvents => {
                   return prevEvents.map(event => {
                     // 시작/종료 시간과 제목으로 동일한 이벤트 찾기
@@ -375,7 +449,7 @@ function CalendarPage() {
           <p className="loading-text">AI가 스케줄을 생성하고 있습니다... {loadingProgress}%</p>
         </div>
       )}
-      
+
       {/* 챗봇 스타일의 할 일 입력 모달 */}
       {showTaskModal && (
         <div className="modal-overlay" onClick={() => setShowTaskModal(false)}>
