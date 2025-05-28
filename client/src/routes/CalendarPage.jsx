@@ -118,6 +118,14 @@ function CalendarPage() {
     localStorage.setItem("lifestyleList", JSON.stringify(updatedList));
   };
 
+  // 생활패턴 전체 삭제
+  const handleClearAllLifestyles = () => {
+    if (window.confirm("모든 생활 패턴을 삭제하시겠습니까?")) {
+      setLifestyleList([]);
+      localStorage.setItem("lifestyleList", JSON.stringify([]));
+    }
+  };
+
   // 캘린더에 이벤트 처리: 모두 제거 후 다시 렌더링 
   // 일반 이벤트 스타일 설정  / 월간, 주간 뷰 처리  / 생활패턴 이벤트 처리 
   const applyEventsToCalendar = (events) => {
@@ -799,7 +807,7 @@ function CalendarPage() {
             <div className="lifestyle-grid">
               {lifestyleList.map((item, index) => (
                 <div key={index} className="lifestyle-item">
-                  <span>{item}</span>
+                  <span title={item}>{item}</span>
                   <button className="lifestyle-delete-btn" onClick={() => handleDeleteLifestyle(index)}>삭제</button>
                 </div>
               ))}
@@ -808,15 +816,21 @@ function CalendarPage() {
               )}
             </div>
             
-            <div className="lifestyle-input-row">
-              <input
-                className="lifestyle-input"
-                value={lifestyleInput}
-                onChange={(e) => setLifestyleInput(e.target.value)}
-                placeholder="예: 평일 00시~08시 수면"
-                onKeyDown={(e) => e.key === 'Enter' && handleAddLifestyle()}
-              />
-              <button className="lifestyle-add-btn" onClick={handleAddLifestyle}>추가</button>
+            <div className="lifestyle-actions">
+              <div className="lifestyle-input-row">
+                <input
+                  className="lifestyle-input"
+                  value={lifestyleInput}
+                  onChange={(e) => setLifestyleInput(e.target.value)}
+                  placeholder="예: 평일 00시~08시 수면"
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddLifestyle()}
+                />
+                <button className="lifestyle-add-btn" onClick={handleAddLifestyle}>추가</button>
+              </div>
+              
+              <div className="lifestyle-buttons">
+                <button className="lifestyle-clear-btn" onClick={handleClearAllLifestyles}>전체 삭제</button>
+              </div>
             </div>
            </div>
         </div>

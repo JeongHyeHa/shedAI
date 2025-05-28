@@ -70,15 +70,18 @@
   
   .lifestyle-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    grid-template-columns: 1fr 1fr;
     gap: 12px;
     margin: 16px 0;
-    max-height: 200px;
+    max-height: 350px;
     overflow-y: auto;
-    padding: 4px;
+    padding: 10px;
     border: 1px solid #f0f0f0;
     border-radius: 8px;
     background-color: #fafafa;
+    flex: 1;
+    grid-auto-rows: min-content;
+    align-items: start;
   }
   
   .lifestyle-item {
@@ -91,16 +94,32 @@
     box-shadow: 0 1px 2px rgba(0,0,0,0.05);
     transition: all 0.2s ease;
     border-left: 3px solid #1C2D5A;
-    font-size: 13px;
+    font-size: 15px;
+    height: 42px;
+    margin: 0;
+  }
+  
+  .lifestyle-item span {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal;
+    padding-right: 12px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    word-break: break-word;
+    min-height: 38px;
   }
   
   .lifestyle-item:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    background-color: #f2f5fb;
   }
   
   .lifestyle-item button {
-    background-color: #ff5252;
+    background-color: #FF7660;
     color: white;
     border: none;
     border-radius: 6px;
@@ -110,6 +129,7 @@
     margin-top: 0;
     margin-left: 8px;
     min-width: 40px;
+    flex-shrink: 0;
   }
   
   .lifestyle-item button:hover {
@@ -119,21 +139,25 @@
   .lifestyle-input-row {
     display: flex;
     gap: 8px;
-    margin: 12px 0;
+    margin: 8px 0;
   }
   
   .lifestyle-input-row input {
     flex: 1;
     margin: 0;
-    padding: 10px;
+    padding: 8px 10px;
     font-size: 14px;
+    height: 36px;
+    box-sizing: border-box;
   }
   
   .lifestyle-input-row button {
     margin: 0;
     white-space: nowrap;
-    padding: 8px 12px;
+    padding: 6px 12px;
     font-size: 14px;
+    height: 36px;
+    box-sizing: border-box;
   }
   
   .modal-description {
@@ -183,11 +207,11 @@
   
   /* 생활패턴 모달 */
   .lifestyle-modal {
-    max-width: 500px;
+    max-width: 600px;
     width: 90%;
-    max-height: 650px;
-    height: auto;
-    padding: 24px;
+    max-height: 700px;
+    height: 80%;
+    padding: 20px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -203,11 +227,13 @@
   
   .lifestyle-input {
     border: 1px solid #ddd;
-    padding: 12px;
+    padding: 8px 12px;
     border-radius: 8px;
-    font-size: 16px;
+    font-size: 14px;
     flex: 1;
     margin: 0;
+    height: 36px;
+    box-sizing: border-box;
   }
   
   .lifestyle-input:focus {
@@ -481,5 +507,33 @@
   
   .task-form-close-btn {
     display: none;
+  }
+  
+  .lifestyle-actions {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .lifestyle-buttons {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+  }
+  
+  .lifestyle-clear-btn {
+    background-color: #FF7660;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
+  }
+  
+  .lifestyle-clear-btn:hover {
+    background-color: #ff3030;
   }
   
