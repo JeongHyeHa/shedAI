@@ -9,6 +9,7 @@ import "../styles/modal.css";
 import "../styles/fullcalendar-custom.css";
 import "../styles/chatbot.css";
 import {buildShedAIPrompt, buildFeedbackPrompt, convertScheduleToEvents, resetToStartOfDay, parseDateString, convertToRelativeDay} from "../utils/scheduleUtils";
+import arrowBackIcon from "../assets/arrow-small-left-light.svg";
 
 function CalendarPage() {
   const calendarRef = useRef(null);
@@ -32,6 +33,31 @@ function CalendarPage() {
   const [attachments, setAttachments] = useState([]);
   const [currentMessage, setCurrentMessage] = useState("");
   const [conversationContext, setConversationContext] = useState([]);
+  
+  // 할 일 입력 폼 상태
+  const [taskForm, setTaskForm] = useState({
+    title: "",
+    deadline: "",
+    importance: "중", // 기본값: 중
+    difficulty: "중", // 기본값: 중
+    description: ""
+  });
+  
+  // 인터페이스 모드 (챗봇 또는 폼)
+  const [taskInputMode, setTaskInputMode] = useState("chatbot"); // "chatbot" 또는 "form"
+
+  // 모달이 닫힐 때 폼 초기화
+  useEffect(() => {
+    if (!showTaskModal) {
+      setTaskForm({
+        title: "",
+        deadline: "",
+        importance: "중",
+        difficulty: "중",
+        description: ""
+      });
+    }
+  }, [showTaskModal]);
 
   // 초기 로딩 시 생활패턴 불러오기
   useEffect(() => {
@@ -191,10 +217,66 @@ function CalendarPage() {
     ]);
   };
 
-  // 메시지 제출 핸들러
+  // 폼 입력값 변경 핸들러
+  const handleTaskFormChange = (e) => {
+    const { id, value } = e.target;
+    setTaskForm({
+      ...taskForm,
+      [id.replace('task-', '')]: value
+    });
+  };
+
+  // 중요도, 난이도 버튼 선택 핸들러
+  const handleLevelSelect = (field, value) => {
+    setTaskForm({
+      ...taskForm,
+      [field]: value
+    });
+  };
+
+  // 할 일 추가 폼 제출 핸들러
+  const handleTaskFormSubmit = () => {
+    if (!taskForm.title || !taskForm.deadline) {
+      alert('제목과 마감일은 필수 입력 항목입니다.');
+      return;
+    }
+
+    // 마감일에서 day 인덱스 계산
+    const deadlineDate = new Date(taskForm.deadline);
+    const relativeDay = convertToRelativeDay(deadlineDate, today);
+    
+    // 할 일 메시지 형식 생성
+    const formattedMessage = `${taskForm.title} (${taskForm.importance}중요도, ${taskForm.difficulty}난이도, 마감일: ${taskForm.deadline} day:${relativeDay})${taskForm.description ? '\n' + taskForm.description : ''}`;
+    
+    setCurrentMessage(formattedMessage);
+    
+    // 메시지 처리 함수 호출
+    handleSubmitMessage();
+    
+    // 폼 초기화
+    setTaskForm({
+      title: "",
+      deadline: "",
+      importance: "중",
+      difficulty: "중",
+      description: ""
+    });
+    
+    // 모달 닫기
+    setShowTaskModal(false);
+  };
+
+  // 메시지 제출 핸들러 수정
   const handleSubmitMessage = () => {
-    addUserMessage(currentMessage, attachments);  // 사용자 메시지 추가
-    handleProcessMessageWithAI(currentMessage);  // AI 응답으로 일정 생성 요청
+    if (currentMessage.trim() === "" && attachments.length === 0) return;
+    if (isLoading) return;
+
+    addUserMessage(currentMessage, [...attachments]);
+    setAttachments([]);
+    
+    handleProcessMessageWithAI(currentMessage);
+    
+    setCurrentMessage("");
   };
   
   // 메시지를 AI로 처리하는 함수
@@ -436,7 +518,10 @@ function CalendarPage() {
 
       {/* 플로팅 버튼 (오른쪽 하단) */}
       <FloatingButtons
-        onClickPlus={() => setShowTaskModal(true)}
+        onClickPlus={() => {
+          setTaskInputMode("chatbot"); // 항상 챗봇 모드로 초기화
+          setShowTaskModal(true);
+        }}
         onClickPencil={() => setShowLifestyleModal(true)}
       />
 
@@ -450,113 +535,257 @@ function CalendarPage() {
         </div>
       )}
 
-      {/* 챗봇 스타일의 할 일 입력 모달 */}
+      {/* 할 일 입력 모달 */}
       {showTaskModal && (
         <div className="modal-overlay" onClick={() => setShowTaskModal(false)}>
-          <div className="modal chatbot-modal" onClick={(e) => e.stopPropagation()}>
-            <h2 className="chatbot-title">ShedAI 챗봇</h2>
-            
-            {/* 메시지 표시 영역 */}
-            <div className="chat-container" ref={chatContainerRef}>
-              {messages.length === 0 && (
-                <div className="chat-welcome">
-                  <p>안녕하세요! 오늘의 할 일이나 피드백을 알려주세요.</p>
-                  <p>시간표를 생성하거나 업데이트해 드릴게요!</p>
-                </div>
-              )}
+          {taskInputMode === "chatbot" ? (
+            <div className="modal chatbot-modal" onClick={(e) => e.stopPropagation()}>
+              <h2 className="chatbot-title">ShedAI 챗봇</h2>
               
-              {messages.map((msg, idx) => (
-                <div key={idx} className={`chat-message ${msg.type}-message`}>
-                  {msg.attachments && msg.attachments.length > 0 && (
-                    <div className="message-attachments">
-                      {msg.attachments.map((attachment, attIdx) => (
-                        <div key={attIdx} className="attachment-preview">
-                          {attachment.type === 'image' && (
-                            <img src={attachment.data} alt="첨부 이미지" />
-                          )}
-                          {attachment.type === 'audio' && (
-                            <audio controls src={attachment.data}></audio>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="message-text" dangerouslySetInnerHTML={{ __html: msg.text.replace(/\n/g, '<br>') }}></div>
-                  <div className="message-time">
-                    {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {/* 메시지 표시 영역 */}
+              <div className="chat-container" ref={chatContainerRef}>
+                {messages.length === 0 && (
+                  <div className="chat-welcome">
+                    <p>안녕하세요! 오늘의 할 일이나 피드백을 알려주세요.</p>
+                    <p>시간표를 생성하거나 업데이트해 드릴게요!</p>
                   </div>
-                </div>
-              ))}
-            </div>
-            
-            {/* 첨부파일 미리보기 */}
-            {attachments.length > 0 && (
-              <div className="attachments-preview">
-                {attachments.map((attachment, idx) => (
-                  <div key={idx} className="attachment-item">
-                    {attachment.type === 'image' && (
-                      <img src={attachment.data} alt="첨부 이미지" />
+                )}
+                
+                {messages.map((msg, idx) => (
+                  <div key={idx} className={`chat-message ${msg.type}-message`}>
+                    {msg.attachments && msg.attachments.length > 0 && (
+                      <div className="message-attachments">
+                        {msg.attachments.map((attachment, attIdx) => (
+                          <div key={attIdx} className="attachment-preview">
+                            {attachment.type === 'image' && (
+                              <img src={attachment.data} alt="첨부 이미지" />
+                            )}
+                            {attachment.type === 'audio' && (
+                              <audio controls src={attachment.data}></audio>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     )}
-                    {attachment.type === 'audio' && (
-                      <audio controls src={attachment.data}></audio>
-                    )}
-                    <button className="remove-attachment" onClick={() => handleRemoveAttachment(idx)}>×</button>
+                    <div className="message-text" dangerouslySetInnerHTML={{ __html: msg.text.replace(/\n/g, '<br>') }}></div>
+                    <div className="message-time">
+                      {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
                   </div>
                 ))}
               </div>
-            )}
-            
-            {/* 메시지 입력 영역 */}
-            <div className="chat-input-container">
-              <input
-                type="file"
-                accept="image/*"
-                ref={fileInputRef}
-                style={{ display: 'none' }}
-                onChange={handleImageUpload}
-              />
-              <input
-                type="file"
-                accept="audio/*"
-                ref={audioInputRef}
-                style={{ display: 'none' }}
-                onChange={handleAudioUpload}
-              />
               
-              <button className="chat-attach-btn" onClick={() => fileInputRef.current?.click()}>
-                <span role="img" aria-label="이미지 첨부">🖼️</span>
-              </button>
-              <button className="chat-attach-btn" onClick={() => audioInputRef.current?.click()}>
-                <span role="img" aria-label="음성 첨부">🎤</span>
-              </button>
+              {/* 첨부파일 미리보기 */}
+              {attachments.length > 0 && (
+                <div className="attachments-preview">
+                  {attachments.map((attachment, idx) => (
+                    <div key={idx} className="attachment-item">
+                      {attachment.type === 'image' && (
+                        <img src={attachment.data} alt="첨부 이미지" />
+                      )}
+                      {attachment.type === 'audio' && (
+                        <audio controls src={attachment.data}></audio>
+                      )}
+                      <button className="remove-attachment" onClick={() => handleRemoveAttachment(idx)}>×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
               
-              <div style={{ width: '8px' }}></div>
+              {/* 메시지 입력 영역 */}
+              <div className="chat-input-container">
+                <input
+                  type="file"
+                  accept="image/*"
+                  ref={fileInputRef}
+                  style={{ display: 'none' }}
+                  onChange={handleImageUpload}
+                />
+                <input
+                  type="file"
+                  accept="audio/*"
+                  ref={audioInputRef}
+                  style={{ display: 'none' }}
+                  onChange={handleAudioUpload}
+                />
+                
+                <button className="chat-attach-btn" onClick={() => fileInputRef.current?.click()}>
+                  <span role="img" aria-label="이미지 첨부">🖼️</span>
+                </button>
+                <button className="chat-attach-btn" onClick={() => audioInputRef.current?.click()}>
+                  <span role="img" aria-label="음성 첨부">🎤</span>
+                </button>
+                
+                <div style={{ width: '8px' }}></div>
+                
+                <input
+                  type="text"
+                  className="chat-input"
+                  value={currentMessage}
+                  onChange={(e) => setCurrentMessage(e.target.value)}
+                  placeholder="할 일이나 피드백을 입력하세요..."
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSubmitMessage();
+                    }
+                  }}
+                />
+                
+                <button 
+                  className="chat-send-button"
+                  onClick={handleSubmitMessage}
+                  disabled={isLoading}
+                >
+                  전송
+                </button>
+              </div>
               
-              <input
-                type="text"
-                className="chat-input"
-                value={currentMessage}
-                onChange={(e) => setCurrentMessage(e.target.value)}
-                placeholder="할 일이나 피드백을 입력하세요..."
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleSubmitMessage();
-                  }
-                }}
-              />
-              
-              <button 
-                className="chat-send-button"
-                onClick={handleSubmitMessage}
-                disabled={isLoading}
-              >
-                전송
-              </button>
+              <div className="chatbot-buttons-row">
+                <button className="chatbot-close-btn" onClick={() => setShowTaskModal(false)}>닫기</button>
+                <button className="chatbot-mode-btn" onClick={() => setTaskInputMode("form")}>
+                  간단히 입력
+                </button>
+              </div>
             </div>
-            
-            <button className="chatbot-close-btn" onClick={() => setShowTaskModal(false)}>닫기</button>
-          </div>
+          ) : (
+            <div className="modal task-form-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="task-form-header">
+                <button className="back-to-chatbot-btn" onClick={() => setTaskInputMode("chatbot")}>
+                  <img src={arrowBackIcon} alt="뒤로가기" width="20" height="20" />
+                </button>
+                <h2 className="task-form-title">할 일 입력</h2>
+              </div>
+              
+              <div className="task-form-container">
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="task-title">제목 <span className="required">*</span></label>
+                    <input 
+                      type="text" 
+                      id="task-title" 
+                      className="task-input task-title-input" 
+                      placeholder="예: 중간고사 준비"
+                      value={taskForm.title}
+                      onChange={handleTaskFormChange}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="task-deadline">마감일 <span className="required">*</span></label>
+                    <div className="date-input-container">
+                      <input 
+                        type="date" 
+                        id="task-deadline" 
+                        className="task-input task-date-input"
+                        value={taskForm.deadline}
+                        onChange={handleTaskFormChange}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="form-row">
+                  <div className="form-group half-width">
+                    <label>중요도 <span className="required">*</span></label>
+                    <div className="button-group">
+                      <button 
+                        type="button"
+                        className={`level-button ${taskForm.importance === "상" ? "active" : ""}`} 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleLevelSelect("importance", "상");
+                        }}
+                      >
+                        상
+                      </button>
+                      <button 
+                        type="button"
+                        className={`level-button ${taskForm.importance === "중" ? "active" : ""}`} 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleLevelSelect("importance", "중");
+                        }}
+                      >
+                        중
+                      </button>
+                      <button 
+                        type="button"
+                        className={`level-button ${taskForm.importance === "하" ? "active" : ""}`} 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleLevelSelect("importance", "하");
+                        }}
+                      >
+                        하
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="form-group half-width">
+                    <label>난이도 <span className="required">*</span></label>
+                    <div className="button-group">
+                      <button 
+                        type="button"
+                        className={`level-button ${taskForm.difficulty === "상" ? "active" : ""}`} 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleLevelSelect("difficulty", "상");
+                        }}
+                      >
+                        상
+                      </button>
+                      <button 
+                        type="button"
+                        className={`level-button ${taskForm.difficulty === "중" ? "active" : ""}`} 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleLevelSelect("difficulty", "중");
+                        }}
+                      >
+                        중
+                      </button>
+                      <button 
+                        type="button"
+                        className={`level-button ${taskForm.difficulty === "하" ? "active" : ""}`} 
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleLevelSelect("difficulty", "하");
+                        }}
+                      >
+                        하
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="task-description">설명(선택)</label>
+                  <textarea 
+                    id="task-description" 
+                    className="task-input task-textarea" 
+                    placeholder="예: 요약 정리 → 문제 풀이 → 복습 순서로 진행"
+                    value={taskForm.description}
+                    onChange={handleTaskFormChange}
+                  ></textarea>
+                </div>
+
+                {/* 버튼 그룹을 하단에 배치 */}
+                <div className="task-form-buttons">
+                  <button 
+                    type="button"
+                    className="task-submit-button"
+                    onClick={(e) => {
+                      e.preventDefault(); 
+                      handleTaskFormSubmit();
+                    }}
+                  >
+                    추가
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -589,18 +818,7 @@ function CalendarPage() {
               />
               <button className="lifestyle-add-btn" onClick={handleAddLifestyle}>추가</button>
             </div>
-            
-            <div className="lifestyle-examples">
-              <h3>입력 예시</h3>
-              <ul>
-                <li>평일 07:00~08:00 아침 식사</li>
-                <li>주말 10:00~12:00 운동</li>
-                <li>매일 23:00~07:00 수면</li>
-              </ul>
-            </div>
-            
-            <button className="lifestyle-close-btn" onClick={() => setShowLifestyleModal(false)}>닫기</button>
-          </div>
+           </div>
         </div>
       )}
     </div>

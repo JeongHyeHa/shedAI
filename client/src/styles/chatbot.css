@@ -242,4 +242,27 @@
   font-size: 14px !important;
   margin-top: 16px !important;
   align-self: center;
+}
+
+/* 챗봇 버튼 영역 */
+.chatbot-buttons-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+/* 챗봇 모드 전환 버튼 */
+.chatbot-mode-btn {
+  background-color: #1C2D5A !important;
+  color: white !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 8px 16px !important;
+  cursor: pointer;
+  font-size: 14px !important;
+  transition: background-color 0.2s;
+}
+
+.chatbot-mode-btn:hover {
+  background-color: #2a3f74 !important;
 } 
