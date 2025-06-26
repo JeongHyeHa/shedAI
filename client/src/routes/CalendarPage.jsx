@@ -22,13 +22,13 @@ function CalendarPage() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showLifestyleModal, setShowLifestyleModal] = useState(false);
   const [lifestyleInput, setLifestyleInput] = useState("");
-  const [lifestyleList, setLifestyleList] = useState([]);
+  const [lifestyleList, setLifestyleList] = useState([]);     // 사용자가 생활 패턴을 입력하거나 수정할 때
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [allEvents, setAllEvents] = useState([]);
   const [lastSchedule, setLastSchedule] = useState(
     JSON.parse(localStorage.getItem("lastSchedule")) || null
-  );
+  );    // 	AI가 스케줄을 생성한 직후
   const [messages, setMessages] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [currentMessage, setCurrentMessage] = useState("");
@@ -62,9 +62,8 @@ function CalendarPage() {
   // 초기 로딩 시 생활패턴 불러오기
   useEffect(() => {
     const savedLifestyle = JSON.parse(localStorage.getItem("lifestyleList"));
-    if (savedLifestyle) {
-      setLifestyleList(savedLifestyle);
-    }
+    if (savedLifestyle) setLifestyleList(savedLifestyle);
+
     const savedSchedule = JSON.parse(localStorage.getItem("lastSchedule"));
     if (savedSchedule) {
       setLastSchedule(savedSchedule);
@@ -81,15 +80,31 @@ function CalendarPage() {
     }
   }, []);
 
+  // 대화 기록 저장 (대화가 바뀔 때마다)
+  useEffect(() => {
+    localStorage.setItem("chatMessages", JSON.stringify(messages));   // 사용자가 메시지를 입력하거나, GPT 응답이 올 때
+    localStorage.setItem("chatContext", JSON.stringify(conversationContext));   // 새로운 메시지에 따라 context가 갱신될 때
+  }, [messages, conversationContext]);
+
+
   // 로딩 페이지- 타이머
   useEffect(() => {
     let timer;
     if (isLoading) {
-      setLoadingProgress(1);  
+      // 로딩 시작 시 진행률 초기화
+      setLoadingProgress(0);
+      
+      // 즉시 1%로 시작하여 가시적인 변화 표시
+      setTimeout(() => {
+        setLoadingProgress(1);
+      }, 50);
+      
+      // 주기적으로 진행률 업데이트
       timer = setInterval(() => {
         setLoadingProgress((prev) => (prev < 90 ? prev + 1 : prev));
       }, 300);
-    } else {
+    } else if (loadingProgress > 0 && loadingProgress < 100) {
+      // 로딩이 끝났고 진행 중이었다면 100%로 완료
       setLoadingProgress(100);
     }
     return () => timer && clearInterval(timer);
@@ -256,10 +271,11 @@ function CalendarPage() {
     // 할 일 메시지 형식 생성
     const formattedMessage = `${taskForm.title} (${taskForm.importance}중요도, ${taskForm.difficulty}난이도, 마감일: ${taskForm.deadline} day:${relativeDay})${taskForm.description ? '\n' + taskForm.description : ''}`;
     
-    setCurrentMessage(formattedMessage);
+    // 메시지 UI에 추가
+    addUserMessage(formattedMessage, []);
     
-    // 메시지 처리 함수 호출
-    handleSubmitMessage();
+    // 메시지 처리 함수 직접 호출 (챗봇 인터페이스 거치지 않고)
+    handleProcessMessageWithAI(formattedMessage);
     
     // 폼 초기화
     setTaskForm({
@@ -332,12 +348,6 @@ function CalendarPage() {
     // 로딩 시작
     setIsLoading(true);
     addAIMessage("스케줄을 생성하는 중입니다...");
-
-    const calendarApi = calendarRef.current?.getApi();
-    if (calendarApi) {
-      const currentView = calendarApi.view.type;
-      calendarApi.changeView(currentView);
-    }
     
     const lifestyleText = lifestyleList.join("\n");
     
@@ -356,7 +366,7 @@ function CalendarPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           prompt,
-          conversationContext: conversationContext.slice(-6), // 최근 6개 메시지만 전송
+          conversationContext: conversationContext.slice(-12), // 최근 12개 메시지만 전송
           sessionId: sessionIdRef.current // 세션 ID 전송
         }),
         signal: controller.signal
@@ -379,6 +389,12 @@ function CalendarPage() {
 
       setAllEvents(events);           // 모든 이벤트 상태 저장
       applyEventsToCalendar(events);  // 캘린더에 이벤트 적용
+
+      const calendarApi = calendarRef.current?.getApi();
+      if (calendarApi) {
+        const currentView = calendarApi.view.type;
+        calendarApi.changeView(currentView);
+      }
 
       // AI 응답 추가
       const aiResponse = typeof newSchedule.notes === "string"
@@ -453,12 +469,21 @@ function CalendarPage() {
             // 뷰 클래스 이름만 반환하고 이벤트 호출하지 않음
             return [`view-${arg.view.type}`];
           }}
+          viewDidMount={(arg) => {
+            // 뷰가 마운트될 때마다 이벤트 다시 적용
+            if (allEvents.length > 0) {
+              applyEventsToCalendar(allEvents);
+            }
+          }}
           datesSet={(arg) => {
-            // 뷰 변경 시에만 이벤트 다시 적용 
+            // 날짜 범위가 변경될 때마다 이벤트 다시 적용
             if (allEvents.length > 0) {
               const calendarApi = calendarRef.current?.getApi();
-              calendarApi.removeAllEventSources(); 
-              applyEventsToCalendar(allEvents);
+              if (calendarApi) {
+                setTimeout(() => {
+                  applyEventsToCalendar(allEvents);
+                }, 50);
+              }
             }
           }}
           dayHeaderContent={(args) => {
