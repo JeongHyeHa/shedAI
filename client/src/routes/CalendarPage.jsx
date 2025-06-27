@@ -10,6 +10,7 @@ import "../styles/fullcalendar-custom.css";
 import "../styles/chatbot.css";
 import {buildShedAIPrompt, buildFeedbackPrompt, convertScheduleToEvents, resetToStartOfDay, parseDateString, convertToRelativeDay} from "../utils/scheduleUtils";
 import arrowBackIcon from "../assets/arrow-small-left-light.svg";
+import ToggleSwitch from '../components/ToggleSwitch';
 
 function CalendarPage() {
   const calendarRef = useRef(null);
@@ -45,6 +46,14 @@ function CalendarPage() {
   
   // 인터페이스 모드 (챗봇 또는 폼)
   const [taskInputMode, setTaskInputMode] = useState("chatbot"); // "chatbot" 또는 "form"
+
+  // 피드백 시스템 상태
+  const [currentScheduleSessionId, setCurrentScheduleSessionId] = useState(null);
+  const [aiAdvice, setAiAdvice] = useState([]);
+  const [showAdviceModal, setShowAdviceModal] = useState(false);
+
+  // 챗봇 입력 모드 (할 일 또는 피드백)
+  const [chatbotMode, setChatbotMode] = useState("task"); // "task" 또는 "feedback"
 
   // 모달이 닫힐 때 폼 초기화
   useEffect(() => {
@@ -124,6 +133,9 @@ function CalendarPage() {
     setLifestyleList(updatedList);
     setLifestyleInput("");
     localStorage.setItem("lifestyleList", JSON.stringify(updatedList));
+    
+    // 서버에도 저장
+    setTimeout(() => saveLifestyleToServer(), 100);
   };
 
   // 생활패턴 삭제 
@@ -131,6 +143,9 @@ function CalendarPage() {
     const updatedList = lifestyleList.filter((_, i) => i !== index);
     setLifestyleList(updatedList);
     localStorage.setItem("lifestyleList", JSON.stringify(updatedList));
+    
+    // 서버에도 저장
+    setTimeout(() => saveLifestyleToServer(), 100);
   };
 
   // 생활패턴 전체 삭제
@@ -138,6 +153,29 @@ function CalendarPage() {
     if (window.confirm("모든 생활 패턴을 삭제하시겠습니까?")) {
       setLifestyleList([]);
       localStorage.setItem("lifestyleList", JSON.stringify([]));
+      
+      // 서버에도 저장
+      setTimeout(() => saveLifestyleToServer(), 100);
+    }
+  };
+
+  // 생활 패턴을 서버에 저장
+  const saveLifestyleToServer = async () => {
+    try {
+      const response = await fetch("http://localhost:3001/api/lifestyle-patterns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          sessionId: sessionIdRef.current,
+          patterns: lifestyleList
+        })
+      });
+      
+      if (!response.ok) {
+        console.error("생활 패턴 저장 실패");
+      }
+    } catch (error) {
+      console.error("생활 패턴 저장 오류:", error);
     }
   };
 
@@ -298,9 +336,50 @@ function CalendarPage() {
     addUserMessage(currentMessage, [...attachments]);
     setAttachments([]);
     
-    handleProcessMessageWithAI(currentMessage);
+    // 입력 모드에 따라 다른 처리
+    if (chatbotMode === "feedback") {
+      handleSubmitFeedbackMessage(currentMessage);
+    } else {
+      handleProcessMessageWithAI(currentMessage);
+    }
     
     setCurrentMessage("");
+  };
+
+  // 피드백 메시지 처리
+  const handleSubmitFeedbackMessage = async (messageText) => {
+    if (!currentScheduleSessionId) {
+      addAIMessage("먼저 스케줄을 생성해주세요. 피드백을 남길 스케줄이 없습니다.");
+      return;
+    }
+
+    try {
+      const response = await fetch("http://localhost:3001/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: sessionIdRef.current,
+          scheduleSessionId: currentScheduleSessionId,
+          feedbackText: messageText.trim()
+        })
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        // AI 조언이 있으면 표시
+        if (result.advice && result.advice.length > 0) {
+          setAiAdvice(result.advice);
+          setShowAdviceModal(true);
+        }
+        
+        // 성공 메시지
+        addAIMessage(`피드백이 저장되었습니다. ${result.analysis ? '분석: ' + result.analysis : ''}`);
+      }
+    } catch (error) {
+      console.error("피드백 제출 실패:", error);
+      addAIMessage("피드백 저장에 실패했습니다. 다시 시도해주세요.");
+    }
   };
   
   // 메시지를 AI로 처리하는 함수
@@ -378,6 +457,11 @@ function CalendarPage() {
       setLastSchedule(newSchedule.schedule);
       localStorage.setItem("lastSchedule", JSON.stringify(newSchedule.schedule));
 
+      // 스케줄 세션 ID 저장 (피드백용)
+      if (newSchedule.scheduleSessionId) {
+        setCurrentScheduleSessionId(newSchedule.scheduleSessionId);
+      }
+
       // 이벤트 객체 생성
       const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
         ...event,
@@ -423,6 +507,21 @@ function CalendarPage() {
       // 새 세션 ID 생성
       sessionIdRef.current = `session_${Date.now()}`;      
       addAIMessage("캘린더가 초기화되었습니다. 새로운 일정을 추가해주세요.");
+    }
+  };
+
+  // AI 조언 조회
+  const fetchAIAdvice = async () => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/advice/${sessionIdRef.current}`);
+      const result = await response.json();
+      
+      if (result.advice && result.advice.length > 0) {
+        setAiAdvice(result.advice);
+        setShowAdviceModal(true);
+      }
+    } catch (error) {
+      console.error("AI 조언 조회 실패:", error);
     }
   };
 
@@ -556,6 +655,7 @@ function CalendarPage() {
           setShowTaskModal(true);
         }}
         onClickPencil={() => setShowLifestyleModal(true)}
+        onClickAdvice={fetchAIAdvice}
       />
 
       {/* 로딩 프로그레스 바 */}
@@ -573,14 +673,33 @@ function CalendarPage() {
         <div className="modal-overlay" onClick={() => setShowTaskModal(false)}>
           {taskInputMode === "chatbot" ? (
             <div className="modal chatbot-modal" onClick={(e) => e.stopPropagation()}>
-              <h2 className="chatbot-title">ShedAI 챗봇</h2>
+              <div style={{ position: 'absolute', top: 24, left: 24, zIndex: 2 }}>
+                <ToggleSwitch
+                  checked={chatbotMode === 'task'}
+                  onChange={() => setChatbotMode(chatbotMode === 'task' ? 'feedback' : 'task')}
+                  leftLabel="할 일"
+                  rightLabel="피드백"
+                />
+              </div>
+              <h2 className="chatbot-title" style={{ textAlign: 'center', paddingLeft: 0 }}>
+                ShedAI 챗봇
+              </h2>
               
               {/* 메시지 표시 영역 */}
               <div className="chat-container" ref={chatContainerRef}>
                 {messages.length === 0 && (
                   <div className="chat-welcome">
-                    <p>안녕하세요! 오늘의 할 일이나 피드백을 알려주세요.</p>
-                    <p>시간표를 생성하거나 업데이트해 드릴게요!</p>
+                    {chatbotMode === "task" ? (
+                      <>
+                        <p>안녕하세요! 오늘의 할 일을 알려주세요.</p>
+                        <p>시간표를 생성하거나 업데이트해 드릴게요!</p>
+                      </>
+                    ) : (
+                      <>
+                        <p>현재 스케줄에 대한 피드백을 남겨주세요.</p>
+                        <p>AI가 이를 분석하여 더 나은 스케줄을 만들어드립니다.</p>
+                      </>
+                    )}
                   </div>
                 )}
                 
@@ -656,7 +775,11 @@ function CalendarPage() {
                   className="chat-input"
                   value={currentMessage}
                   onChange={(e) => setCurrentMessage(e.target.value)}
-                  placeholder="할 일이나 피드백을 입력하세요..."
+                  placeholder={
+                    chatbotMode === "task"
+                      ? "할 일을 입력하세요...(마감일, 중요도, 난이도 필수 입력)"
+                      : "피드백을 입력하세요...(ex. 오전 시간이 너무 빡빡해요)"
+                  }
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
@@ -858,6 +981,43 @@ function CalendarPage() {
               </div>
             </div>
            </div>
+        </div>
+      )}
+
+      {/* AI 조언 모달 */}
+      {showAdviceModal && (
+        <div className="modal-overlay" onClick={() => setShowAdviceModal(false)}>
+          <div className="modal advice-modal" onClick={(e) => e.stopPropagation()}>
+            <h2 className="advice-title">💡 AI 조언</h2>
+            <p className="modal-description">
+              당신의 스케줄 패턴을 분석한 개인화된 조언입니다.
+            </p>
+            
+            <div className="advice-container">
+              {aiAdvice.map((advice, index) => (
+                <div key={index} className="advice-item">
+                  <div className="advice-header">
+                    <h3 className="advice-item-title">{advice.title}</h3>
+                    <span className={`advice-priority priority-${advice.priority || 'medium'}`}>
+                      {advice.priority === 'high' ? '높음' : 
+                       advice.priority === 'medium' ? '보통' : '낮음'}
+                    </span>
+                  </div>
+                  <p className="advice-content">{advice.content}</p>
+                  <div className="advice-type">{advice.type}</div>
+                </div>
+              ))}
+            </div>
+            
+            <div className="advice-buttons">
+              <button 
+                className="advice-close-btn"
+                onClick={() => setShowAdviceModal(false)}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -1,0 +1,53 @@
+.custom-toggle-switch {
+  width: 120px;
+  height: 40px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  display: flex;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+}
+
+.toggle-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  font-weight: 600;
+  font-size: 15px;
+  color: #888;
+  transition: color 0.2s;
+  height: 100%;
+}
+
+.toggle-option.left.active {
+  color: #1C2D5A;
+}
+
+.toggle-option.right.active {
+  color: #1C2D5A;
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 50%;
+  background: #e3f0ff;
+  border-radius: 16px;
+  transition: left 0.25s;
+  z-index: 1;
+}
+
+.toggle-slider.left {
+  left: 0;
+  background: #e3f0ff;
+}
+
+.toggle-slider.right {
+  left: 50%;
+  background: #e3f0ff;
+} 

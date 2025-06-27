@@ -4,7 +4,7 @@ import smileIcon from "../assets/smile.png";
 import pencilIcon from "../assets/pencil.png";
 import plusIcon from "../assets/plus.png";
 
-function FloatingButtons({ onClickPlus, onClickPencil }) {
+function FloatingButtons({ onClickPlus, onClickPencil, onClickAdvice }) {
   return (
     <div className="floating-buttons">
       <button className="float-btn"><img src={smileIcon} alt="Smile" /></button>
