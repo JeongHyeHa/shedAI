@@ -236,18 +236,105 @@ export function resetToStartOfDay(date, isEnd = false) {
     예: "다음주 수요일 (day:12)"이라면 반드시 day:12를 마감일로 사용하세요.`;
   }
   
+  // GPT 응답 구조를 프론트엔드 구조로 변환
+  export function flattenSchedule(gptResponse) {
+    if (!gptResponse || !gptResponse.schedule || !Array.isArray(gptResponse.schedule)) {
+      console.warn('flattenSchedule: 유효하지 않은 gptResponse', gptResponse);
+      return [];
+    }
+
+    const dayMap = new Map(); // day별로 activities를 그룹화
+
+    gptResponse.schedule.forEach(activityBlock => {
+      if (!activityBlock.days || !Array.isArray(activityBlock.days)) {
+        console.warn('flattenSchedule: activityBlock.days가 유효하지 않음', activityBlock);
+        return;
+      }
+
+      activityBlock.days.forEach(dayInfo => {
+        if (!dayInfo.day || !dayInfo.start || !dayInfo.end) {
+          console.warn('flattenSchedule: dayInfo가 유효하지 않음', dayInfo);
+          return;
+        }
+
+        const day = dayInfo.day;
+        if (!dayMap.has(day)) {
+          dayMap.set(day, {
+            day: day,
+            weekday: getKoreanDayName(day),
+            activities: []
+          });
+        }
+
+        dayMap.get(day).activities.push({
+          start: dayInfo.start,
+          end: dayInfo.end,
+          title: activityBlock.activity,
+          type: activityBlock.type || 'task'
+        });
+      });
+    });
+
+    // day 순서대로 정렬하여 반환
+    return Array.from(dayMap.values()).sort((a, b) => a.day - b.day);
+  }
+
+  // day 번호를 한국어 요일로 변환
+  function getKoreanDayName(day) {
+    const dayNames = ['', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'];
+    return dayNames[day] || '알 수 없음';
+  }
+
   // GPT → FullCalendar 이벤트 변환기
   export function convertScheduleToEvents(gptSchedule, today = new Date()) {
     const events = [];
-    const gptDayToday = gptSchedule[0].day;
+    
+    // gptSchedule이 GPT 응답 구조인지 확인하고 변환
+    let scheduleData = gptSchedule;
+    if (gptSchedule && gptSchedule.schedule) {
+      // GPT 응답 구조인 경우 변환
+      scheduleData = flattenSchedule(gptSchedule);
+    }
+    
+    // 방어 코드: scheduleData가 유효하지 않으면 빈 배열 반환
+    if (!scheduleData || !Array.isArray(scheduleData) || scheduleData.length === 0) {
+      console.warn('convertScheduleToEvents: 유효하지 않은 scheduleData', scheduleData);
+      return events;
+    }
+    
+    const gptDayToday = scheduleData[0]?.day;
+    
+    // 첫 번째 요소에 day 속성이 없으면 에러
+    if (typeof gptDayToday !== 'number') {
+      console.warn('convertScheduleToEvents: scheduleData[0].day가 유효하지 않음', scheduleData[0]);
+      return events;
+    }
 
-    gptSchedule.forEach(dayBlock => {
+    scheduleData.forEach(dayBlock => {
+      // dayBlock이 유효하지 않으면 건너뛰기
+      if (!dayBlock || typeof dayBlock.day !== 'number') {
+        console.warn('convertScheduleToEvents: 유효하지 않은 dayBlock', dayBlock);
+        return;
+      }
+      
       const dateOffset = dayBlock.day - gptDayToday;
       const targetDate = new Date(today);
       targetDate.setDate(today.getDate() + dateOffset);
       const dateStr = formatLocalISO(targetDate).split('T')[0];
 
+      // activities가 유효하지 않으면 건너뛰기
+      if (!dayBlock.activities || !Array.isArray(dayBlock.activities)) {
+        console.warn('convertScheduleToEvents: dayBlock.activities가 유효하지 않음', dayBlock);
+        return;
+      }
+
       dayBlock.activities.forEach(activity => {
+        // activity가 유효하지 않으면 건너뛰기
+        if (!activity || !activity.start || !activity.end || !activity.title) {
+          console.warn('convertScheduleToEvents: 유효하지 않은 activity', activity);
+          return;
+        }
+        
         const start = new Date(`${dateStr}T${activity.start}`);
         let end = new Date(`${dateStr}T${activity.end}`);
         const extendedProps = {

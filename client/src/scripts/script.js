@@ -151,9 +151,7 @@ let lastSchedule = null;
 // DOM 로딩 시 캘린더 세팅
 document.addEventListener('DOMContentLoaded', function () {
     const today = resetToStartOfDay(new Date());
-
     var calendarEl = document.getElementById('calendar');
-
     var calendar = new FullCalendar.Calendar(calendarEl, {
         initialView: 'timeGridWeek',
         initialDate: today,
@@ -172,59 +170,90 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     });
-
     calendar.render();
 
-    // 새로운 시간표 생성
+    // === 새로고침 시 lastSchedule만 반영 (로딩/스케줄 생성 X) ===
+    const lastSchedule = JSON.parse(localStorage.getItem('lastSchedule'));
+    if (lastSchedule) {
+        const events = convertScheduleToEvents(lastSchedule, new Date());
+        calendar.removeAllEvents();
+        calendar.addEventSource(events);
+    }
+
+    // === 생활패턴 추가/삭제 시 DB에 반영 ===
+    async function saveLifestylePatternsToDB() {
+        // 전체 생활패턴 목록 수집
+        const lifestyleItems = Array.from(document.querySelectorAll('.lifestyle-item span')).map(el => el.textContent.trim());
+        const sessionId = getOrCreateSessionId();
+        // 서버에 저장
+        await fetch('/api/lifestyle-patterns', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId, patterns: lifestyleItems })
+        });
+    }
+    // 생활패턴 추가/삭제 버튼에 DB 저장 함수 연결
+    const addLifestyleBtn = document.getElementById('addLifestyleBtn');
+    if (addLifestyleBtn) addLifestyleBtn.addEventListener('click', saveLifestylePatternsToDB);
+    const deleteLifestyleBtn = document.getElementById('deleteLifestyleBtn');
+    if (deleteLifestyleBtn) deleteLifestyleBtn.addEventListener('click', saveLifestylePatternsToDB);
+
+    // === 새로운 시간표 생성 ===
     document.getElementById('newScheduleBtn').addEventListener('click', async function () {
-        // 프롬프트 수집
         const lifestyle = document.getElementById('lifestyleInput').value.trim();
         const tasks = document.getElementById('taskInput').value.trim();
-
         if (!lifestyle || !tasks) {
             alert("생활 패턴과 할 일 목록을 모두 입력해주세요!");
             return;
         }
-        await generateSchedule(lifestyle, tasks, true);
+        await generateSchedule(lifestyle, tasks, true, null, new Date());
     });
 
-    // 기존 시간표 수정
+    // === 기존 시간표 수정 ===
     document.getElementById('updateScheduleBtn').addEventListener('click', async function () {
         const newLifestyle = document.getElementById('lifestyleInput').value.trim();
         const newTasks = document.getElementById('taskInput')?.value.trim() || "";
-
         if (!newTasks) {
             alert("추가할 할 일을 입력해주세요!");
             return;
         }
-        await generateSchedule(newLifestyle, newTasks, false, lastSchedule);
+        await generateSchedule(newLifestyle, newTasks, false, lastSchedule, new Date());
     });
 
+    // === [USER SESSION 관리 유틸 추가] ===
+    const FIXED_USER_ID = 'test_user_001';
+    function getOrCreateSessionId() {
+        return FIXED_USER_ID;
+    }
 
+    // === [fetch 요청에 session_id 포함] ===
     // 프롬프트 기반 시간표 생성하는 함수
-    async function generateSchedule(lifestyle, tasks, isNew = false, previousSchedule = null) {
+    async function generateSchedule(lifestyle, tasks, isNew = false, previousSchedule = null, nowDate = new Date()) {
         const statusDiv = document.getElementById('statusMessage');
         statusDiv.innerText = "스케줄을 설계합니다...";
 
         let prompt;
         if (isNew)
-            prompt = buildShedAIPrompt(lifestyle, tasks, new Date());
+            prompt = buildShedAIPrompt(lifestyle, tasks, nowDate);
         else {
             prompt = buildFeedbackPrompt(lifestyle, tasks, previousSchedule);
         }
+
+        // session_id 추가
+        const sessionId = getOrCreateSessionId();
 
         try {
             const response = await fetch('/api/generate-schedule', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt })
+                body: JSON.stringify({ prompt, session_id: sessionId })
             });
 
             const newSchedule = await response.json();
             lastSchedule = newSchedule.schedule;    // 스케줄 백업
             console.log("받은 GPT 응답: ", newSchedule);
 
-            const events = convertScheduleToEvents(newSchedule.schedule, today);
+            const events = convertScheduleToEvents(newSchedule.schedule, nowDate);
             calendar.removeAllEvents();      // 기존 시간표 삭제
             calendar.addEventSource(events); // 새로운 시간표 추가
 
@@ -243,4 +272,17 @@ document.addEventListener('DOMContentLoaded', function () {
             statusDiv.innerText = "출력에 실패했습니다.";
         }
     }
+
+    // === 주간/일간 뷰에서 새로고침 없이도 이벤트가 보이도록 ===
+    function refreshCalendarEvents() {
+        const lastSchedule = JSON.parse(localStorage.getItem('lastSchedule'));
+        if (lastSchedule) {
+            const events = convertScheduleToEvents(lastSchedule, new Date());
+            calendar.removeAllEvents();
+            calendar.addEventSource(events);
+        }
+    }
+    // 뷰 변경 시마다 이벤트 재적용
+    calendar.on('datesSet', refreshCalendarEvents);
+    calendar.on('viewDidMount', refreshCalendarEvents);
 });

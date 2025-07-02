@@ -55,6 +55,8 @@ function CalendarPage() {
   // 챗봇 입력 모드 (할 일 또는 피드백)
   const [chatbotMode, setChatbotMode] = useState("task"); // "task" 또는 "feedback"
 
+  const isFirstMount = useRef(true);
+
   // 모달이 닫힐 때 폼 초기화
   useEffect(() => {
     if (!showTaskModal) {
@@ -68,7 +70,7 @@ function CalendarPage() {
     }
   }, [showTaskModal]);
 
-  // 초기 로딩 시 생활패턴 불러오기
+  // 초기 로딩 시 생활패턴 불러오기 및 scheduleSessionId 복원
   useEffect(() => {
     const savedLifestyle = JSON.parse(localStorage.getItem("lifestyleList"));
     if (savedLifestyle) setLifestyleList(savedLifestyle);
@@ -87,6 +89,9 @@ function CalendarPage() {
       setAllEvents(events);
       setTimeout(() => applyEventsToCalendar(events), 100);
     }
+    // === scheduleSessionId 복원 ===
+    const savedSessionId = localStorage.getItem("lastScheduleSessionId");
+    if (savedSessionId) setCurrentScheduleSessionId(savedSessionId);
   }, []);
 
   // 대화 기록 저장 (대화가 바뀔 때마다)
@@ -126,56 +131,94 @@ function CalendarPage() {
     }
   }, [messages, showTaskModal]);
 
-  // localStorage에 생활패턴 추가 
+  // 생활패턴 서버 동기화 및 스케줄 재생성 통합 함수
+  const syncLifestyleAndRegenerate = useCallback((newList) => {
+    setLifestyleList(newList);
+  }, []);
+
+  // lifestyleList 변경 시 서버 동기화 및 스케줄 자동 생성
+  useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
+    // 서버 동기화
+    (async () => {
+      try {
+        await fetch("http://localhost:3001/api/lifestyle-patterns", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            sessionId: sessionIdRef.current,
+            patterns: lifestyleList
+          })
+        });
+      } catch (error) {
+        console.error("생활 패턴 저장 오류:", error);
+      }
+    })();
+    // 스케줄 자동 생성
+    if (lifestyleList.length === 0) return;
+    const lifestyleText = lifestyleList.join("\n");
+    const today = resetToStartOfDay(new Date());
+    const prompt = lastSchedule
+      ? buildFeedbackPrompt(lifestyleText, "", lastSchedule)
+      : buildShedAIPrompt(lifestyleText, "", today);
+    (async () => {
+      setIsLoading(true);
+      addAIMessage("생활패턴이 변경되어 스케줄을 다시 생성합니다...");
+      try {
+        const response = await fetch("http://localhost:3001/api/generate-schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            sessionId: sessionIdRef.current
+          })
+        });
+        const newSchedule = await response.json();
+        setLastSchedule(newSchedule.schedule);
+        localStorage.setItem("lastSchedule", JSON.stringify(newSchedule.schedule));
+        if (newSchedule.scheduleSessionId) {
+          setCurrentScheduleSessionId(newSchedule.scheduleSessionId);
+          localStorage.setItem("lastScheduleSessionId", newSchedule.scheduleSessionId);
+        }
+        const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
+          ...event,
+          extendedProps: {
+            ...event.extendedProps,
+            isDone: false,
+          }
+        }));
+        setAllEvents(events);
+        applyEventsToCalendar(events);
+        addAIMessage("생활패턴 변경에 따라 스케줄이 새로 생성되었습니다.");
+      } catch (e) {
+        addAIMessage("스케줄 자동 생성 실패: 다시 시도해주세요.");
+      } finally {
+        setIsLoading(false);
+      }
+    })();
+    // eslint-disable-next-line
+  }, [lifestyleList]);
+
+  // localStorage에 lifestyleList 저장은 useEffect에서만 처리
+  useEffect(() => {
+    localStorage.setItem("lifestyleList", JSON.stringify(lifestyleList));
+  }, [lifestyleList]);
+
+  // 생활패턴 추가/삭제/전체삭제 핸들러 단순화
   const handleAddLifestyle = () => {
     if (!lifestyleInput.trim()) return;
-    const updatedList = [...lifestyleList, lifestyleInput.trim()];
-    setLifestyleList(updatedList);
+    syncLifestyleAndRegenerate([...lifestyleList, lifestyleInput.trim()]);
     setLifestyleInput("");
-    localStorage.setItem("lifestyleList", JSON.stringify(updatedList));
-    
-    // 서버에도 저장
-    setTimeout(() => saveLifestyleToServer(), 100);
   };
-
-  // 생활패턴 삭제 
   const handleDeleteLifestyle = (index) => {
-    const updatedList = lifestyleList.filter((_, i) => i !== index);
-    setLifestyleList(updatedList);
-    localStorage.setItem("lifestyleList", JSON.stringify(updatedList));
-    
-    // 서버에도 저장
-    setTimeout(() => saveLifestyleToServer(), 100);
+    syncLifestyleAndRegenerate(lifestyleList.filter((_, i) => i !== index));
   };
-
-  // 생활패턴 전체 삭제
   const handleClearAllLifestyles = () => {
     if (window.confirm("모든 생활 패턴을 삭제하시겠습니까?")) {
-      setLifestyleList([]);
-      localStorage.setItem("lifestyleList", JSON.stringify([]));
-      
-      // 서버에도 저장
-      setTimeout(() => saveLifestyleToServer(), 100);
-    }
-  };
-
-  // 생활 패턴을 서버에 저장
-  const saveLifestyleToServer = async () => {
-    try {
-      const response = await fetch("http://localhost:3001/api/lifestyle-patterns", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          sessionId: sessionIdRef.current,
-          patterns: lifestyleList
-        })
-      });
-      
-      if (!response.ok) {
-        console.error("생활 패턴 저장 실패");
-      }
-    } catch (error) {
-      console.error("생활 패턴 저장 오류:", error);
+      syncLifestyleAndRegenerate([]);
     }
   };
 
@@ -460,6 +503,7 @@ function CalendarPage() {
       // 스케줄 세션 ID 저장 (피드백용)
       if (newSchedule.scheduleSessionId) {
         setCurrentScheduleSessionId(newSchedule.scheduleSessionId);
+        localStorage.setItem("lastScheduleSessionId", newSchedule.scheduleSessionId);
       }
 
       // 이벤트 객체 생성
