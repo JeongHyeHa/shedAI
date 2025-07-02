@@ -49,8 +49,8 @@ function CalendarPage() {
 
   // 피드백 시스템 상태
   const [currentScheduleSessionId, setCurrentScheduleSessionId] = useState(null);
-  const [aiAdvice, setAiAdvice] = useState([]);
-  const [showAdviceModal, setShowAdviceModal] = useState(false);
+
+
 
   // 챗봇 입력 모드 (할 일 또는 피드백)
   const [chatbotMode, setChatbotMode] = useState("task"); // "task" 또는 "feedback"
@@ -397,6 +397,10 @@ function CalendarPage() {
     }
 
     try {
+      // 로딩 시작
+      setIsLoading(true);
+      addAIMessage("피드백을 분석하고 스케줄을 조정하는 중입니다...");
+
       const response = await fetch("http://localhost:3001/api/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -410,18 +414,77 @@ function CalendarPage() {
       const result = await response.json();
       
       if (result.success) {
-        // AI 조언이 있으면 표시
-        if (result.advice && result.advice.length > 0) {
-          setAiAdvice(result.advice);
-          setShowAdviceModal(true);
+        // 피드백 분석 결과를 대화창에 표시
+        if (result.analysis) {
+          addAIMessage(`📊 피드백 분석: ${result.analysis}`);
         }
         
-        // 성공 메시지
-        addAIMessage(`피드백이 저장되었습니다. ${result.analysis ? '분석: ' + result.analysis : ''}`);
+        // AI 조언을 대화창에 표시 (모달 대신)
+        if (result.advice && result.advice.length > 0) {
+          const adviceText = result.advice.map(item => 
+            `💡 ${item.title || '조언'}: ${item.content}`
+          ).join('\n');
+          addAIMessage(adviceText);
+        }
+        
+        // 피드백을 반영하여 스케줄 재생성
+        addAIMessage("피드백을 반영하여 스케줄을 조정합니다...");
+        
+        const lifestyleText = lifestyleList.join("\n");
+        const feedbackPrompt = buildFeedbackPrompt(lifestyleText, messageText, lastSchedule);
+        
+        const scheduleResponse = await fetch("http://localhost:3001/api/generate-schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            prompt: feedbackPrompt,
+            conversationContext: conversationContext.slice(-12),
+            sessionId: sessionIdRef.current
+          })
+        });
+
+        const newSchedule = await scheduleResponse.json();
+        
+        if (newSchedule.schedule) {
+          setLastSchedule(newSchedule.schedule);
+          localStorage.setItem("lastSchedule", JSON.stringify(newSchedule.schedule));
+
+          // 새로운 스케줄 세션 ID 저장
+          if (newSchedule.scheduleSessionId) {
+            setCurrentScheduleSessionId(newSchedule.scheduleSessionId);
+            localStorage.setItem("lastScheduleSessionId", newSchedule.scheduleSessionId);
+          }
+
+          // 이벤트 객체 생성 및 적용
+          const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
+            ...event,
+            extendedProps: {
+              ...event.extendedProps,
+              isDone: false,
+            }
+          }));
+
+          setAllEvents(events);
+          applyEventsToCalendar(events);
+
+          // AI 응답 추가
+          const aiResponse = typeof newSchedule.notes === "string"
+            ? newSchedule.notes.replace(/\n/g, "<br>")
+            : (newSchedule.notes || []).join("<br>");
+          
+          addAIMessage("✅ 피드백을 반영하여 스케줄을 조정했습니다!");
+          if (aiResponse) {
+            addAIMessage(aiResponse);
+          }
+        } else {
+          addAIMessage("스케줄 조정에 실패했습니다. 다시 시도해주세요.");
+        }
       }
     } catch (error) {
       console.error("피드백 제출 실패:", error);
-      addAIMessage("피드백 저장에 실패했습니다. 다시 시도해주세요.");
+      addAIMessage("피드백 처리에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsLoading(false);
     }
   };
   
@@ -554,18 +617,23 @@ function CalendarPage() {
     }
   };
 
-  // AI 조언 조회
+  // AI 조언 조회 (대화창에 표시)
   const fetchAIAdvice = async () => {
     try {
       const response = await fetch(`http://localhost:3001/api/advice/${sessionIdRef.current}`);
       const result = await response.json();
       
       if (result.advice && result.advice.length > 0) {
-        setAiAdvice(result.advice);
-        setShowAdviceModal(true);
+        const adviceText = result.advice.map(item => 
+          `💡 ${item.title || '조언'}: ${item.content}`
+        ).join('\n');
+        addAIMessage(adviceText);
+      } else {
+        addAIMessage("현재 제공할 AI 조언이 없습니다.");
       }
     } catch (error) {
       console.error("AI 조언 조회 실패:", error);
+      addAIMessage("AI 조언을 불러오는데 실패했습니다.");
     }
   };
 
@@ -1028,42 +1096,7 @@ function CalendarPage() {
         </div>
       )}
 
-      {/* AI 조언 모달 */}
-      {showAdviceModal && (
-        <div className="modal-overlay" onClick={() => setShowAdviceModal(false)}>
-          <div className="modal advice-modal" onClick={(e) => e.stopPropagation()}>
-            <h2 className="advice-title">💡 AI 조언</h2>
-            <p className="modal-description">
-              당신의 스케줄 패턴을 분석한 개인화된 조언입니다.
-            </p>
-            
-            <div className="advice-container">
-              {aiAdvice.map((advice, index) => (
-                <div key={index} className="advice-item">
-                  <div className="advice-header">
-                    <h3 className="advice-item-title">{advice.title}</h3>
-                    <span className={`advice-priority priority-${advice.priority || 'medium'}`}>
-                      {advice.priority === 'high' ? '높음' : 
-                       advice.priority === 'medium' ? '보통' : '낮음'}
-                    </span>
-                  </div>
-                  <p className="advice-content">{advice.content}</p>
-                  <div className="advice-type">{advice.type}</div>
-                </div>
-              ))}
-            </div>
-            
-            <div className="advice-buttons">
-              <button 
-                className="advice-close-btn"
-                onClick={() => setShowAdviceModal(false)}
-              >
-                닫기
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 } 
