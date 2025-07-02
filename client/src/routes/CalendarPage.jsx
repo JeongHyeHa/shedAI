@@ -208,11 +208,13 @@ function CalendarPage() {
   }, [lifestyleList]);
 
   // 생활패턴 추가/삭제/전체삭제 핸들러 단순화
-  const handleAddLifestyle = () => {
+  const handleAddLifestyle = useCallback(() => {
     if (!lifestyleInput.trim()) return;
-    syncLifestyleAndRegenerate([...lifestyleList, lifestyleInput.trim()]);
+    // 여러 줄 입력 시 줄마다 하나의 패턴으로 추가
+    const newPatterns = lifestyleInput.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    setLifestyleList(prev => [...prev, ...newPatterns]);
     setLifestyleInput("");
-  };
+  }, [lifestyleInput]);
   const handleDeleteLifestyle = (index) => {
     syncLifestyleAndRegenerate(lifestyleList.filter((_, i) => i !== index));
   };
@@ -1067,7 +1069,7 @@ function CalendarPage() {
             <div className="lifestyle-grid">
               {lifestyleList.map((item, index) => (
                 <div key={index} className="lifestyle-item">
-                  <span title={item}>{item}</span>
+                  <pre style={{whiteSpace: 'pre-line', overflow: 'auto', maxHeight: '5em', margin: 0}} title={item}>{item}</pre>
                   <button className="lifestyle-delete-btn" onClick={() => handleDeleteLifestyle(index)}>삭제</button>
                 </div>
               ))}
@@ -1078,16 +1080,22 @@ function CalendarPage() {
             
             <div className="lifestyle-actions">
               <div className="lifestyle-input-row">
-                <input
+                <textarea
                   className="lifestyle-input"
                   value={lifestyleInput}
                   onChange={(e) => setLifestyleInput(e.target.value)}
                   placeholder="예: 평일 00시~08시 수면"
-                  onKeyDown={(e) => e.key === 'Enter' && handleAddLifestyle()}
+                  rows={2}
+                  style={{resize: 'none'}}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleAddLifestyle();
+                    }
+                  }}
                 />
                 <button className="lifestyle-add-btn" onClick={handleAddLifestyle}>추가</button>
               </div>
-              
               <div className="lifestyle-buttons">
                 <button className="lifestyle-clear-btn" onClick={handleClearAllLifestyles}>전체 삭제</button>
               </div>
