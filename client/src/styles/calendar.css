@@ -122,3 +122,40 @@ button:disabled {
   min-width: 300px;
   max-width: 500px;
 }
+
+/* 기본 버튼 스타일 */
+.level-button {
+  background: #22336b;
+  color: #fff;
+  border: 1px solid #22336b;
+  padding: 8px 20px;
+  font-size: 18px;
+  border-radius: 8px;
+  margin-right: -1px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  position: relative;
+  z-index: 1;
+}
+.level-button.middle {
+  border-radius: 0;
+  z-index: 2;
+}
+.level-button:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.level-button:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  margin-right: 0;
+}
+.level-button:hover {
+  background: #3a4e8c;
+  color: #fff;
+}
+.level-button.active {
+  background: #D8DFF2 !important;
+  border: #D8DFF2 !important;
+  color: #1C2D5A !important;
+}

@@ -39,8 +39,8 @@ function CalendarPage() {
   const [taskForm, setTaskForm] = useState({
     title: "",
     deadline: "",
-    importance: "중", // 기본값: 중
-    difficulty: "중", // 기본값: 중
+    importance: "", // 기본값: 선택 안 함
+    difficulty: "", // 기본값: 선택 안 함
     description: ""
   });
   
@@ -63,8 +63,8 @@ function CalendarPage() {
       setTaskForm({
         title: "",
         deadline: "",
-        importance: "중",
-        difficulty: "중",
+        importance: "",
+        difficulty: "",
         description: ""
       });
     }
@@ -364,8 +364,8 @@ function CalendarPage() {
     setTaskForm({
       title: "",
       deadline: "",
-      importance: "중",
-      difficulty: "중",
+      importance: "",
+      difficulty: "",
       description: ""
     });
     
@@ -961,7 +961,7 @@ function CalendarPage() {
                     <div className="button-group">
                       <button 
                         type="button"
-                        className={`level-button ${taskForm.importance === "상" ? "active" : ""}`} 
+                        className={`level-button ${taskForm.importance === "상" ? "active" : ""}`}
                         onClick={(e) => {
                           e.preventDefault();
                           handleLevelSelect("importance", "상");
@@ -971,7 +971,7 @@ function CalendarPage() {
                       </button>
                       <button 
                         type="button"
-                        className={`level-button ${taskForm.importance === "중" ? "active" : ""}`} 
+                        className={`level-button middle ${taskForm.importance === "중" ? "active" : ""}`}
                         onClick={(e) => {
                           e.preventDefault();
                           handleLevelSelect("importance", "중");
@@ -981,7 +981,7 @@ function CalendarPage() {
                       </button>
                       <button 
                         type="button"
-                        className={`level-button ${taskForm.importance === "하" ? "active" : ""}`} 
+                        className={`level-button ${taskForm.importance === "하" ? "active" : ""}`}
                         onClick={(e) => {
                           e.preventDefault();
                           handleLevelSelect("importance", "하");
@@ -997,7 +997,7 @@ function CalendarPage() {
                     <div className="button-group">
                       <button 
                         type="button"
-                        className={`level-button ${taskForm.difficulty === "상" ? "active" : ""}`} 
+                        className={`level-button ${taskForm.difficulty === "상" ? "active" : ""}`}
                         onClick={(e) => {
                           e.preventDefault();
                           handleLevelSelect("difficulty", "상");
@@ -1007,7 +1007,7 @@ function CalendarPage() {
                       </button>
                       <button 
                         type="button"
-                        className={`level-button ${taskForm.difficulty === "중" ? "active" : ""}`} 
+                        className={`level-button middle ${taskForm.difficulty === "중" ? "active" : ""}`}
                         onClick={(e) => {
                           e.preventDefault();
                           handleLevelSelect("difficulty", "중");
@@ -1017,7 +1017,7 @@ function CalendarPage() {
                       </button>
                       <button 
                         type="button"
-                        className={`level-button ${taskForm.difficulty === "하" ? "active" : ""}`} 
+                        className={`level-button ${taskForm.difficulty === "하" ? "active" : ""}`}
                         onClick={(e) => {
                           e.preventDefault();
                           handleLevelSelect("difficulty", "하");
