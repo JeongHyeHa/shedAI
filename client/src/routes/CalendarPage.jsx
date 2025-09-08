@@ -16,9 +16,25 @@ function CalendarPage() {
   const calendarRef = useRef(null);
   const today = resetToStartOfDay(new Date());
   const fileInputRef = useRef(null);
-  const audioInputRef = useRef(null);
   const chatContainerRef = useRef(null);
-  const sessionIdRef = useRef(`session_${Date.now()}`);
+  // 일관된 세션 ID 관리
+  const getOrCreateSessionId = () => {
+    let sessionId = localStorage.getItem('userSessionId');
+    if (!sessionId) {
+      sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      localStorage.setItem('userSessionId', sessionId);
+    }
+    return sessionId;
+  };
+  
+  const sessionIdRef = useRef(getOrCreateSessionId());
+
+  // 세션 ID 업데이트 함수
+  const updateSessionId = () => {
+    const newSessionId = getOrCreateSessionId();
+    sessionIdRef.current = newSessionId;
+    return newSessionId;
+  };
 
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showLifestyleModal, setShowLifestyleModal] = useState(false);
@@ -27,6 +43,8 @@ function CalendarPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [allEvents, setAllEvents] = useState([]);
+  const [isConverting, setIsConverting] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const [lastSchedule, setLastSchedule] = useState(() => {
     try {
       const stored = localStorage.getItem("lastSchedule");
@@ -155,6 +173,209 @@ function CalendarPage() {
     setLifestyleList(newList);
   }, []);
 
+
+  // 이미지 압축 함수
+  const compressImage = (file, maxWidth = 1920, quality = 0.8) => {
+    return new Promise((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      
+      img.onload = () => {
+        // 이미지 크기 계산
+        let { width, height } = img;
+        if (width > maxWidth) {
+          height = (height * maxWidth) / width;
+          width = maxWidth;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        // 이미지 그리기
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // 압축된 이미지를 Base64로 변환
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(compressedDataUrl);
+      };
+      
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  };
+
+  // 이미지를 Base64로 변환하는 함수 (크기 제한 및 압축 포함)
+  const convertImageToBase64 = async (file) => {
+    try {
+      // 이미지 크기 제한 (5MB)
+      const maxSize = 5 * 1024 * 1024; // 5MB
+      
+      if (file.size > maxSize) {
+        console.log('이미지가 너무 커서 압축합니다...');
+        // 이미지 압축 시도
+        const compressedImage = await compressImage(file, 1920, 0.7);
+        
+        // 압축된 이미지 크기 확인
+        const base64Data = compressedImage.split(',')[1];
+        const sizeInBytes = (base64Data.length * 3) / 4;
+        
+        if (sizeInBytes > maxSize) {
+          throw new Error('이미지 파일이 너무 큽니다. 더 작은 이미지를 선택해주세요.');
+        }
+        
+        return compressedImage;
+      } else {
+        // 원본 이미지 사용
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+    } catch (error) {
+      throw new Error(`이미지 처리 실패: ${error.message}`);
+    }
+  };
+
+  // GPT-4o를 사용한 이미지 처리 함수
+  const convertImageToText = async (imageFile) => {
+    try {
+      setIsConverting(true);
+      
+      // 이미지를 Base64로 변환
+      const base64Image = await convertImageToBase64(imageFile);
+      
+      // GPT-4o API 호출
+      const response = await fetch('http://localhost:3001/api/gpt4o-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image: base64Image,
+          prompt: "이 이미지에서 시간표나 일정 정보를 텍스트로 추출해주세요. 요일, 시간, 과목명 등을 정확히 인식하여 정리해주세요."
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`GPT-4o API 오류: ${response.status}`);
+      }
+
+      const result = await response.json();
+      const processedText = result.text || result;
+      
+      console.log('GPT-4o 이미지 처리 결과:', processedText);
+      
+      return processedText;
+    } catch (error) {
+      console.error('GPT-4o 이미지 처리 실패:', error);
+      
+      let errorMessage = '이미지 처리에 실패했습니다.';
+      if (error.message.includes('너무 큽니다')) {
+        errorMessage = error.message;
+      } else if (error.message.includes('413')) {
+        errorMessage = '이미지 파일이 너무 큽니다. 더 작은 이미지를 선택해주세요.';
+      } else if (error.message.includes('404')) {
+        errorMessage = '서버 연결에 실패했습니다. 잠시 후 다시 시도해주세요.';
+      }
+      
+      alert(errorMessage);
+      throw error;
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+
+  // GPT-4o Whisper API를 사용한 음성 인식 함수
+  const startVoiceRecording = () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert('이 브라우저는 음성 녹음을 지원하지 않습니다.');
+      return;
+    }
+
+    // 마이크 권한 요청 및 녹음 시작
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => {
+        setIsRecording(true);
+        
+        const mediaRecorder = new MediaRecorder(stream);
+        const audioChunks = [];
+        
+        mediaRecorder.ondataavailable = (event) => {
+          audioChunks.push(event.data);
+        };
+        
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+          await processAudioWithWhisper(audioBlob);
+          stream.getTracks().forEach(track => track.stop());
+        };
+        
+        // 5초 후 자동으로 녹음 중지
+        mediaRecorder.start();
+        setTimeout(() => {
+          mediaRecorder.stop();
+          setIsRecording(false);
+        }, 5000);
+      })
+      .catch(error => {
+        console.error('마이크 접근 오류:', error);
+        alert('마이크 접근 권한이 필요합니다.');
+        setIsRecording(false);
+      });
+  };
+
+  // Whisper API로 음성 처리
+  const processAudioWithWhisper = async (audioBlob) => {
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.wav');
+      
+      const response = await fetch('http://localhost:3001/api/whisper-transcribe', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error(`Whisper API 오류: ${response.status}`);
+      }
+
+      const result = await response.json();
+      const transcript = result.text || result;
+      
+      console.log('Whisper 음성 인식 결과:', transcript);
+      
+      setCurrentMessage(transcript);
+    } catch (error) {
+      console.error('Whisper 음성 인식 실패:', error);
+      alert('음성 인식에 실패했습니다. 다시 시도해주세요.');
+      setIsRecording(false);
+    }
+  };
+
+
+
+  // 파일 변환 처리 함수
+  const handleFileConversion = async (file) => {
+    try {
+      if (file.type.startsWith('audio/')) {
+        // 음성 파일은 직접 변환하지 않고 사용자가 수동으로 녹음하도록 안내
+        alert('음성 파일은 녹음 버튼을 사용해주세요.');
+        return;
+      } else if (file.type.startsWith('image/')) {
+        const text = await convertImageToText(file);
+        setCurrentMessage(text);
+        addUserMessage(text);
+      }
+    } catch (error) {
+      console.error('파일 변환 실패:', error);
+      alert('파일 변환에 실패했습니다. 다시 시도해주세요.');
+    }
+  };
+
   // lifestyleList 변경 시 서버 동기화 및 스케줄 자동 생성
   useEffect(() => {
     if (isFirstMount.current) {
@@ -272,11 +493,12 @@ function CalendarPage() {
     calendarApi.addEventSource(processedEvents);
   };
 
-  // 사진 업로드 핸들러
-  const handleImageUpload = (event) => {
+  // 사진 업로드 핸들러 (OCR 자동 변환)
+  const handleImageUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
+    // 이미지를 첨부파일로 추가
     const reader = new FileReader();
     reader.onload = (e) => {
       const newAttachment = {
@@ -287,26 +509,21 @@ function CalendarPage() {
       setAttachments(prev => [...prev, newAttachment]);
     };
     reader.readAsDataURL(file);
+
+    // OCR로 텍스트 변환
+    try {
+      const text = await convertImageToText(file);
+      if (text) {
+        setCurrentMessage(text);
+        addUserMessage(text);
+      }
+    } catch (error) {
+      console.error('이미지 OCR 실패:', error);
+    }
+
     event.target.value = null; // 같은 파일 다시 선택 가능하도록
   };
 
-  // 음성 녹음 핸들러
-  const handleAudioUpload = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const newAttachment = {
-        type: 'audio',
-        data: e.target.result,
-        file: file
-      };
-      setAttachments(prev => [...prev, newAttachment]);
-    };
-    reader.readAsDataURL(file);
-    event.target.value = null; // 같은 파일 다시 선택 가능하도록
-  };
 
   // 첨부파일 제거 핸들러
   const handleRemoveAttachment = (index) => {
@@ -626,14 +843,17 @@ function CalendarPage() {
   const handleResetCalendar = () => {
     if (window.confirm("모든 일정을 초기화하시겠습니까?")) {
       localStorage.removeItem("lastSchedule");
+      localStorage.removeItem("lastScheduleSessionId");
+      localStorage.removeItem("userSessionId");
       setLastSchedule(null);
       setAllEvents([]);
       calendarRef.current?.getApi().removeAllEvents();
       setMessages([]);
       setConversationContext([]);
+      setCurrentScheduleSessionId(null);
       
       // 새 세션 ID 생성
-      sessionIdRef.current = `session_${Date.now()}`;      
+      updateSessionId();
       addAIMessage("캘린더가 초기화되었습니다. 새로운 일정을 추가해주세요.");
     }
   };
@@ -890,22 +1110,34 @@ function CalendarPage() {
                   style={{ display: 'none' }}
                   onChange={handleImageUpload}
                 />
-                <input
-                  type="file"
-                  accept="audio/*"
-                  ref={audioInputRef}
-                  style={{ display: 'none' }}
-                  onChange={handleAudioUpload}
-                />
                 
                 <button className="chat-attach-btn" onClick={() => fileInputRef.current?.click()}>
                   <span role="img" aria-label="이미지 첨부">🖼️</span>
                 </button>
-                <button className="chat-attach-btn" onClick={() => audioInputRef.current?.click()}>
-                  <span role="img" aria-label="음성 첨부">🎤</span>
+                <button 
+                  className="chat-attach-btn" 
+                  onClick={startVoiceRecording}
+                  disabled={isRecording || isConverting}
+                  style={{ 
+                    backgroundColor: isRecording ? '#ff6b6b' : '#4CAF50',
+                    opacity: isRecording || isConverting ? 0.7 : 1
+                  }}
+                  title="음성 녹음 (5초간 녹음 후 Whisper API로 변환)"
+                >
+                  <span role="img" aria-label="음성 녹음">
+                    {isRecording ? '🔴' : '🎤'}
+                  </span>
                 </button>
                 
                 <div style={{ width: '8px' }}></div>
+                
+                {/* 변환 상태 표시 */}
+                {(isConverting || isRecording) && (
+                  <div className="conversion-status">
+                    {isConverting && 'GPT-4o 이미지 처리 중...'}
+                    {isRecording && '음성 녹음 중 (5초)...'}
+                  </div>
+                )}
                 
                 <input
                   type="text"

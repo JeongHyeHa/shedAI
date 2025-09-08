@@ -3,6 +3,7 @@ const app = express();
 const path = require('path');
 const axios = require('axios');
 const cors = require('cors');
+const multer = require('multer');
 require('dotenv').config();  
 
 // 데이터베이스 및 유틸리티 모듈 import
@@ -10,8 +11,16 @@ const database = require('./db/database');
 const feedbackAnalyzer = require('./utils/feedbackAnalyzer');
 const promptEnhancer = require('./utils/promptEnhancer');
 
+// multer 설정 (파일 업로드용) - 크기 제한 추가
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB 제한
+  }
+});
+
 app.use(cors());    // CORS 허용
-app.use(express.json());    
+app.use(express.json({ limit: '10mb' }));    // JSON 크기 제한 추가
 //app.use(express.static('public'));  
 
 // 대화 세션 저장소
@@ -301,6 +310,84 @@ app.post('/api/generate-schedule', async (req, res) => {
     } catch (error) {
         console.error('GPT 호출 실패:', error.response?.data || error.message);
         res.status(500).send('시간표 생성 실패: ' + (error.response?.data?.error?.message || error.message));
+    }
+});
+
+// GPT-4o 이미지 처리 API
+app.post('/api/gpt4o-image', async (req, res) => {
+    try {
+        const { image, prompt } = req.body;
+        
+        if (!image) {
+            return res.status(400).json({ error: '이미지가 필요합니다.' });
+        }
+
+        const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: 'gpt-4o',
+            messages: [
+                {
+                    role: 'system',
+                    content: '당신은 이미지에서 텍스트를 정확히 추출하고 해석하는 전문가입니다. 시간표나 일정 정보를 명확하게 정리해주세요.'
+                },
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'text',
+                            text: prompt || '이 이미지에서 시간표나 일정 정보를 텍스트로 추출해주세요.'
+                        },
+                        {
+                            type: 'image_url',
+                            image_url: {
+                                url: image,
+                                detail: 'high'
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens: 1000,
+            temperature: 0.1
+        }, {
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const result = response.data.choices[0].message.content;
+        res.json({ text: result });
+    } catch (error) {
+        console.error('GPT-4o 이미지 처리 실패:', error.response?.data || error.message);
+        res.status(500).json({ error: '이미지 처리에 실패했습니다.' });
+    }
+});
+
+// Whisper 음성 인식 API
+app.post('/api/whisper-transcribe', upload.single('audio'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: '오디오 파일이 필요합니다.' });
+        }
+
+        const formData = new FormData();
+
+        const blob = new Blob([req.file.buffer], { type: 'audio/wav' });
+        formData.append('file', blob, 'audio.wav');
+        formData.append('model', 'whisper-1');
+        formData.append('language', 'ko');
+
+        const response = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'multipart/form-data'
+            }
+        });
+
+        res.json({ text: response.data.text });
+    } catch (error) {
+        console.error('Whisper 음성 인식 실패:', error.response?.data || error.message);
+        res.status(500).json({ error: '음성 인식에 실패했습니다.' });
     }
 });
 
