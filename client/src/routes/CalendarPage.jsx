@@ -492,12 +492,6 @@ function CalendarPage() {
   
   // 메시지를 AI로 처리하는 함수
   const handleProcessMessageWithAI = async (messageText) => {
-    if (lifestyleList.length === 0) {   // 생활패턴이 없는 경우 
-      addAIMessage("생활 패턴을 먼저 설정해주세요!");
-      setShowLifestyleModal(true);
-      return;
-    }
-
     // 날짜 인식 전처리(예: 이번주 토요일, 다음주 월요일)
     const preprocessMessage = (text) => {
       const patterns = [
