@@ -27,9 +27,15 @@ function CalendarPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [allEvents, setAllEvents] = useState([]);
-  const [lastSchedule, setLastSchedule] = useState(
-    JSON.parse(localStorage.getItem("lastSchedule")) || null
-  );    // 	AI가 스케줄을 생성한 직후
+  const [lastSchedule, setLastSchedule] = useState(() => {
+    try {
+      const stored = localStorage.getItem("lastSchedule");
+      return stored ? JSON.parse(stored) : null;
+    } catch (error) {
+      console.error("Error parsing lastSchedule from localStorage:", error);
+      return null;
+    }
+  });    // 	AI가 스케줄을 생성한 직후
   const [messages, setMessages] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [currentMessage, setCurrentMessage] = useState("");
@@ -72,15 +78,24 @@ function CalendarPage() {
 
   // 초기 로딩 시 생활패턴 불러오기 및 scheduleSessionId 복원
   useEffect(() => {
-    const savedLifestyle = JSON.parse(localStorage.getItem("lifestyleList"));
-    if (savedLifestyle) setLifestyleList(savedLifestyle);
+    try {
+      const savedLifestyle = localStorage.getItem("lifestyleList");
+      if (savedLifestyle) {
+        const parsedLifestyle = JSON.parse(savedLifestyle);
+        setLifestyleList(parsedLifestyle);
+      }
+    } catch (error) {
+      console.error("Error parsing lifestyleList from localStorage:", error);
+    }
 
-    const savedSchedule = JSON.parse(localStorage.getItem("lastSchedule"));
-    if (savedSchedule) {
-      setLastSchedule(savedSchedule);
-      const events = convertScheduleToEvents(savedSchedule, today).map(event => ({
-        ...event,
-        extendedProps: {
+    try {
+      const savedSchedule = localStorage.getItem("lastSchedule");
+      if (savedSchedule) {
+        const parsedSchedule = JSON.parse(savedSchedule);
+        setLastSchedule(parsedSchedule);
+        const events = convertScheduleToEvents(parsedSchedule, today).map(event => ({
+          ...event,
+          extendedProps: {
           ...event.extendedProps,
           isDone: false,
           type: event.extendedProps?.type || "task"
@@ -89,6 +104,10 @@ function CalendarPage() {
       setAllEvents(events);
       setTimeout(() => applyEventsToCalendar(events), 100);
     }
+    } catch (error) {
+      console.error("Error parsing lastSchedule from localStorage:", error);
+    }
+    
     // === scheduleSessionId 복원 ===
     const savedSessionId = localStorage.getItem("lastScheduleSessionId");
     if (savedSessionId) setCurrentScheduleSessionId(savedSessionId);
@@ -166,6 +185,8 @@ function CalendarPage() {
       : buildShedAIPrompt(lifestyleText, "", today);
     (async () => {
       setIsLoading(true);
+      setShowTaskModal(false);
+      setShowLifestyleModal(false);
       addAIMessage("생활패턴이 변경되어 스케줄을 다시 생성합니다...");
       try {
         const response = await fetch("http://localhost:3001/api/generate-schedule", {
@@ -401,6 +422,8 @@ function CalendarPage() {
     try {
       // 로딩 시작
       setIsLoading(true);
+      setShowTaskModal(false);
+      setShowLifestyleModal(false);
       addAIMessage("피드백을 분석하고 스케줄을 조정하는 중입니다...");
 
       const response = await fetch("http://localhost:3001/api/feedback", {
@@ -528,6 +551,8 @@ function CalendarPage() {
     
     // 로딩 시작
     setIsLoading(true);
+    setShowTaskModal(false);
+    setShowLifestyleModal(false);
     addAIMessage("스케줄을 생성하는 중입니다...");
     
     const lifestyleText = lifestyleList.join("\n");
@@ -635,7 +660,20 @@ function CalendarPage() {
 
   return (
     <div className="calendar-page">
-      <h1 className="calendar-title">나만의 시간표 캘린더</h1>
+      <div style={{ position: 'relative' }}>
+        <h1 className="calendar-title">나만의 시간표 캘린더</h1>
+        {/* 로딩 프로그레스 바 */}
+        {isLoading && (
+          <div className="loading-container">
+            <div className="circular-spinner">
+              <div className="spinner-ring">
+                <div className="spinner-background"></div>
+                <div className="spinner-progress"></div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
       
       {/* 캘린더 */}
       <div className="calendar-container">
@@ -766,15 +804,6 @@ function CalendarPage() {
         onClickAdvice={fetchAIAdvice}
       />
 
-      {/* 로딩 프로그레스 바 */}
-      {isLoading && (
-        <div className="loading-container">
-          <div className="progress-bar">
-            <div className="progress-fill" style={{ width: `${loadingProgress}%` }} />
-          </div>
-          <p className="loading-text">AI가 스케줄을 생성하고 있습니다... {loadingProgress}%</p>
-        </div>
-      )}
 
       {/* 할 일 입력 모달 */}
       {showTaskModal && (
