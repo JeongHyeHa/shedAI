@@ -3,7 +3,7 @@ const path = require('path');
 
 class Database {
     constructor() {
-        this.dbPath = path.join(__dirname, 'shedai.db');
+        this.dbPath = path.join(__dirname, '../db/shedai.db');
         this.db = null;
         this.init();
     }
@@ -21,7 +21,7 @@ class Database {
 
     createTables() {
         const fs = require('fs');
-        const schemaPath = path.join(__dirname, 'schema.sql');
+        const schemaPath = path.join(__dirname, '../db/schema.sql');
         
         if (fs.existsSync(schemaPath)) {
             const schema = fs.readFileSync(schemaPath, 'utf8');
@@ -306,4 +306,4 @@ class Database {
     }
 }
 
-module.exports = new Database(); 
+module.exports = new Database();

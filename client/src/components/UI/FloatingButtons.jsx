@@ -1,8 +1,8 @@
 import React from "react";
-import "../styles/floating.css"; 
-import smileIcon from "../assets/smile.png";
-import pencilIcon from "../assets/pencil.png";
-import plusIcon from "../assets/plus.png";
+import "../../styles/floating.css"; 
+import smileIcon from "../../assets/smile.png";
+import pencilIcon from "../../assets/pencil.png";
+import plusIcon from "../../assets/plus.png";
 
 function FloatingButtons({ onClickPlus, onClickPencil, onClickAdvice }) {
   return (

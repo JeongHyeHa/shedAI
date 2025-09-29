@@ -77,16 +77,30 @@ html, body {
   width: 30px;
   height: 30px;
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  aspect-ratio: 1; 
 }
 
 .spinner-ring {
   width: 100%;
   height: 100%;
   position: relative;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
+
+.loading-progress {
+  position: absolute;
+  font-size: 12px;
+  font-weight: bold;
+  color: #1C2D5A;
+  z-index: 10; 
+  margin: 0;
+  padding: 0;
+  line-height: 1;
+}
+
 
 .spinner-background {
   width: 100%;
