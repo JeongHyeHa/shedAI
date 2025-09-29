@@ -1,55 +1,51 @@
-import React, { useRef, useEffect } from 'react';
-import FullCalendar from '@fullcalendar/react';
-import dayGridPlugin from '@fullcalendar/daygrid';
-import timeGridPlugin from '@fullcalendar/timegrid';
+// 달력 컴포넌트 : 달력을 화면에 보여주는 컴포넌트
+import React, { useRef, useEffect } from 'react'; // 웹페이지를 만드는 도구(달력에 접근/변경될 때마다 실행)
+import FullCalendar from '@fullcalendar/react';  
+import dayGridPlugin from '@fullcalendar/daygrid';  // 월간 달력 뷰
+import timeGridPlugin from '@fullcalendar/timegrid';  // 주간/일간 달력 뷰
 import '../../styles/fullcalendar-custom.css';
 
 const Calendar = ({ 
-  events = [], 
-  onEventMount, 
-  onViewDidMount, 
-  onDatesSet,
-  onDayHeaderContent,
-  onEventContent 
+  events = [],        // 달력에 표시할 일정들(기본값 빈 배열)
+  onEventMount,       // 일정이 달력에 나타날 때 실행할 함수
+  onViewDidMount,     // 달력 뷰가 변경될 때 실행할 함수
+  onDatesSet,         // 날짜가 변경될 때 실행할 함수
+  onDayHeaderContent, // 요일 헤더를 만들 때 실행할 함수
+  onEventContent      // 일정 내용을 만들 때 실행할 함수
 }) => {
-  const calendarRef = useRef(null);
+  const calendarRef = useRef(null); // 달력에 접근하는 도구(like 리모컨)
 
-  // 이벤트를 캘린더에 적용
-  const applyEventsToCalendar = (eventsToApply) => {
+  // 이벤트 처리 함수 (lifestyle 타입 스타일링)
+  const processEvents = (eventsToProcess) => {
+    return eventsToProcess.map(event => {
+      const newEvent = { ...event };      
+      if (event.extendedProps?.type === "lifestyle") {
+        newEvent.backgroundColor = "#CFCFCF";
+        newEvent.borderColor = "#AAAAAA";
+        newEvent.textColor = "#333333";
+        newEvent.className = "lifestyle-event";
+      }
+      return newEvent;
+    });
+  };
+
+  // 이벤트가 변경될 때마다 달력 업데이트 
+  useEffect(() => {
     const calendarApi = calendarRef.current?.getApi();
     if (!calendarApi) return;
     
     calendarApi.removeAllEvents();
-    const viewType = calendarApi.view.type;
-    
-    const processedEvents = eventsToApply.map(event => {
-      const newEvent = { ...event };      
-      if (event.extendedProps?.type === "lifestyle") {
-        if (viewType === "dayGridMonth") {
-          newEvent.display = "none";
-        } else {
-          newEvent.backgroundColor = "#CFCFCF";
-          newEvent.borderColor = "#AAAAAA";
-          newEvent.textColor = "#333333";
-        }
-      }
-      return newEvent;
-    });
-
-    calendarApi.addEventSource(processedEvents);
-  };
-
-  // 이벤트가 변경될 때마다 캘린더에 적용
-  useEffect(() => {
     if (events.length > 0) {
-      applyEventsToCalendar(events);
+      const processedEvents = processEvents(events);
+      calendarApi.addEventSource(processedEvents);
     }
   }, [events]);
 
+  // 실제 달력 화면 만들기 
   return (
     <div className="calendar-container">
       <FullCalendar
-        ref={calendarRef}
+        ref={calendarRef} // 달력에 리모컨 연결 
         plugins={[dayGridPlugin, timeGridPlugin]}
         initialView="dayGridMonth"
         headerToolbar={{
@@ -57,20 +53,19 @@ const Calendar = ({
           center: "title",
           end: "dayGridMonth,timeGridWeek,timeGridDay"
         }}
-        events={[]}
         height="auto"
-        aspectRatio={1.35}
+        aspectRatio={1.35}  // 가로 세로 비율
         contentHeight="auto"
         dayMaxEventRows={3} 
         allDaySlot={true}
-        navLinks={true}
-        nowIndicator={true}
-        eventDidMount={onEventMount}
+        navLinks={true}     // 날짜 클릭으로 이동 가능
+        nowIndicator={true} // 현재 날짜 표시
+        eventDidMount={onEventMount}  // 일정이 달력에 나타날 때 실행할 함수
         viewClassNames={(arg) => [`view-${arg.view.type}`]}
-        viewDidMount={onViewDidMount}
-        datesSet={onDatesSet}
-        dayHeaderContent={onDayHeaderContent}
-        eventContent={onEventContent}
+        viewDidMount={onViewDidMount} // 달력 뷰가 변경될 때 실행할 함수
+        datesSet={onDatesSet}         // 날짜가 변경될 때 실행할 함수
+        dayHeaderContent={onDayHeaderContent} // 요일 헤더를 만들 때 실행할 함수
+        eventContent={onEventContent} // 일정 내용을 만들 때 실행할 함수
       />
     </div>
   );

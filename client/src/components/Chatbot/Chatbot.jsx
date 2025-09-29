@@ -1,28 +1,30 @@
+// AI 챗봇 인터페이스를 만드는 컴포넌트(할 일 입력/ 피드백 남기는 채팅창)
+// 다양한 입력 방식(텍스트, 이미지, 음성) // 사용자 친화적UI(자동 스크롤, 모드별 안내 등)
 import React, { useRef, useEffect } from 'react';
-import ToggleSwitch from '../UI/ToggleSwitch';
+import ToggleSwitch from '../UI/ToggleSwitch';  // 할 일/ 피드백 모드 전환 스위치 컴포넌트
 import '../../styles/chatbot.css';
 
 const Chatbot = ({
-  isOpen,
-  onClose,
-  messages = [],
-  currentMessage,
-  setCurrentMessage,
-  attachments = [],
-  onRemoveAttachment,
-  onSubmitMessage,
-  onImageUpload,
-  onVoiceRecording,
-  isRecording = false,
-  isConverting = false,
-  isLoading = false,
-  chatbotMode = 'task',
-  onModeChange
+  isOpen,              // 챗봇이 열려있는지 여부
+  onClose,             // 챗봇을 닫을 때 실행할 함수
+  messages = [],       // 채팅 메시지들 (기본값: 빈 배열)
+  currentMessage,      // 현재 입력 중인 메시지
+  setCurrentMessage,   // 메시지를 설정하는 함수
+  attachments = [],    // 첨부파일들 (기본값: 빈 배열)
+  onRemoveAttachment,  // 첨부파일을 제거할 때 실행할 함수
+  onSubmitMessage,     // 메시지를 전송할 때 실행할 함수
+  onImageUpload,       // 이미지를 업로드할 때 실행할 함수
+  onVoiceRecording,    // 음성을 녹음할 때 실행할 함수
+  isRecording = false, // 현재 녹음 중인지 여부 (기본값: false)
+  isConverting = false,// 파일을 변환 중인지 여부 (기본값: false)
+  isLoading = false,   // 로딩 중인지 여부 (기본값: false)
+  chatbotMode = 'task',// 챗봇 모드 ('task' 또는 'feedback')
+  onModeChange         // 모드를 변경할 때 실행할 함수
 }) => {
   const chatContainerRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // 채팅창이 열릴 때마다 스크롤 아래로 이동
+  // 새로운 메시지가 올 때마다 채팅창을 맨 아래로 자동 스크롤
   useEffect(() => {
     if (chatContainerRef.current && isOpen) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
@@ -33,7 +35,8 @@ const Chatbot = ({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal chatbot-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal chatbot-modal" onClick={(e) => e.stopPropagation()}>  {/*배경 클릭 시 챗봇 닫기 */}
+        {/* 할 일/ 피드백 모드 전환 스위치 */}
         <div style={{ position: 'absolute', top: 24, left: 24, zIndex: 2 }}>
           <ToggleSwitch
             checked={chatbotMode === 'task'}
@@ -43,6 +46,7 @@ const Chatbot = ({
           />
         </div>
         
+        {/* 챗봇 제목 */}
         <h2 className="chatbot-title" style={{ textAlign: 'center', paddingLeft: 0 }}>
           ShedAI 챗봇
         </h2>
@@ -145,6 +149,7 @@ const Chatbot = ({
             </div>
           )}
           
+          {/* 텍스트 입력 */}
           <input
             type="text"
             className="chat-input"
@@ -163,6 +168,7 @@ const Chatbot = ({
             }}
           />
           
+          {/* 전송 버튼 */}
           <button 
             className="chat-send-button"
             onClick={onSubmitMessage}
