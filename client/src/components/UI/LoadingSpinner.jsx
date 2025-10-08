@@ -1,3 +1,4 @@
+// 로딩 스피너 컴포넌트
 import React from 'react';
 
 const LoadingSpinner = ({ isLoading, progress = 0 }) => {

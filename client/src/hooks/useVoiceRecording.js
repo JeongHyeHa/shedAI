@@ -1,3 +1,5 @@
+// 음성 녹음 훅 ::: 음성을 녹음하고 Whisper로 텍스트로 변환하는 기능 
+// 브라우저에서 마이크 권한 요청, 5초간 음성 녹음, Whisper API로 음성을 텍스트로 변환 
 import { useState, useCallback } from 'react';
 import apiService from '../services/apiService';
 

@@ -1,3 +1,5 @@
+// 화면에 떠다니는 버튼들을 관리하는 컴포넌트
+// 임티 버튼, 생활패턴 버튼, 할 일 버튼 
 import React from "react";
 import "../../styles/floating.css"; 
 import smileIcon from "../../assets/smile.png";
@@ -7,7 +9,7 @@ import plusIcon from "../../assets/plus.png";
 function FloatingButtons({ onClickPlus, onClickPencil, onClickAdvice }) {
   return (
     <div className="floating-buttons">
-      <button className="float-btn"><img src={smileIcon} alt="Smile" /></button>
+      {/* <button className="float-btn"><img src={smileIcon} alt="Smile" /></button> */}
       <button className="float-btn" onClick={onClickPencil}><img src={pencilIcon} alt="Pencil" /></button>
       <button className="float-btn" onClick={onClickPlus}><img src={plusIcon} alt="Plus" /></button>
     </div>

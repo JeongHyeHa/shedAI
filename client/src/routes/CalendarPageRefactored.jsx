@@ -1,3 +1,4 @@
+// 앱의 메인 페이지
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Calendar from '../components/Calendar/Calendar';
 import CalendarHeader from '../components/Calendar/CalendarHeader';
@@ -49,7 +50,6 @@ function CalendarPage() {
     loadingProgress, 
     generateSchedule 
   } = useScheduleManagement();
-  
   const { isConverting, convertImageToText } = useImageProcessing();
   const { isRecording, startVoiceRecording } = useVoiceRecording();
   const { 

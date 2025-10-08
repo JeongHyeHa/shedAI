@@ -1,3 +1,5 @@
+// 스케줄 관리 훅 ::: 스케줄을 생성하고, 로딩 프로그레스를 관리하는 기능을 담당
+// AI에게 스케줄 생성 요청, AI 응답을 캘린더로 변환 
 import { useState, useCallback, useEffect } from 'react';
 import apiService from '../services/apiService';
 import { convertScheduleToEvents } from '../utils/scheduleUtils';

@@ -1,3 +1,6 @@
+// 생활패턴 동기화 훅 ::: 생활패턴이 변경될 때 서버에 저장하고, 스케줄을 자동 생성 
+// 생활패턴이 바뀌면 자동으로 서버에 저장, 생활패턴 변경 시 AI가 새로운 스케줄 생성
+// 페이지 처음 로드 시 실행x 
 import { useEffect, useCallback, useRef } from 'react';
 import apiService from '../services/apiService';
 import { buildShedAIPrompt, buildFeedbackPrompt } from '../utils/scheduleUtils';

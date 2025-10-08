@@ -1,15 +1,16 @@
+// 생활패턴 입력/관리하는 창
 import React from 'react';
 import '../../styles/modal.css';
 
 const LifestyleModal = ({
-  isOpen,
-  onClose,
-  lifestyleList = [],
-  lifestyleInput,
-  setLifestyleInput,
-  onAddLifestyle,
-  onDeleteLifestyle,
-  onClearAllLifestyles
+  isOpen,             // 모달이 열려있는지 여부
+  onClose,            // 모달 닫을 때 실행할 함수
+  lifestyleList = [], // 생활패턴 목록(기본값: 빈 배열)
+  lifestyleInput,     // 생활패턴 입력 필드
+  setLifestyleInput,  // 생활패턴 입력 필드 변경 함수
+  onAddLifestyle,     // 생활패턴 추가 시 실행 함수
+  onDeleteLifestyle,  // 생활패턴 삭제 시 실행 함수
+  onClearAllLifestyles // 모든 생활패턴 삭제 시 실행 함수
 }) => {
   if (!isOpen) return null;
 
@@ -19,6 +20,7 @@ const LifestyleModal = ({
         <h2 className="lifestyle-title">생활 패턴 입력</h2>
         <p className="modal-description">일상적인 생활 패턴을 입력하면 AI가 이를 고려하여 시간표를 생성합니다.</p>
         
+        {/* 생활패턴 목록 표시 */}
         <div className="lifestyle-grid">
           {lifestyleList.map((item, index) => (
             <div key={index} className="lifestyle-item">
@@ -31,6 +33,7 @@ const LifestyleModal = ({
           )}
         </div>
         
+        {/* 생활패턴 입력 필드 및 버튼 */}
         <div className="lifestyle-actions">
           <div className="lifestyle-input-row">
             <textarea

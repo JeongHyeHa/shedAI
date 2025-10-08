@@ -1,3 +1,5 @@
+// 메시지 관리 훅 ::: 채팅 메시지를 관리하고, 첨부파일을 추가/제거하는 기능을 담당
+// 채팅 메시지들을 로컬 스토리지에 자동 저장, AI가 대화맥락을 이해할 수 있게 관리 
 import { useState, useCallback } from 'react';
 import { useLocalStorage } from './useLocalStorage';
 import { STORAGE_KEYS } from '../constants/ui';

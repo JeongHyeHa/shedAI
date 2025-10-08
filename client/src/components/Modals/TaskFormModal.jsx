@@ -1,15 +1,16 @@
+// 할 일 간단입력 창
 import React from 'react';
 import arrowBackIcon from '../../assets/arrow-small-left-light.svg';
 import '../../styles/modal.css';
 
 const TaskFormModal = ({
-  isOpen,
-  onClose,
-  onBackToChatbot,
-  taskForm,
-  onTaskFormChange,
-  onLevelSelect,
-  onSubmit
+  isOpen,             // 모달이 열려있는지 여부
+  onClose,            // 모달 닫을 때 실행할 함수
+  onBackToChatbot,    // 챗봇으로 돌아가기 버튼 클릭 시 실행할 함수
+  taskForm,             // 할 일 폼
+  onTaskFormChange,     // 할 일 폼 변경 함수
+  onLevelSelect,        // 할 일 중요도, 난이도 선택 함수
+  onSubmit,             // 할 일 폼 전송 함수
 }) => {
   if (!isOpen) return null;
 
@@ -24,6 +25,7 @@ const TaskFormModal = ({
         </div>
         
         <div className="task-form-container">
+          {/* 제목, 마감일 입력 폼 */}
           <div className="form-row">
             <div className="form-group">
               <label htmlFor="task-title">제목 <span className="required">*</span></label>
@@ -51,6 +53,7 @@ const TaskFormModal = ({
             </div>
           </div>
 
+          {/* 중요도, 난이도 선택 폼 */}
           <div className="form-row">
             <div className="form-group half-width">
               <label>중요도 <span className="required">*</span></label>
@@ -125,6 +128,7 @@ const TaskFormModal = ({
             </div>
           </div>
 
+          {/* 설명 입력 폼 */}
           <div className="form-group">
             <label htmlFor="task-description">설명(선택)</label>
             <textarea 
@@ -136,6 +140,7 @@ const TaskFormModal = ({
             ></textarea>
           </div>
 
+          {/* 제출 버튼 */}
           <div className="task-form-buttons">
             <button 
               type="button"

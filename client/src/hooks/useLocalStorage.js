@@ -1,3 +1,5 @@
+// 로컬 스토리지 훅 ::: 브라우저의 로컬 스토리지에 데이터를 저장하고 가져오는 기능을 담당
+// 상태가 바뀌면 자동 저장/ 페이지 새로고침해도 데이터 유지/ 저장, 로드 실패 시 기본값 사용
 import { useState, useEffect } from 'react';
 
 export const useLocalStorage = (key, initialValue) => {

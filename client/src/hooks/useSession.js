@@ -1,3 +1,5 @@
+// 세션 관리 훅 ::: 사용자 세션을 관리하는 기능
+// 고유한 사용자ID 생성, 페이지 새로고침해도 같은 사용자로 인식, 세션 리셋 시 모든 데이터 초기화 
 import { useRef, useCallback } from 'react';
 import { STORAGE_KEYS } from '../constants/ui';
 

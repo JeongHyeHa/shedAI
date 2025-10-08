@@ -1,3 +1,4 @@
+// 서버와 통신하는 모든 API 호출을 관리 
 import { API_BASE_URL, API_ENDPOINTS, API_HEADERS } from '../constants/api';
 
 class ApiService {
@@ -27,7 +28,7 @@ class ApiService {
     }
   }
 
-  // 스케줄 생성
+  // 스케줄 생성(gpt-4o)
   async generateSchedule(prompt, conversationContext, sessionId) {
     return this.request(API_ENDPOINTS.SCHEDULE.GENERATE, {
       method: 'POST',
@@ -67,7 +68,7 @@ class ApiService {
     });
   }
 
-  // 이미지 처리
+  // 이미지 처리(gpt-4o)
   async processImage(image, prompt) {
     return this.request(API_ENDPOINTS.AI.IMAGE, {
       method: 'POST',
@@ -78,7 +79,7 @@ class ApiService {
     });
   }
 
-  // 음성 인식
+  // 음성 인식(gpt-whisper)
   async transcribeAudio(audioBlob) {
     const formData = new FormData();
     formData.append('audio', audioBlob, 'recording.wav');
@@ -93,6 +94,105 @@ class ApiService {
     }
 
     return await response.json();
+  }
+
+  // 클라우드 DB 연동을 위한 새로운 API 메서드들
+  
+  // 사용자 데이터 조회
+  async getUserData(sessionId) {
+    return this.request(`/api/users/${sessionId}`);
+  }
+
+  // 생활 패턴 저장 (DB 버전)
+  async saveLifestylePatternsToDB(sessionId, patterns) {
+    return this.request('/api/users/lifestyle-patterns', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId,
+        patterns
+      })
+    });
+  }
+
+  // 할 일 저장
+  async saveTaskToDB(sessionId, taskData) {
+    return this.request('/api/users/tasks', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId,
+        ...taskData
+      })
+    });
+  }
+
+  // 스케줄 저장
+  async saveScheduleToDB(sessionId, scheduleData, scheduleSessionId) {
+    return this.request('/api/users/schedules', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId,
+        scheduleData,
+        scheduleSessionId
+      })
+    });
+  }
+
+  // 피드백 저장 (DB 버전)
+  async saveFeedbackToDB(sessionId, scheduleId, feedbackText) {
+    return this.request('/api/users/feedbacks', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId,
+        scheduleId,
+        feedbackText
+      })
+    });
+  }
+
+  // 사용자 선호도 분석 및 조언
+  async getUserInsights(sessionId) {
+    return this.request(`/api/users/${sessionId}/insights`);
+  }
+
+  // 맞춤형 스케줄 생성 (사용자 패턴 학습 기반)
+  async generatePersonalizedSchedule(sessionId, prompt, conversationContext) {
+    return this.request('/api/users/personalized-schedule', {
+      method: 'POST',
+      body: JSON.stringify({
+        sessionId,
+        prompt,
+        conversationContext
+      })
+    });
+  }
+
+  // 사용자 데이터 동기화
+  async syncUserData(sessionId) {
+    return this.request(`/api/users/${sessionId}/sync`);
+  }
+
+  // AI 기반 사용자 패턴 분석
+  async analyzeUserPatterns(userData) {
+    return this.request('/api/ai/analyze-patterns', {
+      method: 'POST',
+      body: JSON.stringify({ userData })
+    });
+  }
+
+  // AI 기반 맞춤형 프롬프트 생성
+  async generatePersonalizedPrompt(userData, basePrompt) {
+    return this.request('/api/ai/personalize-prompt', {
+      method: 'POST',
+      body: JSON.stringify({ userData, basePrompt })
+    });
+  }
+
+  // AI 기반 사용자 조언 생성
+  async generatePersonalizedAdvice(userData) {
+    return this.request('/api/ai/generate-advice', {
+      method: 'POST',
+      body: JSON.stringify({ userData })
+    });
   }
 }
 
