@@ -15,6 +15,9 @@ const upload = multer({
 router.post('/gpt4o-image', aiController.processImage);
 
 // Whisper 음성 인식
-router.post('/whisper-transcribe', upload.single('audio'), aiController.transcribeAudio);
+router.post('/whisper-audio', upload.single('audio'), aiController.transcribeAudio);
+
+// 대화형 피드백 분석
+router.post('/analyze-conversational-feedback', aiController.analyzeConversationalFeedback);
 
 module.exports = router;

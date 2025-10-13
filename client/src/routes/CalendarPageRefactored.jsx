@@ -6,16 +6,18 @@ import Modals from '../components/Modals/Modals';
 import CalendarControls from '../components/Calendar/CalendarControls';
 
 // 커스텀 훅들
-import { useSession } from '../hooks/useSession';
-import { useLocalStorage } from '../hooks/useLocalStorage';
 import { useScheduleManagement } from '../hooks/useScheduleManagement';
 import { useImageProcessing } from '../hooks/useImageProcessing';
 import { useVoiceRecording } from '../hooks/useVoiceRecording';
 import { useMessageManagement } from '../hooks/useMessageManagement';
 import { useLifestyleSync } from '../hooks/useLifestyleSync';
+import { usePersonalizedAI } from '../hooks/usePersonalizedAI';
+import { useAuth } from '../contexts/AuthContext';
 
 // 서비스 & 유틸리티
 import apiService from '../services/apiService';
+import firestoreService from '../services/firestoreService';
+import { UI_CONSTANTS } from '../constants/ui';
 import { 
   buildShedAIPrompt,
   buildFeedbackPrompt,
@@ -26,7 +28,6 @@ import {
   parseDateString,
   convertToRelativeDay
 } from '../utils/dateUtils';
-import { UI_CONSTANTS, STORAGE_KEYS } from '../constants/ui';
 import '../styles/calendar.css';
 import '../styles/floating.css';
 
@@ -34,12 +35,37 @@ function CalendarPage() {
   const calendarRef = useRef(null);
   const today = resetToStartOfDay(new Date());
   
-  // 세션 관리
-  const { sessionIdRef, initializeSession, resetSession } = useSession();
+  // 인증 및 Firebase 훅
+  const { user } = useAuth();
+  const { userInsights, generatePersonalizedSchedule } = usePersonalizedAI();
   
-  // 로컬 스토리지 훅
-  const [lifestyleList, setLifestyleList] = useLocalStorage(STORAGE_KEYS.LIFESTYLE_LIST, []);
-  const [lastSchedule, setLastSchedule] = useLocalStorage(STORAGE_KEYS.LAST_SCHEDULE, null);
+  // 상태 관리
+  const [lifestyleList, setLifestyleList] = useState([]);
+  const [lastSchedule, setLastSchedule] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // 사용자 데이터 로드
+  useEffect(() => {
+    const loadUserData = async () => {
+      if (!user?.uid) return;
+      
+      try {
+        setLoading(true);
+               const userData = await firestoreService.getUserDataForAI(user.uid, user);
+        
+        if (userData) {
+          setLifestyleList(userData.lifestylePatterns || []);
+          setLastSchedule(userData.lastSchedule);
+        }
+      } catch (error) {
+        console.error('사용자 데이터 로드 실패:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadUserData();
+  }, [user?.uid]);
   
   // 커스텀 훅들
   const { 
@@ -82,24 +108,6 @@ function CalendarPage() {
     description: ""
   });
 
-  // 세션 초기화
-  useEffect(() => {
-    initializeSession();
-  }, [initializeSession]);
-
-  // 초기 데이터 로드 코드
-  // TODO: 클라우드 DB 연동 시 최신 스케줄을 DB에서 가져오는 로직으로 대체
-  // useEffect(() => {
-  //   // DB에서 사용자의 최신 스케줄 조회
-  //   // const latestSchedule = await apiService.getLatestSchedule(sessionId);
-  //   // setLastSchedule(latestSchedule);
-  //   // const events = convertScheduleToEvents(latestSchedule, today);
-  //   // setAllEvents(events);
-  //   // applyEventsToCalendar(events);
-  // }, []);
-
-  // 로딩 프로그레스는 useScheduleManagement 훅에서 자동 관리됨
-
   // 스케줄 생성 콜백
   const handleScheduleGeneration = useCallback(async (prompt, message) => {
     addAIMessage(message);
@@ -107,19 +115,17 @@ function CalendarPage() {
     try {
       const result = await generateSchedule(
         prompt,
-        conversationContext.slice(-12),
-        sessionIdRef.current,
+        {
+          conversationContext: conversationContext.slice(-12),
+          lifestylePatterns: lifestyleList
+        },
         today
       );
       
       setLastSchedule(result.schedule);
-      // TODO: 클라우드 DB 연동 시 DB에 스케줄 저장
-      // localStorage.setItem(STORAGE_KEYS.LAST_SCHEDULE, JSON.stringify(result.schedule));
       
       if (result.scheduleSessionId) {
         setCurrentScheduleSessionId(result.scheduleSessionId);
-        // TODO: 클라우드 DB 연동 시 DB에 세션 ID 저장
-        // localStorage.setItem(STORAGE_KEYS.LAST_SCHEDULE_SESSION_ID, result.scheduleSessionId);
       }
       
       // 이벤트는 Calendar 컴포넌트에서 자동으로 처리됨
@@ -127,34 +133,59 @@ function CalendarPage() {
     } catch (error) {
       addAIMessage("스케줄 생성에 실패했습니다. 다시 시도해주세요.");
     }
-  }, [generateSchedule, conversationContext, sessionIdRef, today, addAIMessage]);
+  }, [generateSchedule, conversationContext, lifestyleList, today, addAIMessage]);
 
   // 생활패턴 동기화
   useLifestyleSync(
     lifestyleList, 
     lastSchedule, 
     today, 
-    sessionIdRef.current, 
+    user?.uid, 
     handleScheduleGeneration
   );
 
   // 생활패턴 관리 함수들
-  const handleAddLifestyle = useCallback(() => {
-    if (!lifestyleInput.trim()) return;
+  const handleAddLifestyle = useCallback(async () => {
+    if (!lifestyleInput.trim() || !user?.uid) return;
+    
     const newPatterns = lifestyleInput.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    setLifestyleList(prev => [...prev, ...newPatterns]);
-    setLifestyleInput("");
-  }, [lifestyleInput, setLifestyleList]);
-
-  const handleDeleteLifestyle = (index) => {
-    setLifestyleList(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleClearAllLifestyles = () => {
-    if (window.confirm("모든 생활 패턴을 삭제하시겠습니까?")) {
-      setLifestyleList([]);
+    const updatedPatterns = [...lifestyleList, ...newPatterns];
+    
+    try {
+      // Firebase에 저장
+      await firestoreService.saveLifestylePatterns(user.uid, updatedPatterns);
+      setLifestyleList(updatedPatterns);
+      setLifestyleInput("");
+    } catch (error) {
+      console.error('생활패턴 저장 실패:', error);
     }
-  };
+  }, [lifestyleInput, lifestyleList, user?.uid]);
+
+  const handleDeleteLifestyle = useCallback(async (index) => {
+    if (!user?.uid) return;
+    
+    const updatedPatterns = lifestyleList.filter((_, i) => i !== index);
+    
+    try {
+      await firestoreService.saveLifestylePatterns(user.uid, updatedPatterns);
+      setLifestyleList(updatedPatterns);
+    } catch (error) {
+      console.error('생활패턴 삭제 실패:', error);
+    }
+  }, [lifestyleList, user?.uid]);
+
+  const handleClearAllLifestyles = useCallback(async () => {
+    if (!user?.uid) return;
+    
+    if (window.confirm("모든 생활 패턴을 삭제하시겠습니까?")) {
+      try {
+        await firestoreService.saveLifestylePatterns(user.uid, []);
+        setLifestyleList([]);
+      } catch (error) {
+        console.error('생활패턴 전체 삭제 실패:', error);
+      }
+    }
+  }, [user?.uid]);
 
   // 폼 입력값 변경 핸들러
   const handleTaskFormChange = (e) => {
@@ -317,13 +348,9 @@ function CalendarPage() {
       clearTimeout(timeoutId);
 
       setLastSchedule(newSchedule.schedule);
-      // TODO: 클라우드 DB 연동 시 DB에 스케줄 저장
-      // localStorage.setItem(STORAGE_KEYS.LAST_SCHEDULE, JSON.stringify(newSchedule.schedule));
 
       if (newSchedule.scheduleSessionId) {
         setCurrentScheduleSessionId(newSchedule.scheduleSessionId);
-        // TODO: 클라우드 DB 연동 시 DB에 세션 ID 저장
-        // localStorage.setItem(STORAGE_KEYS.LAST_SCHEDULE_SESSION_ID, newSchedule.scheduleSessionId);
       }
 
       const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({

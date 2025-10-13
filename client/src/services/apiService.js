@@ -1,5 +1,7 @@
 // 서버와 통신하는 모든 API 호출을 관리 
 import { API_BASE_URL, API_ENDPOINTS, API_HEADERS } from '../constants/api';
+import firestoreService from './firestoreService';
+import { useAuth } from '../contexts/AuthContext';
 
 class ApiService {
   constructor() {
@@ -98,20 +100,14 @@ class ApiService {
 
   // 클라우드 DB 연동을 위한 새로운 API 메서드들
   
-  // 사용자 데이터 조회
-  async getUserData(sessionId) {
-    return this.request(`/api/users/${sessionId}`);
+  // 사용자 데이터 조회 (Firebase 기반)
+  async getUserData(userId) {
+    return await firestoreService.getUserDataForAI(userId);
   }
 
-  // 생활 패턴 저장 (DB 버전)
-  async saveLifestylePatternsToDB(sessionId, patterns) {
-    return this.request('/api/users/lifestyle-patterns', {
-      method: 'POST',
-      body: JSON.stringify({
-        sessionId,
-        patterns
-      })
-    });
+  // 생활 패턴 저장 (Firebase 기반)
+  async saveLifestylePatternsToDB(userId, patterns) {
+    return await firestoreService.saveLifestylePatterns(userId, patterns);
   }
 
   // 할 일 저장
@@ -192,6 +188,14 @@ class ApiService {
     return this.request('/api/ai/generate-advice', {
       method: 'POST',
       body: JSON.stringify({ userData })
+    });
+  }
+
+  // 대화형 피드백 분석
+  async analyzeConversationalFeedback(conversationalFeedbacks) {
+    return this.request('/api/ai/analyze-conversational-feedback', {
+      method: 'POST',
+      body: JSON.stringify({ conversationalFeedbacks })
     });
   }
 }

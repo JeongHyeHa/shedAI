@@ -1,62 +1,69 @@
 # ShedAI - 개선된 프로젝트 구조
 
-## 📁 새로운 폴더 구조
+## 📁 최적화된 폴더 구조
 
 ```
 shedAI/
 ├── client/                          # React 프론트엔드
 │   ├── src/
 │   │   ├── components/              # 재사용 가능한 컴포넌트
+│   │   │   ├── Auth/               # 인증 관련 컴포넌트
+│   │   │   │   ├── LoginForm.jsx
+│   │   │   │   └── SignUpForm.jsx
 │   │   │   ├── Calendar/           # 캘린더 관련 컴포넌트
-│   │   │   │   └── Calendar.jsx
+│   │   │   │   ├── Calendar.jsx
+│   │   │   │   ├── CalendarControls.jsx
+│   │   │   │   └── CalendarHeader.jsx
 │   │   │   ├── Chatbot/            # 챗봇 관련 컴포넌트
 │   │   │   │   └── Chatbot.jsx
 │   │   │   ├── Modals/             # 모달 컴포넌트들
 │   │   │   │   ├── TaskFormModal.jsx
-│   │   │   │   └── LifestyleModal.jsx
+│   │   │   │   ├── LifestyleModal.jsx
+│   │   │   │   └── Modals.jsx
 │   │   │   └── UI/                 # UI 컴포넌트들
 │   │   │       ├── ToggleSwitch.jsx
-│   │   │       └── LoadingSpinner.jsx
-│   │   ├── hooks/                  # 커스텀 훅
-│   │   │   ├── useSession.js
-│   │   │   └── useLocalStorage.js
+│   │   │       ├── LoadingSpinner.jsx
+│   │   │       └── FloatingButtons.jsx
+│   │   ├── hooks/                  # 커스텀 훅 (최적화됨)
+│   │   │   ├── useImageProcessing.js
+│   │   │   ├── useLifestyleSync.js
+│   │   │   ├── useMessageManagement.js
+│   │   │   ├── usePersonalizedAI.js
+│   │   │   ├── useScheduleManagement.js
+│   │   │   └── useVoiceRecording.js
 │   │   ├── services/               # API 서비스
-│   │   │   └── apiService.js
+│   │   │   ├── apiService.js
+│   │   │   ├── authService.js
+│   │   │   └── firestoreService.js
 │   │   ├── contexts/               # React Context
+│   │   │   └── AuthContext.js
 │   │   ├── constants/              # 상수 정의
 │   │   │   ├── api.js
 │   │   │   └── ui.js
 │   │   ├── routes/                 # 페이지 컴포넌트
 │   │   │   └── CalendarPageRefactored.jsx
-│   │   └── utils/                  # 유틸리티 함수
-├── server/                          # Node.js 백엔드
+│   │   ├── utils/                  # 유틸리티 함수
+│   │   │   ├── dateUtils.js
+│   │   │   └── scheduleUtils.js
+│   │   ├── config/                 # 설정 파일
+│   │   │   └── firebase.js
+│   │   └── styles/                 # CSS 스타일
+│   │       ├── calendar.css
+│   │       ├── chatbot.css
+│   │       ├── floating.css
+│   │       ├── fullcalendar-custom.css
+│   │       ├── modal.css
+│   │       └── style.css
+├── server/                          # Node.js 백엔드 (최적화됨)
 │   ├── routes/                      # API 라우트
-│   │   ├── scheduleRoutes.js
-│   │   ├── feedbackRoutes.js
-│   │   ├── aiRoutes.js
-│   │   └── lifestyleRoutes.js
+│   │   └── aiRoutes.js             # AI 관련 라우트만 유지
 │   ├── controllers/                 # 비즈니스 로직
-│   │   ├── scheduleController.js
-│   │   ├── feedbackController.js
-│   │   └── aiController.js
+│   │   └── aiController.js         # AI 컨트롤러만 유지
 │   ├── services/                    # 서비스 레이어
-│   │   └── aiService.js
-│   ├── models/                      # 데이터 모델
-│   ├── middleware/                  # 미들웨어
-│   ├── config/                      # 설정 파일
-│   │   └── database.js
-│   ├── prompts/                     # AI 프롬프트 템플릿
-│   │   ├── scheduleGeneration.js
-│   │   └── feedbackAnalysis.js
-│   ├── utils/                       # 유틸리티 함수
-│   │   ├── feedbackAnalyzer.js
-│   │   └── promptEnhancer.js
-│   ├── db/                          # 데이터베이스
-│   │   ├── schema.sql
-│   │   └── shedai.db
+│   │   └── aiService.js            # AI 서비스만 유지
 │   ├── app.js                       # Express 앱 설정
 │   └── server.js                    # 서버 시작점
-└── shared/                          # 공통 타입/상수
+└── firebase.json                    # Firebase 설정
 ```
 
 ## 🚀 주요 개선사항

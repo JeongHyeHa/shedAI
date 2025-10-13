@@ -32,6 +32,23 @@ class AIController {
             res.status(500).json({ error: '음성 인식에 실패했습니다.' });
         }
     }
+
+    // 대화형 피드백 분석
+    async analyzeConversationalFeedback(req, res) {
+        try {
+            const { conversationalFeedbacks } = req.body;
+            
+            if (!conversationalFeedbacks || !Array.isArray(conversationalFeedbacks)) {
+                return res.status(400).json({ error: '대화형 피드백 데이터가 필요합니다.' });
+            }
+
+            const result = await aiService.analyzeConversationalFeedback(conversationalFeedbacks);
+            res.json(result);
+        } catch (error) {
+            console.error('대화형 피드백 분석 실패:', error);
+            res.status(500).json({ error: '피드백 분석에 실패했습니다.' });
+        }
+    }
 }
 
 module.exports = new AIController();

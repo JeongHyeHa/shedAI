@@ -1,5 +1,21 @@
 # node.js 관련
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 .DS_Store
 dist/
 build/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+
+# Client 환경 변수
+client/.env
+client/.env.local
+client/.env.development.local
+client/.env.test.local
+client/.env.production.local

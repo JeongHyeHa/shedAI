@@ -5,15 +5,15 @@ import dayGridPlugin from '@fullcalendar/daygrid';  // 월간 달력 뷰
 import timeGridPlugin from '@fullcalendar/timegrid';  // 주간/일간 달력 뷰
 import '../../styles/fullcalendar-custom.css';
 
-const Calendar = ({ 
+const Calendar = React.forwardRef(({ 
   events = [],        // 달력에 표시할 일정들(기본값 빈 배열)
   onEventMount,       // 일정이 달력에 나타날 때 실행할 함수
   onViewDidMount,     // 달력 뷰가 변경될 때 실행할 함수
   onDatesSet,         // 날짜가 변경될 때 실행할 함수
   onDayHeaderContent, // 요일 헤더를 만들 때 실행할 함수
   onEventContent      // 일정 내용을 만들 때 실행할 함수
-}) => {
-  const calendarRef = useRef(null); // 달력에 접근하는 도구(like 리모컨)
+}, ref) => {
+  // ref는 부모 컴포넌트에서 전달받음
 
   // 이벤트 처리 함수 (lifestyle 타입 스타일링)
   const processEvents = (eventsToProcess) => {
@@ -31,7 +31,7 @@ const Calendar = ({
 
   // 이벤트가 변경될 때마다 달력 업데이트 
   useEffect(() => {
-    const calendarApi = calendarRef.current?.getApi();
+    const calendarApi = ref?.current?.getApi();
     if (!calendarApi) return;
     
     calendarApi.removeAllEvents();
@@ -45,7 +45,7 @@ const Calendar = ({
   return (
     <div className="calendar-container">
       <FullCalendar
-        ref={calendarRef} // 달력에 리모컨 연결 
+        ref={ref} // 달력에 리모컨 연결 
         plugins={[dayGridPlugin, timeGridPlugin]}
         initialView="dayGridMonth"
         headerToolbar={{
@@ -69,6 +69,6 @@ const Calendar = ({
       />
     </div>
   );
-};
+});
 
 export default Calendar;
