@@ -85,7 +85,13 @@ const Chatbot = ({
                   ))}
                 </div>
               )}
-              <div className="message-text" dangerouslySetInnerHTML={{ __html: msg.text.replace(/\n/g, '<br>') }}></div>
+              {(() => {
+                const raw = msg?.text;
+                const html = typeof raw === 'string'
+                  ? raw.replace(/\n/g, '<br>')
+                  : String(raw || '');
+                return <div className="message-text" dangerouslySetInnerHTML={{ __html: html }}></div>;
+              })()}
               <div className="message-time">
                 {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </div>

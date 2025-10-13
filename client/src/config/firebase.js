@@ -3,13 +3,6 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getAnalytics } from "firebase/analytics";
 
-// 환경 변수 디버깅
-console.log('🔍 환경 변수 상태:', {
-  API_KEY: process.env.REACT_APP_FIREBASE_API_KEY ? '✅ 로드됨' : '❌ 없음',
-  AUTH_DOMAIN: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN ? '✅ 로드됨' : '❌ 없음',
-  PROJECT_ID: process.env.REACT_APP_FIREBASE_PROJECT_ID ? '✅ 로드됨' : '❌ 없음'
-});
-
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
   authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,

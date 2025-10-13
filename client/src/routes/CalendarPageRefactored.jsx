@@ -481,7 +481,9 @@ function CalendarPage() {
 
   const handleDayHeaderContent = (args) => {
     const weekday = args.date.toLocaleDateString("en-US", { weekday: "short" });
-    return <span>{weekday}</span>;
+    const span = document.createElement("span");
+    span.textContent = weekday;
+    return { domNodes: [span] };
   };
 
   const handleEventContent = (arg) => {
