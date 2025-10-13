@@ -315,6 +315,85 @@ class FirestoreService {
     }
   }
 
+  // ===== Habits & Habit Logs =====
+  // Habits collection: users/{userId}/habits
+  // Habit document: { name, source ('pattern'|'task'|'custom'), isActive, createdAt, updatedAt }
+  // Habit logs subcollection: users/{userId}/habits/{habitId}/logs with docs keyed by YYYY-MM-DD: { date, done }
+
+  async getHabits(userId) {
+    try {
+      const habitsRef = collection(this.db, 'users', userId, 'habits');
+      const qy = query(habitsRef, where('isActive', '==', true));
+      const qs = await getDocs(qy);
+      return qs.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch (error) {
+      console.error('습관 목록 조회 실패:', error);
+      return [];
+    }
+  }
+
+  async addHabit(userId, habit) {
+    try {
+      const habitsRef = collection(this.db, 'users', userId, 'habits');
+      const docRef = await addDoc(habitsRef, {
+        name: habit.name,
+        source: habit.source || 'custom',
+        isActive: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      return docRef.id;
+    } catch (error) {
+      console.error('습관 추가 실패:', error);
+      throw error;
+    }
+  }
+
+  async removeHabit(userId, habitId) {
+    try {
+      const docRef = doc(this.db, 'users', userId, 'habits', habitId);
+      await deleteDoc(docRef);
+      return true;
+    } catch (error) {
+      console.error('습관 삭제 실패:', error);
+      throw error;
+    }
+  }
+
+  async setHabitDone(userId, habitId, dateISO, done) {
+    try {
+      const logDoc = doc(this.db, 'users', userId, 'habits', habitId, 'logs', dateISO);
+      await setDoc(logDoc, { date: dateISO, done }, { merge: true });
+      return true;
+    } catch (error) {
+      console.error('습관 완료 체크 실패:', error);
+      throw error;
+    }
+  }
+
+  async getHabitLogsForMonth(userId, habitId, year, month) {
+    try {
+      // month: 1-12
+      const first = new Date(Date.UTC(year, month - 1, 1));
+      const last = new Date(Date.UTC(year, month, 0));
+      const logsRef = collection(this.db, 'users', userId, 'habits', habitId, 'logs');
+      const qs = await getDocs(logsRef);
+      const all = qs.docs.map(d => d.data());
+      const inMonth = {};
+      for (const log of all) {
+        if (!log?.date) continue;
+        const d = new Date(log.date + 'T00:00:00Z');
+        if (d >= first && d <= last) {
+          inMonth[log.date] = !!log.done;
+        }
+      }
+      return inMonth; // map { 'YYYY-MM-DD': true }
+    } catch (error) {
+      console.error('습관 로그 조회 실패:', error);
+      return {};
+    }
+  }
+
   // 기존 활성 스케줄 세션들 비활성화
   async deactivateScheduleSessions(userId) {
     try {

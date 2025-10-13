@@ -7,6 +7,7 @@ const CalendarControls = ({
   onPlusClick,    // 할 일 버튼을 클릭했을 때 실행할 함수
   onPencilClick,  // 생활패턴 버튼을 클릭했을 때 실행할 함수
   onAdviceClick,  // 조언 버튼을 클릭했을 때 실행할 함수
+  onReportClick,  // 월말 레포트 버튼을 클릭했을 때 실행할 함수
   onResetClick   // 캘린더 초기화 버튼을 클릭했을 때 실행할 함수
 }) => {
   return (
@@ -19,6 +20,7 @@ const CalendarControls = ({
         onClickPlus={onPlusClick}     // 할 일 버튼 클릭 시 실행할 함수 전달 
         onClickPencil={onPencilClick}
         onClickAdvice={onAdviceClick}
+        onClickReport={onReportClick} // 월말 레포트 버튼 클릭 시 실행할 함수 전달
       />
     </>
   );

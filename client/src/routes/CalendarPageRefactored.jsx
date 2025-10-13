@@ -555,6 +555,7 @@ function CalendarPage() {
         }}
         onPencilClick={() => setShowLifestyleModal(true)}
         onAdviceClick={fetchAIAdvice}
+        onReportClick={() => window.location.href = '/report'}
         onResetClick={handleResetCalendar}
       />
 

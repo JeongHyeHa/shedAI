@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import CalendarPage from "./routes/CalendarPageRefactored";
+import MonthlyReport from "./routes/MonthlyReport";
 import LoginForm from "./components/Auth/LoginForm";
 import SignUpForm from "./components/Auth/SignUpForm";
 import "./components/Auth/Auth.css";
@@ -117,6 +118,14 @@ function AppContent() {
                 <CalendarPage />
               </ProtectedRoute>
             } 
+          />
+          <Route 
+            path="/report"
+            element={
+              <ProtectedRoute>
+                <MonthlyReport />
+              </ProtectedRoute>
+            }
           />
         </Routes>
       </Router>
