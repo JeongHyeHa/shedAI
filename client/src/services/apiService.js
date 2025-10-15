@@ -31,12 +31,13 @@ class ApiService {
   }
 
   // 스케줄 생성(gpt-4o)
-  async generateSchedule(prompt, conversationContext, sessionId) {
+  async generateSchedule(prompt, context, sessionId) {
     return this.request(API_ENDPOINTS.SCHEDULE.GENERATE, {
       method: 'POST',
       body: JSON.stringify({
         prompt,
-        conversationContext,
+        conversationContext: context.conversationContext || [],
+        lifestylePatterns: context.lifestylePatterns || [],
         sessionId
       })
     });

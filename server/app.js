@@ -15,9 +15,29 @@ app.locals.conversationSessions = {};
 // 라우트 설정
 app.use('/api', aiRoutes);
 
+// 헬스 체크 (진단용) - 민감정보 노출 없음
+app.get('/api/health', (req, res) => {
+    const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+    res.json({
+        ok: true,
+        hasOpenAIKey,
+        env: process.env.NODE_ENV || 'development',
+        time: new Date().toISOString()
+    });
+});
+
 // 정적 파일 서빙
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 에러 핸들러 추가
+app.use((err, req, res, next) => {
+    console.error('[Server Error]', err);
+    res.status(err.status || 500).json({ 
+        error: err.message || 'Server Error',
+        ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    });
 });
 
 // 서버 종료 시 정리

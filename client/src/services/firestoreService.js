@@ -54,10 +54,15 @@ class FirestoreService {
     try {
       const patternsRef = collection(this.db, 'users', userId, 'lifestylePatterns');
       
-      // 기존 패턴들 삭제
+      // 기존 패턴들을 비활성화로 업데이트
       const existingPatterns = await getDocs(patternsRef);
-      const deletePromises = existingPatterns.docs.map(doc => deleteDoc(doc.ref));
-      await Promise.all(deletePromises);
+      const updatePromises = existingPatterns.docs.map(doc => 
+        updateDoc(doc.ref, {
+          isActive: false,
+          updatedAt: serverTimestamp()
+        })
+      );
+      await Promise.all(updatePromises);
       
       // 새 패턴들 저장
       const promises = patterns.map(pattern => 
@@ -96,13 +101,17 @@ class FirestoreService {
     try {
       const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
       
-      // 기존 활성 세션들 비활성화
-      await this.deactivateScheduleSessions(userId);
+      // 실제 스케줄이 있는 세션만 활성화 대상으로 간주
+      const willActivate = Array.isArray(sessionData?.scheduleData) && sessionData.scheduleData.length > 0;
+      if (willActivate) {
+        await this.deactivateScheduleSessions(userId);
+      }
       
       // 새 세션 저장
       const docRef = await addDoc(sessionsRef, {
         ...sessionData,
-        isActive: true,
+        hasSchedule: willActivate,
+        isActive: !!willActivate,
         createdAt: serverTimestamp()
       });
       
@@ -113,28 +122,53 @@ class FirestoreService {
     }
   }
 
-  // 최근 스케줄 조회
+  // 최근 스케줄 조회: 가장 최신 문서만 확인해 hasSchedule이 true일 때만 반환
   async getLastSchedule(userId) {
     try {
       const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
-      const q = query(
-        sessionsRef,
-        orderBy('createdAt', 'desc'),
-        limit(1)
-      );
-      
-      const querySnapshot = await getDocs(q);
-      if (!querySnapshot.empty) {
-        const data = querySnapshot.docs[0].data();
-        // isActive가 true인 경우만 반환
-        if (data.isActive === true) {
-          return data;
-        }
-      }
-      return null;
+      const q = query(sessionsRef, orderBy('createdAt', 'desc'), limit(1));
+      const qs = await getDocs(q);
+      if (qs.empty) return null;
+      const latest = qs.docs[0].data();
+      return latest?.hasSchedule === true ? latest : null;
     } catch (error) {
       console.error('최근 스케줄 조회 실패:', error);
       return null;
+    }
+  }
+
+  // 최신 스케줄을 "삭제" 처리 (hasSchedule=false, isActive=false)
+  async deleteLatestSchedule(userId) {
+    try {
+      const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
+      const q = query(sessionsRef, orderBy('createdAt', 'desc'), limit(10));
+      const qs = await getDocs(q);
+      if (qs.empty) return false;
+
+      const target = qs.docs.find(d => d.data()?.hasSchedule === true);
+      if (!target) return false;
+
+      await updateDoc(target.ref, { hasSchedule: false, isActive: false, updatedAt: serverTimestamp() });
+      return true;
+    } catch (error) {
+      console.error('최신 스케줄 삭제 처리 실패:', error);
+      return false;
+    }
+  }
+
+  // 활성 스케줄 세션 업데이트 (대화 컨텍스트 등)
+  async updateActiveScheduleSession(userId, partial) {
+    try {
+      const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
+      const q = query(sessionsRef, where('isActive', '==', true), limit(1));
+      const qs = await getDocs(q);
+      if (qs.empty) return false;
+      const ref = qs.docs[0].ref;
+      await updateDoc(ref, { ...partial, updatedAt: serverTimestamp() });
+      return true;
+    } catch (e) {
+      console.error('활성 세션 업데이트 실패:', e);
+      return false;
     }
   }
 

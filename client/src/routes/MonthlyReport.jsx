@@ -93,26 +93,31 @@ export default function MonthlyReport() {
 
   return (
     <div className="monthly-report" style={{ padding: 24 }}>
-      <div style={{ marginBottom: 16 }}>
+      {/* 상단 헤더: 뒤로가기 아이콘 버튼 + 제목 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <button 
           onClick={() => navigate('/')}
+          aria-label="캘린더로 돌아가기"
           style={{
             background: '#6C8AE4',
             color: 'white',
             border: 'none',
             borderRadius: '8px',
-            padding: '12px 24px',
+            width: 40,
+            height: 40,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: '500',
-            marginBottom: '16px'
+            fontSize: '18px',
+            fontWeight: '700'
           }}
         >
-          ← 캘린더로 돌아가기
+          ←
         </button>
-        <h1>월말 레포트</h1>
-        <p>이번 달 활동을 분석해 비중과 조언을 제공합니다.</p>
+        <h1 style={{ margin: 0 }}>월말 레포트</h1>
       </div>
+      <p>이번 달 활동을 분석해 비중과 조언을 제공합니다.</p>
 
       <section style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24 }}>
         <div className="report-card" style={{ background: '#fff', borderRadius: 12, padding: 16 }}>

@@ -3,10 +3,17 @@ import { useEffect, useCallback, useRef } from 'react';
 import firestoreService from '../services/firestoreService';
 import { buildShedAIPrompt, buildFeedbackPrompt } from '../utils/scheduleUtils';
 
-export const useLifestyleSync = (lifestyleList, lastSchedule, today, userId, onScheduleGenerated) => {
+export const useLifestyleSync = (
+  lifestyleList,
+  lastSchedule,
+  today,
+  userId,
+  onScheduleGenerated,
+  { autoGenerate = false, autoSync = true } = {}
+) => {
   const isFirstMount = useRef(true);
 
-  // Firebase 동기화
+  // Firebase 동기화 (전체 교체 저장 로직 사용)
   const syncLifestylePatterns = useCallback(async () => {
     if (!userId) return;
     
@@ -40,12 +47,16 @@ export const useLifestyleSync = (lifestyleList, lastSchedule, today, userId, onS
       return;
     }
     
-    // 서버 동기화
-    syncLifestylePatterns();
+    // 서버 동기화 (옵션)
+    if (autoSync) {
+      syncLifestylePatterns();
+    }
     
-    // 스케줄 자동 생성
-    generateScheduleFromLifestyle();
-  }, [lifestyleList, syncLifestylePatterns, generateScheduleFromLifestyle]);
+    // 스케줄 자동 생성은 옵션으로 처리
+    if (autoGenerate) {
+      generateScheduleFromLifestyle();
+    }
+  }, [lifestyleList, syncLifestylePatterns, generateScheduleFromLifestyle, autoGenerate, autoSync]);
 
   return {
     syncLifestylePatterns,

@@ -40,6 +40,12 @@ const Modals = ({
   onAddLifestyle,           // 생활패턴 추가 함수
   onDeleteLifestyle,        // 생활패턴 삭제 함수
   onClearAllLifestyles,     // 모든 생활패턴 삭제 함수
+  // 모달 z-index 제어 및 추가 입력 기능
+  taskOverlayZIndex,
+  lifestyleOverlayZIndex,
+  onLifestyleImageUpload,
+  onLifestyleVoiceRecording,
+  onSaveLifestyleAndRegenerate,
 }) => {
   // 챗 봇: 할 일 모달이 열려있고, 모드가 챗봇일 때만 표시
   // 할 일 간단 입력 폼: 할 일 모달이 열려있고, 모드가 간단 입력 폼일 때만 표시
@@ -74,6 +80,7 @@ const Modals = ({
         onTaskFormChange={onTaskFormChange}
         onLevelSelect={onLevelSelect}
         onSubmit={onTaskFormSubmit}
+        overlayZIndex={taskOverlayZIndex}
       />
 
       {/* 생활패턴 모달 */}
@@ -86,6 +93,12 @@ const Modals = ({
         onAddLifestyle={onAddLifestyle}
         onDeleteLifestyle={onDeleteLifestyle}
         onClearAllLifestyles={onClearAllLifestyles}
+        onImageUpload={onLifestyleImageUpload}
+        onVoiceRecording={onLifestyleVoiceRecording}
+        isRecording={isRecording}
+        isConverting={isConverting}
+        overlayZIndex={lifestyleOverlayZIndex}
+        onSaveLifestyleAndRegenerate={onSaveLifestyleAndRegenerate}
       />
     </>
   );

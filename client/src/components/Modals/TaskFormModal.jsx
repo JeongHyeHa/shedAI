@@ -11,11 +11,12 @@ const TaskFormModal = ({
   onTaskFormChange,     // 할 일 폼 변경 함수
   onLevelSelect,        // 할 일 중요도, 난이도 선택 함수
   onSubmit,             // 할 일 폼 전송 함수
+  overlayZIndex,
 }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={onClose} style={overlayZIndex ? { zIndex: overlayZIndex } : undefined}>
       <div className="modal task-form-modal" onClick={(e) => e.stopPropagation()}>
         <div className="task-form-header">
           <button className="back-to-chatbot-btn" onClick={onBackToChatbot}>

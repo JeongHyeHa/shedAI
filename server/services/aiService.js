@@ -8,25 +8,60 @@ class AIService {
     // 스케줄 생성
     async generateSchedule(messages) {
         try {
+            // 스케줄 생성에 특화된 시스템 프롬프트 추가
+            const systemPrompt = {
+                role: 'system',
+                content: `당신은 사용자의 생활패턴과 할 일을 바탕으로 일주일 시간표를 설계하는 전문가입니다.
+
+다음 규칙을 따라 스케줄을 생성해주세요:
+- 수면 6시간, 식사 각 1시간 고려
+- Eisenhower 매트릭스로 우선순위 판단
+- 마감일 이후엔 일정 배치 금지
+- 고난이도 작업 후 휴식 블록 배치
+- 결과는 반드시 다음 JSON 형식으로 반환:
+
+{
+  "schedule": [
+    {
+      "title": "작업 제목",
+      "start": "YYYY-MM-DDTHH:mm:ss",
+      "end": "YYYY-MM-DDTHH:mm:ss",
+      "category": "work|break|meal|exercise|study",
+      "notes": "상세 설명"
+    }
+  ],
+  "notes": "전체 스케줄에 대한 설명"
+}
+
+JSON만 반환하고 다른 텍스트는 포함하지 마세요.`
+            };
+
+            // 시스템 프롬프트를 맨 앞에 추가
+            const enhancedMessages = [systemPrompt, ...messages];
+
             const response = await axios.post(
                 'https://api.openai.com/v1/chat/completions',
                 {
-                    model: 'gpt-4o',
-                    messages: messages,
+                    model: 'gpt-4o-mini', // 더 빠른 모델로 변경
+                    messages: enhancedMessages,
                     temperature: 0.7,
-                    max_tokens: 8000
+                    max_tokens: 2000, // 토큰 수 줄임
+                    response_format: { type: 'json_object' }
                 },
                 {
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${this.openaiApiKey}`
-                    }
+                    },
+                    timeout: 15000 // 15초 타임아웃
                 }
             );
 
-            return response.data.choices[0].message.content;
+            return response.data.choices?.[0]?.message?.content;
         } catch (error) {
-            console.error('GPT 호출 실패:', error.response?.data || error.message);
+            const status = error.response?.status;
+            const data = error.response?.data;
+            console.error('GPT 호출 실패:', { status, data, message: error.message });
             throw new Error('시간표 생성 실패: ' + (error.response?.data?.error?.message || error.message));
         }
     }

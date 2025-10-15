@@ -416,8 +416,8 @@ export function resetToStartOfDay(date, isEnd = false) {
         dayMap.get(day).activities.push({
           start: dayInfo.start,
           end: dayInfo.end,
-          title: activityBlock.activity,
-          type: activityBlock.type || 'task'
+          title: dayInfo.title || activityBlock.title || activityBlock.activity,
+          type: dayInfo.type || activityBlock.type || 'task'
         });
       });
     });
@@ -439,8 +439,11 @@ export function resetToStartOfDay(date, isEnd = false) {
     // gptSchedule이 GPT 응답 구조인지 확인하고 변환
     let scheduleData = gptSchedule;
     if (gptSchedule && gptSchedule.schedule) {
-      // GPT 응답 구조인 경우 변환
+      // GPT 응답 객체 구조
       scheduleData = flattenSchedule(gptSchedule);
+    } else if (Array.isArray(gptSchedule) && gptSchedule.length > 0 && Array.isArray(gptSchedule[0]?.days)) {
+      // 활동 블록 배열 구조 (활동별 days 포함) -> 자동 평탄화
+      scheduleData = flattenSchedule({ schedule: gptSchedule });
     }
     
     // 방어 코드: scheduleData가 유효하지 않으면 빈 배열 반환

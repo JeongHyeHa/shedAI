@@ -61,13 +61,21 @@ export const useMessageManagement = () => {
       }
     }
     
-    // Firebase에 대화 컨텍스트 저장
+    // Firebase에 대화 컨텍스트 저장 (활성 스케줄 세션만 업데이트)
     try {
-      await firestoreService.saveScheduleSession(user.uid, {
+      const updated = await firestoreService.updateActiveScheduleSession(user.uid, {
         conversationContext: newContext,
-        lastMessage: text,
-        updatedAt: new Date()
+        lastMessage: text
       });
+      if (!updated) {
+        // 활성 세션이 없는 경우에 한해 보조 세션으로 보관 (isActive: false)
+        await firestoreService.saveScheduleSession(user.uid, {
+          conversationContext: newContext,
+          lastMessage: text,
+          hasSchedule: false,
+          isActive: false
+        });
+      }
     } catch (error) {
       console.error('AI 메시지 저장 실패:', error);
     }

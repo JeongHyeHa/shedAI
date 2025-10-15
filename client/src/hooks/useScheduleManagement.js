@@ -21,13 +21,15 @@ export const useScheduleManagement = () => {
     try {
       setIsLoading(true);
       
-      const newSchedule = await apiService.generateSchedule(
+      const apiResponse = await apiService.generateSchedule(
         prompt,
         context,
         user.uid
       );
-      
-      const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
+      // normalize to { schedule: [...] }
+      const normalized = apiResponse?.schedule ? apiResponse : { schedule: apiResponse };
+
+      const events = convertScheduleToEvents(normalized, today).map(event => ({
         ...event,
         extendedProps: {
           ...event.extendedProps,
@@ -39,14 +41,15 @@ export const useScheduleManagement = () => {
       
       // Firebase에 스케줄 저장
       const scheduleSessionId = await firestoreService.saveScheduleSession(user.uid, {
-        scheduleData: newSchedule.schedule,
+        scheduleData: normalized.schedule,
+        hasSchedule: true,
         lifestyleContext: context.lifestylePatterns || '',
         taskContext: prompt,
         conversationContext: context.conversationContext || []
       });
       
       return {
-        schedule: newSchedule.schedule,
+        schedule: normalized.schedule,
         scheduleSessionId,
         events
       };
@@ -63,20 +66,24 @@ export const useScheduleManagement = () => {
     setLoadingProgress(progress);
   }, []);
 
-  // 로딩 프로그레스 자동 관리
+  // 로딩 프로그레스 자동 관리 (보다 안정적인 증가)
   useEffect(() => {
     let timer;
     if (isLoading) {
-      setLoadingProgress(0);
-      setTimeout(() => setLoadingProgress(1), 50);
+      // 시작 즉시 5%로 표시하여 숫자가 보이게 함
+      setLoadingProgress((prev) => (prev <= 0 ? 5 : prev));
       timer = setInterval(() => {
-        setLoadingProgress((prev) => (prev < 90 ? prev + 1 : prev));
-      }, 300);
-    } else if (loadingProgress > 0 && loadingProgress < 100) {
-      setLoadingProgress(100);
+        setLoadingProgress((prev) => {
+          if (prev < 90) return prev + 2; // 조금 더 빠르게 증가
+          return prev;
+        });
+      }, 200);
+    } else {
+      // 로딩이 끝나면 100%로 채우고 이후 자연스럽게 초기화는 외부에서
+      setLoadingProgress((prev) => (prev > 0 && prev < 100 ? 100 : prev));
     }
     return () => timer && clearInterval(timer);
-  }, [isLoading, loadingProgress]);
+  }, [isLoading]);
 
   return {
     allEvents,

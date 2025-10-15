@@ -20,4 +20,10 @@ router.post('/whisper-audio', upload.single('audio'), aiController.transcribeAud
 // 대화형 피드백 분석
 router.post('/analyze-conversational-feedback', aiController.analyzeConversationalFeedback);
 
+// 스케줄 생성 엔드포인트
+router.post('/schedule/generate', aiController.generateSchedule);
+
+// OpenAI 연결 진단
+router.get('/debug/openai', aiController.debugOpenAI);
+
 module.exports = router;

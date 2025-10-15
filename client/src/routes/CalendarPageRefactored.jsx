@@ -51,11 +51,53 @@ function CalendarPage() {
       
       try {
         setLoading(true);
-               const userData = await firestoreService.getUserDataForAI(user.uid, user);
+        const userData = await firestoreService.getUserDataForAI(user.uid, user);
+        
         
         if (userData) {
           setLifestyleList(userData.lifestylePatterns || []);
           setLastSchedule(userData.lastSchedule);
+          
+          // 저장된 스케줄이 있으면 이벤트로 변환하여 표시
+          if (userData.lastSchedule) {
+            console.log('[Calendar] 저장된 스케줄 로드:', userData.lastSchedule);
+            // Firestore에는 scheduleData 배열로 저장되어 있으므로 변환
+            const wrapped = userData.lastSchedule.scheduleData
+              ? { schedule: userData.lastSchedule.scheduleData }
+              : userData.lastSchedule.schedule
+                ? { schedule: userData.lastSchedule.schedule }
+                : Array.isArray(userData.lastSchedule)
+                  ? { schedule: userData.lastSchedule }
+                  : userData.lastSchedule;
+
+            const events = convertScheduleToEvents(wrapped, today).map(event => ({
+              ...event,
+              extendedProps: {
+                ...event.extendedProps,
+                isDone: false,
+              }
+            }));
+            console.log('[Calendar] 변환된 이벤트:', events);
+            setAllEvents(events);
+            // 로컬 백업 저장
+            try { localStorage.setItem('shedAI:lastSchedule', JSON.stringify(wrapped)); } catch {}
+          } else {
+            // Firestore에 없으면 로컬 백업에서 복원
+            try {
+              const raw = localStorage.getItem('shedAI:lastSchedule');
+              if (raw) {
+                const wrapped = JSON.parse(raw);
+                const events = convertScheduleToEvents(wrapped, today).map(event => ({
+                  ...event,
+                  extendedProps: {
+                    ...event.extendedProps,
+                    isDone: false,
+                  }
+                }));
+                setAllEvents(events);
+              }
+            } catch {}
+          }
         }
       } catch (error) {
         console.error('사용자 데이터 로드 실패:', error);
@@ -130,6 +172,9 @@ function CalendarPage() {
       
       // 이벤트는 Calendar 컴포넌트에서 자동으로 처리됨
       addAIMessage("스케줄이 생성되었습니다!");
+      
+      // 스케줄 생성 완료 후 모달 닫기
+      setShowLifestyleModal(false);
     } catch (error) {
       addAIMessage("스케줄 생성에 실패했습니다. 다시 시도해주세요.");
     }
@@ -141,18 +186,19 @@ function CalendarPage() {
     lastSchedule, 
     today, 
     user?.uid, 
-    handleScheduleGeneration
+    handleScheduleGeneration,
+    { autoGenerate: false, autoSync: false }
   );
 
   // 생활패턴 관리 함수들
   const handleAddLifestyle = useCallback(async () => {
     if (!lifestyleInput.trim() || !user?.uid) return;
-    
     const newPatterns = lifestyleInput.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    const updatedPatterns = [...lifestyleList, ...newPatterns];
-    
+    const updatedPatterns = Array.from(new Set([...
+      lifestyleList,
+      ...newPatterns
+    ].map(s => (s || '').trim()).filter(Boolean)));
     try {
-      // Firebase에 저장
       await firestoreService.saveLifestylePatterns(user.uid, updatedPatterns);
       setLifestyleList(updatedPatterns);
       setLifestyleInput("");
@@ -165,7 +211,6 @@ function CalendarPage() {
     if (!user?.uid) return;
     
     const updatedPatterns = lifestyleList.filter((_, i) => i !== index);
-    
     try {
       await firestoreService.saveLifestylePatterns(user.uid, updatedPatterns);
       setLifestyleList(updatedPatterns);
@@ -186,6 +231,27 @@ function CalendarPage() {
       }
     }
   }, [user?.uid]);
+
+  // 생활패턴을 한꺼번에 저장하고, 그 후 시간표 재생성 버튼
+  const handleSaveLifestyleAndRegenerate = useCallback(async () => {
+    if (!user?.uid) return;
+    try {
+      // 서버에서 최신 생활패턴 재조회 후 사용
+      const normalized = Array.from(new Set(lifestyleList.map(s => (s || '').trim()).filter(Boolean)));
+      await firestoreService.saveLifestylePatterns(user.uid, normalized);
+      const latest = await firestoreService.getLifestylePatterns(user.uid);
+      
+      setLifestyleList(latest);
+      const lifestyleText = latest.join("\n");
+      const prompt = lastSchedule 
+        ? buildFeedbackPrompt(lifestyleText, "", lastSchedule)
+        : buildShedAIPrompt(lifestyleText, "", today);
+      
+      await handleScheduleGeneration(prompt, "생활패턴을 반영해 스케줄을 다시 생성합니다...");
+    } catch (error) {
+      console.error('생활패턴 저장/재생성 실패:', error);
+    }
+  }, [user?.uid, lifestyleList, lastSchedule, today, handleScheduleGeneration]);
 
   // 폼 입력값 변경 핸들러
   const handleTaskFormChange = (e) => {
@@ -384,9 +450,18 @@ function CalendarPage() {
   };
 
   // 캘린더 초기화 함수
-  const handleResetCalendar = () => {
+  const handleResetCalendar = async () => {
+    if (!user?.uid) return;
     if (window.confirm("모든 일정을 초기화하시겠습니까?")) {
-      resetSession();
+      try {
+        // Firestore에서 최신 스케줄 비활성화/삭제 처리
+        await firestoreService.deleteLatestSchedule(user.uid);
+        // 로컬 백업 제거
+        try { localStorage.removeItem('shedAI:lastSchedule'); } catch {}
+      } catch (e) {
+        console.error('스케줄 삭제 처리 실패:', e);
+      }
+
       setLastSchedule(null);
       setAllEvents([]);
       calendarRef.current?.getApi().removeAllEvents();
@@ -450,6 +525,35 @@ function CalendarPage() {
       setCurrentMessage(text);
     } catch (error) {
       console.error('음성 녹음 실패:', error);
+    }
+  };
+
+  // 생활패턴 이미지 업로드 (OCR 결과를 생활패턴 입력창에 반영)
+  const handleLifestyleImageUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await convertImageToText(file);
+      if (text) {
+        setLifestyleInput(prev => (prev ? prev + "\n" : "") + text);
+      }
+    } catch (error) {
+      console.error('생활패턴 이미지 OCR 실패:', error);
+    }
+
+    event.target.value = null;
+  };
+
+  // 생활패턴 음성 입력 (인식 텍스트를 생활패턴 입력창에 반영)
+  const handleLifestyleVoiceRecording = async () => {
+    try {
+      const text = await startVoiceRecording();
+      if (text) {
+        setLifestyleInput(prev => (prev ? prev + "\n" : "") + text);
+      }
+    } catch (error) {
+      console.error('생활패턴 음성 녹음 실패:', error);
     }
   };
 
@@ -550,10 +654,16 @@ function CalendarPage() {
 
       <CalendarControls
         onPlusClick={() => {
+          // 다른 모달이 열려있으면 먼저 닫기
+          setShowLifestyleModal(false);
           setTaskInputMode(UI_CONSTANTS.TASK_INPUT_MODES.CHATBOT);
           setShowTaskModal(true);
         }}
-        onPencilClick={() => setShowLifestyleModal(true)}
+        onPencilClick={() => {
+          // 다른 모달이 열려있으면 먼저 닫기
+          setShowTaskModal(false);
+          setShowLifestyleModal(true);
+        }}
         onAdviceClick={fetchAIAdvice}
         onReportClick={() => window.location.href = '/report'}
         onResetClick={handleResetCalendar}
@@ -594,6 +704,9 @@ function CalendarPage() {
         onAddLifestyle={handleAddLifestyle}
         onDeleteLifestyle={handleDeleteLifestyle}
         onClearAllLifestyles={handleClearAllLifestyles}
+        onLifestyleImageUpload={handleLifestyleImageUpload}
+        onLifestyleVoiceRecording={handleLifestyleVoiceRecording}
+        onSaveLifestyleAndRegenerate={handleSaveLifestyleAndRegenerate}
       />
     </div>
   );

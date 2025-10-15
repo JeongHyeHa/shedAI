@@ -2,20 +2,9 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 사용자 인증된 경우에만 자신의 데이터에 접근 가능
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-      
-      // 사용자 하위 컬렉션들
-      match /{subcollection=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
-      }
-    }
-    
-    // 공개 데이터 (필요한 경우)
-    match /public/{document=**} {
-      allow read: if true;
-      allow write: if request.auth != null;
+    // DEV-ONLY permissive rules. Do NOT use in production.
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }
