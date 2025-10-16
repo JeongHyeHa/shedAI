@@ -67,4 +67,29 @@
   display: block;
   padding: 2px 4px;
   font-size: 13px;
+}
+
+/* 주말과 평일 구분 스타일 */
+.fc .fc-daygrid-day.fc-day-sun,
+.fc .fc-daygrid-day.fc-day-sat {
+  background-color: #FFF8DC !important; /* 연한 노란색 */
+}
+
+.fc .fc-timegrid-day.fc-day-sun,
+.fc .fc-timegrid-day.fc-day-sat {
+  background-color: #FFF8DC !important; /* 연한 노란색 */
+}
+
+/* 주말 요일 헤더 스타일 */
+.fc .fc-col-header-cell.fc-day-sun,
+.fc .fc-col-header-cell.fc-day-sat {
+  background-color: #FFF8DC !important;
+  color: #1C2D5A !important;
+  font-weight: bold;
+}
+
+/* 주간 뷰에서 주말 컬럼 스타일 */
+.fc .fc-timegrid-slot.fc-day-sun,
+.fc .fc-timegrid-slot.fc-day-sat {
+  background-color: #FFF8DC !important;
 } 

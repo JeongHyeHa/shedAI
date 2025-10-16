@@ -23,6 +23,9 @@ router.post('/analyze-conversational-feedback', aiController.analyzeConversation
 // 스케줄 생성 엔드포인트
 router.post('/schedule/generate', aiController.generateSchedule);
 
+// AI 조언 생성 엔드포인트
+router.post('/advice/generate', aiController.generateAdvice);
+
 // OpenAI 연결 진단
 router.get('/debug/openai', aiController.debugOpenAI);
 

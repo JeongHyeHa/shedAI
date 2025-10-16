@@ -41,6 +41,66 @@ const Calendar = React.forwardRef(({
     }
   }, [events]);
 
+  // 주말과 평일 구분을 위한 스타일 적용
+  useEffect(() => {
+    const calendarApi = ref?.current?.getApi();
+    if (!calendarApi) return;
+
+    const applyWeekendStyles = () => {
+      // 모든 날짜 셀에 대해 주말 스타일 적용
+      const dayElements = document.querySelectorAll('.fc-daygrid-day, .fc-timegrid-day');
+      dayElements.forEach(dayEl => {
+        const dateStr = dayEl.getAttribute('data-date');
+        if (dateStr) {
+          const date = new Date(dateStr);
+          const dayOfWeek = date.getDay(); // 0=일요일, 6=토요일
+          
+          if (dayOfWeek === 0 || dayOfWeek === 6) {
+            // 주말 (일요일, 토요일)
+            dayEl.classList.add('weekend-day');
+            dayEl.style.backgroundColor = '#FFF8DC';
+          } else {
+            // 평일
+            dayEl.classList.remove('weekend-day');
+            dayEl.style.backgroundColor = '';
+          }
+        }
+      });
+
+      // 요일 헤더에도 주말 스타일 적용
+      const headerElements = document.querySelectorAll('.fc-col-header-cell');
+      headerElements.forEach(headerEl => {
+        const dayClass = Array.from(headerEl.classList).find(cls => cls.startsWith('fc-day-'));
+        if (dayClass) {
+          const dayName = dayClass.replace('fc-day-', '');
+          if (dayName === 'sun' || dayName === 'sat') {
+            headerEl.style.backgroundColor = '#FFF8DC';
+            headerEl.style.fontWeight = 'bold';
+          } else {
+            headerEl.style.backgroundColor = '';
+            headerEl.style.fontWeight = '';
+          }
+        }
+      });
+    };
+
+    // 초기 적용
+    applyWeekendStyles();
+
+    // 날짜 변경 시마다 다시 적용
+    const handleDatesSet = () => {
+      setTimeout(applyWeekendStyles, 100);
+    };
+
+    calendarApi.on('datesSet', handleDatesSet);
+    calendarApi.on('viewDidMount', handleDatesSet);
+
+    return () => {
+      calendarApi.off('datesSet', handleDatesSet);
+      calendarApi.off('viewDidMount', handleDatesSet);
+    };
+  }, []);
+
   // 실제 달력 화면 만들기 
   return (
     <div className="calendar-container">

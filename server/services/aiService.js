@@ -287,6 +287,57 @@ ${conversationText}
     return patterns;
   }
 
+  // AI 조언 생성
+  async generateDailyAdvice(userData, activityAnalysis) {
+    try {
+      const systemPrompt = {
+        role: 'system',
+        content: `당신은 사용자의 일일 활동 패턴을 분석하여 개인화된 조언을 제공하는 AI 어시스턴트입니다.
+
+사용자의 활동 데이터를 바탕으로 다음과 같은 조언을 제공해주세요:
+1. 오늘의 활동 패턴 분석
+2. 개선점이나 권장사항
+3. 내일을 위한 구체적인 제안
+4. 격려와 동기부여 메시지
+
+조언은 친근하고 실용적이며, 사용자가 실제로 실행할 수 있는 구체적인 내용으로 작성해주세요.
+한국어로 응답하고, 200자 이내로 간결하게 작성해주세요.`
+      };
+
+      const userPrompt = {
+        role: 'user',
+        content: `사용자 활동 분석 데이터:
+- 활동 비중: ${JSON.stringify(activityAnalysis)}
+- 생활 패턴: ${userData.lifestylePatterns?.join(', ') || '없음'}
+- 최근 스케줄: ${userData.lastSchedule ? '있음' : '없음'}
+
+위 데이터를 바탕으로 오늘의 AI 조언을 생성해주세요.`
+      };
+
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4o-mini',
+          messages: [systemPrompt, userPrompt],
+          temperature: 0.7,
+          max_tokens: 300
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.openaiApiKey}`
+          },
+          timeout: 10000
+        }
+      );
+
+      return response.data.choices?.[0]?.message?.content;
+    } catch (error) {
+      console.error('AI 조언 생성 실패:', error);
+      return '오늘 하루도 수고하셨습니다! 내일도 화이팅하세요! 💪';
+    }
+  }
+
   // 활동 관련 패턴 추출
   extractActivityPatterns(feedbacks) {
     const patterns = [];

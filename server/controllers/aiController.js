@@ -371,6 +371,33 @@ class AIController {
         }
     }
 
+    // AI 조언 생성
+    async generateAdvice(req, res) {
+        try {
+            const { userData, activityAnalysis } = req.body;
+            
+            if (!userData) {
+                return res.status(400).json({ 
+                    ok: false, 
+                    message: '사용자 데이터가 필요합니다.' 
+                });
+            }
+
+            const advice = await aiService.generateDailyAdvice(userData, activityAnalysis);
+            
+            res.json({ 
+                ok: true, 
+                advice 
+            });
+        } catch (error) {
+            console.error('AI 조언 생성 컨트롤러 에러:', error);
+            res.status(500).json({ 
+                ok: false, 
+                message: 'AI 조언 생성에 실패했습니다.' 
+            });
+        }
+    }
+
 }
 
 module.exports = new AIController();

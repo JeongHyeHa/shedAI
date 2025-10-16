@@ -199,6 +199,14 @@ class ApiService {
       body: JSON.stringify({ conversationalFeedbacks })
     });
   }
+
+  // AI 조언 생성
+  async generateAdvice(userData, activityAnalysis) {
+    return this.request('/api/ai/advice/generate', {
+      method: 'POST',
+      body: JSON.stringify({ userData, activityAnalysis })
+    });
+  }
 }
 
 export default new ApiService();
