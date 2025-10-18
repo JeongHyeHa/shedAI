@@ -6,9 +6,8 @@ import firestoreService from '../services/firestoreService';
 import { convertScheduleToEvents } from '../utils/scheduleUtils';
 import { useAuth } from '../contexts/AuthContext';
 
-export const useScheduleManagement = () => {
+export const useScheduleManagement = (setAllEvents) => {
   const { user } = useAuth();
-  const [allEvents, setAllEvents] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
 
@@ -86,8 +85,6 @@ export const useScheduleManagement = () => {
   }, [isLoading]);
 
   return {
-    allEvents,
-    setAllEvents,
     isLoading,
     setIsLoading,
     loadingProgress,

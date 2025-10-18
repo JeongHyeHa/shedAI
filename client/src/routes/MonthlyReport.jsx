@@ -35,12 +35,26 @@ function extractCategoriesFromPatternsAndTasks({ lifestylePatterns = [], lastSch
               const duration = calculateDuration(startTime, endTime);
               
               const title = String(activity.title).toLowerCase();
-              if (/(운동|exercise|gym|workout)/.test(title)) buckets.exercise += duration;
-              else if (/(독서|reading|book)/.test(title)) buckets.reading += duration;
-              else if (/(공부|study|lecture|exam)/.test(title)) buckets.study += duration;
-              else if (/(개발|코딩|dev|code|프로그래밍)/.test(title)) buckets.work += duration;
-              else if (/(취미|hobby|게임|game|music)/.test(title)) buckets.hobby += duration;
-              else buckets.others += duration;
+              
+              // 더 포괄적인 분류 로직
+              if (/(운동|exercise|gym|workout|헬스|조깅|달리기|수영|요가|필라테스|산책)/.test(title)) {
+                buckets.exercise += duration;
+              }
+              else if (/(독서|reading|book|책|읽기|독서실)/.test(title)) {
+                buckets.reading += duration;
+              }
+              else if (/(공부|study|lecture|exam|자기계발|학습|공부실|도서관|과제|프로젝트|발표|시험|수업)/.test(title)) {
+                buckets.study += duration;
+              }
+              else if (/(개발|코딩|dev|code|프로그래밍|작업|업무|회의|프로젝트|출근|근무)/.test(title)) {
+                buckets.work += duration;
+              }
+              else if (/(취미|hobby|게임|game|music|음악|영화|드라마|넷플릭스|유튜브|게임|만화|애니)/.test(title)) {
+                buckets.hobby += duration;
+              }
+              else {
+                buckets.others += duration;
+              }
             }
           }
         }
@@ -53,12 +67,25 @@ function extractCategoriesFromPatternsAndTasks({ lifestylePatterns = [], lastSch
   // 생활 패턴에서도 시간 기반으로 계산 (간단한 추정)
   for (const pattern of lifestylePatterns) {
     const text = String(pattern).toLowerCase();
-    if (/(운동|exercise|gym|workout)/.test(text)) buckets.exercise += 1; // 1시간으로 추정
-    else if (/(독서|reading|book)/.test(text)) buckets.reading += 1;
-    else if (/(공부|study|lecture|exam)/.test(text)) buckets.study += 1;
-    else if (/(개발|코딩|dev|code|프로그래밍)/.test(text)) buckets.work += 1;
-    else if (/(취미|hobby|게임|game|music)/.test(text)) buckets.hobby += 1;
-    else buckets.others += 1;
+    
+    if (/(운동|exercise|gym|workout|헬스|조깅|달리기|수영|요가|필라테스|산책)/.test(text)) {
+      buckets.exercise += 1; // 1시간으로 추정
+    }
+    else if (/(독서|reading|book|책|읽기|독서실)/.test(text)) {
+      buckets.reading += 1;
+    }
+    else if (/(공부|study|lecture|exam|자기계발|학습|공부실|도서관|과제|프로젝트|발표|시험|수업)/.test(text)) {
+      buckets.study += 1;
+    }
+    else if (/(개발|코딩|dev|code|프로그래밍|작업|업무|회의|프로젝트|출근|근무)/.test(text)) {
+      buckets.work += 1;
+    }
+    else if (/(취미|hobby|게임|game|music|음악|영화|드라마|넷플릭스|유튜브|게임|만화|애니)/.test(text)) {
+      buckets.hobby += 1;
+    }
+    else {
+      buckets.others += 1;
+    }
   }
 
   return buckets;
@@ -98,7 +125,7 @@ export default function MonthlyReport() {
 
   // AI 조언 생성 함수
   const generateAIAdvice = async () => {
-    if (!userData || isGeneratingAdvice) return;
+    if (!userData || isGeneratingAdvice || !user?.uid) return;
     
     setIsGeneratingAdvice(true);
     try {
@@ -107,6 +134,21 @@ export default function MonthlyReport() {
       const response = await apiService.generateAdvice(userData, activityAnalysis);
       if (response.ok) {
         setAiAdvice(response.advice);
+        
+        // AI 조언을 Firestore에 저장
+        try {
+          await firestoreService.saveFeedback(user.uid, {
+            type: 'ai_advice',
+            advice: response.advice,
+            activityAnalysis: activityAnalysis,
+            generatedAt: new Date(),
+            month: month,
+            year: year
+          });
+          console.log('AI 조언이 Firestore에 저장되었습니다.');
+        } catch (saveError) {
+          console.error('AI 조언 Firestore 저장 실패:', saveError);
+        }
       } else {
         setAiAdvice('AI 조언을 생성할 수 없습니다. 잠시 후 다시 시도해주세요.');
       }
@@ -154,6 +196,27 @@ export default function MonthlyReport() {
     })();
   }, [user?.uid]);
 
+  // AI 조언 로드
+  useEffect(() => {
+    if (!user?.uid) return;
+    (async () => {
+      try {
+        // 최근 AI 조언 로드
+        const feedbacks = await firestoreService.getFeedbacks(user.uid);
+        const latestAdvice = feedbacks
+          .filter(f => f.type === 'ai_advice')
+          .sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt))[0];
+        
+        if (latestAdvice) {
+          setAiAdvice(latestAdvice.advice);
+          console.log('저장된 AI 조언을 로드했습니다.');
+        }
+      } catch (error) {
+        console.error('AI 조언 로드 실패:', error);
+      }
+    })();
+  }, [user?.uid]);
+
   const buckets = useMemo(() => {
     if (!userData) return null;
     return extractCategoriesFromPatternsAndTasks(userData);
@@ -161,7 +224,24 @@ export default function MonthlyReport() {
   
   const pieData = useMemo(() => {
     if (!buckets) return [];
-    return Object.entries(buckets).map(([k, v]) => ({ label: k, value: v }));
+    
+    // 카테고리 라벨 매핑
+    const categoryLabels = {
+      work: '업무',
+      study: '공부',
+      exercise: '운동',
+      reading: '독서',
+      hobby: '취미',
+      others: '기타'
+    };
+    
+    return Object.entries(buckets)
+      .filter(([k, v]) => v > 0) // 0인 값은 제외
+      .map(([k, v]) => ({ 
+        label: categoryLabels[k] || k, 
+        value: v 
+      }))
+      .sort((a, b) => b.value - a.value); // 값이 큰 순으로 정렬
   }, [buckets]);
   
   const colors = ['#6C8AE4', '#8AD1C2', '#E6B85C', '#C58AF0', '#F58EA8', '#A7B0C0'];
@@ -274,9 +354,23 @@ export default function MonthlyReport() {
           <div style={{ color: '#555', fontSize: '12px', marginBottom: 8, opacity: 0.7 }}>
             (하루가 끝나가는 22시에 AI 조언이 생성됩니다.)
           </div>
-          <div style={{ color: '#555', minHeight: '60px' }}>
+          <div style={{ 
+            color: '#555', 
+            minHeight: '200px', 
+            maxHeight: '350px', 
+            overflowY: 'auto',
+            padding: '8px',
+            width: '100%',
+            backgroundColor: '#fafafa'
+          }}>
             {aiAdvice ? (
-              <p style={{ margin: 0, lineHeight: '1.5' }}>{aiAdvice}</p>
+              <div style={{ margin: 0, lineHeight: '1.6', whiteSpace: 'pre-line' }}>
+                {aiAdvice.split('\n').map((line, index) => (
+                  <div key={index} style={{ marginBottom: line.trim() ? '8px' : '4px' }}>
+                    {line.trim() ? line : <br />}
+                  </div>
+                ))}
+              </div>
             ) : userData ? (
               <p style={{ margin: 0, opacity: 0.6 }}>AI가 사용자의 활동 패턴을 분석하여 맞춤형 조언을 제공합니다.</p>
             ) : (

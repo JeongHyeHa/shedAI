@@ -12,6 +12,10 @@ import { useVoiceRecording } from '../hooks/useVoiceRecording';
 import { useMessageManagement } from '../hooks/useMessageManagement';
 import { useLifestyleSync } from '../hooks/useLifestyleSync';
 import { usePersonalizedAI } from '../hooks/usePersonalizedAI';
+import { useScheduleData } from '../hooks/useScheduleData';
+import { useLifestyleManagement } from '../hooks/useLifestyleManagement';
+import { useTaskManagement } from '../hooks/useTaskManagement';
+import { useFeedbackManagement } from '../hooks/useFeedbackManagement';
 import { useAuth } from '../contexts/AuthContext';
 
 // 서비스 & 유틸리티
@@ -33,91 +37,51 @@ import '../styles/floating.css';
 
 function CalendarPage() {
   const calendarRef = useRef(null);
+  const sessionIdRef = useRef(null);
   const today = resetToStartOfDay(new Date());
   
   // 인증 및 Firebase 훅
   const { user } = useAuth();
   const { userInsights, generatePersonalizedSchedule } = usePersonalizedAI();
   
-  // 상태 관리
-  const [lifestyleList, setLifestyleList] = useState([]);
-  const [lastSchedule, setLastSchedule] = useState(null);
-  const [loading, setLoading] = useState(false);
+  // 새로운 분리된 훅들
+  const { 
+    allEvents, 
+    setAllEvents, 
+    loading, 
+    lastSchedule, 
+    setLastSchedule,
+    loadUserData,
+    updateSchedule 
+  } = useScheduleData();
+  const { 
+    lifestyleList, 
+    setLifestyleList, 
+    lifestyleInput, 
+    setLifestyleInput,
+    isClearing,
+    handleAddLifestyle,
+    handleDeleteLifestyle,
+    handleClearAllLifestyles,
+    handleSaveAndGenerateSchedule
+  } = useLifestyleManagement();
+  const { taskForm, setTaskForm, handleTaskFormSubmit } = useTaskManagement();
+  const { feedbackInput, setFeedbackInput, handleSubmitFeedbackMessage } = useFeedbackManagement();
 
-  // 사용자 데이터 로드
+  // sessionIdRef 설정
   useEffect(() => {
-    const loadUserData = async () => {
-      if (!user?.uid) return;
-      
-      try {
-        setLoading(true);
-        const userData = await firestoreService.getUserDataForAI(user.uid, user);
-        
-        
-        if (userData) {
-          setLifestyleList(userData.lifestylePatterns || []);
-          setLastSchedule(userData.lastSchedule);
-          
-          // 저장된 스케줄이 있으면 이벤트로 변환하여 표시
-          if (userData.lastSchedule) {
-            console.log('[Calendar] 저장된 스케줄 로드:', userData.lastSchedule);
-            // Firestore에는 scheduleData 배열로 저장되어 있으므로 변환
-            const wrapped = userData.lastSchedule.scheduleData
-              ? { schedule: userData.lastSchedule.scheduleData }
-              : userData.lastSchedule.schedule
-                ? { schedule: userData.lastSchedule.schedule }
-                : Array.isArray(userData.lastSchedule)
-                  ? { schedule: userData.lastSchedule }
-                  : userData.lastSchedule;
-
-            const events = convertScheduleToEvents(wrapped, today).map(event => ({
-              ...event,
-              extendedProps: {
-                ...event.extendedProps,
-                isDone: false,
-              }
-            }));
-            console.log('[Calendar] 변환된 이벤트:', events);
-            setAllEvents(events);
-            // 로컬 백업 저장
-            try { localStorage.setItem('shedAI:lastSchedule', JSON.stringify(wrapped)); } catch {}
-          } else {
-            // Firestore에 없으면 로컬 백업에서 복원
-            try {
-              const raw = localStorage.getItem('shedAI:lastSchedule');
-              if (raw) {
-                const wrapped = JSON.parse(raw);
-                const events = convertScheduleToEvents(wrapped, today).map(event => ({
-                  ...event,
-                  extendedProps: {
-                    ...event.extendedProps,
-                    isDone: false,
-                  }
-                }));
-                setAllEvents(events);
-              }
-            } catch {}
-          }
-        }
-      } catch (error) {
-        console.error('사용자 데이터 로드 실패:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadUserData();
+    if (user?.uid) {
+      sessionIdRef.current = user.uid;
+    }
   }, [user?.uid]);
   
   // 커스텀 훅들
   const { 
-    allEvents, 
-    setAllEvents, 
     isLoading, 
     setIsLoading, 
     loadingProgress, 
     generateSchedule 
-  } = useScheduleManagement();
+  } = useScheduleManagement(setAllEvents);
   const { isConverting, convertImageToText } = useImageProcessing();
   const { isRecording, startVoiceRecording } = useVoiceRecording();
   const { 
@@ -136,19 +100,9 @@ function CalendarPage() {
   // UI 상태 관리
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showLifestyleModal, setShowLifestyleModal] = useState(false);
-  const [lifestyleInput, setLifestyleInput] = useState("");
   const [currentScheduleSessionId, setCurrentScheduleSessionId] = useState(null);
   const [chatbotMode, setChatbotMode] = useState(UI_CONSTANTS.CHATBOT_MODES.TASK);
   const [taskInputMode, setTaskInputMode] = useState(UI_CONSTANTS.TASK_INPUT_MODES.CHATBOT);
-  
-  // 할 일 입력 폼 상태
-  const [taskForm, setTaskForm] = useState({
-    title: "",
-    deadline: "",
-    importance: "",
-    difficulty: "",
-    description: ""
-  });
 
   // 스케줄 생성 콜백
   const handleScheduleGeneration = useCallback(async (prompt, message) => {
@@ -176,6 +130,7 @@ function CalendarPage() {
       // 스케줄 생성 완료 후 모달 닫기
       setShowLifestyleModal(false);
     } catch (error) {
+      console.error('스케줄 생성 실패:', error);
       addAIMessage("스케줄 생성에 실패했습니다. 다시 시도해주세요.");
     }
   }, [generateSchedule, conversationContext, lifestyleList, today, addAIMessage]);
@@ -190,68 +145,37 @@ function CalendarPage() {
     { autoGenerate: false, autoSync: false }
   );
 
-  // 생활패턴 관리 함수들
-  const handleAddLifestyle = useCallback(async () => {
-    if (!lifestyleInput.trim() || !user?.uid) return;
-    const newPatterns = lifestyleInput.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    const updatedPatterns = Array.from(new Set([...
-      lifestyleList,
-      ...newPatterns
-    ].map(s => (s || '').trim()).filter(Boolean)));
-    try {
-      await firestoreService.saveLifestylePatterns(user.uid, updatedPatterns);
-      setLifestyleList(updatedPatterns);
-      setLifestyleInput("");
-    } catch (error) {
-      console.error('생활패턴 저장 실패:', error);
-    }
-  }, [lifestyleInput, lifestyleList, user?.uid]);
 
-  const handleDeleteLifestyle = useCallback(async (index) => {
-    if (!user?.uid) return;
+  // 새로운 저장 + 스케줄 생성 함수
+  const handleSaveAndGenerate = useCallback(async () => {
+    if (lifestyleList.length === 0) {
+      alert('저장할 생활패턴이 없습니다.');
+      return;
+    }
     
-    const updatedPatterns = lifestyleList.filter((_, i) => i !== index);
-    try {
-      await firestoreService.saveLifestylePatterns(user.uid, updatedPatterns);
-      setLifestyleList(updatedPatterns);
-    } catch (error) {
-      console.error('생활패턴 삭제 실패:', error);
-    }
-  }, [lifestyleList, user?.uid]);
-
-  const handleClearAllLifestyles = useCallback(async () => {
-    if (!user?.uid) return;
+    // 스피너 시작
+    setIsLoading(true);
     
-    if (window.confirm("모든 생활 패턴을 삭제하시겠습니까?")) {
-      try {
-        await firestoreService.saveLifestylePatterns(user.uid, []);
-        setLifestyleList([]);
-      } catch (error) {
-        console.error('생활패턴 전체 삭제 실패:', error);
-      }
-    }
-  }, [user?.uid]);
-
-  // 생활패턴을 한꺼번에 저장하고, 그 후 시간표 재생성 버튼
-  const handleSaveLifestyleAndRegenerate = useCallback(async () => {
-    if (!user?.uid) return;
     try {
-      // 서버에서 최신 생활패턴 재조회 후 사용
-      const normalized = Array.from(new Set(lifestyleList.map(s => (s || '').trim()).filter(Boolean)));
-      await firestoreService.saveLifestylePatterns(user.uid, normalized);
-      const latest = await firestoreService.getLifestylePatterns(user.uid);
+      // 1. 생활패턴 저장
+      await handleSaveAndGenerateSchedule();
       
-      setLifestyleList(latest);
-      const lifestyleText = latest.join("\n");
+      // 2. 스케줄 생성
+      const lifestyleText = lifestyleList.join("\n");
       const prompt = lastSchedule 
         ? buildFeedbackPrompt(lifestyleText, "", lastSchedule)
         : buildShedAIPrompt(lifestyleText, "", today);
       
-      await handleScheduleGeneration(prompt, "생활패턴을 반영해 스케줄을 다시 생성합니다...");
+      await handleScheduleGeneration(prompt, "생활패턴을 저장하고 스케줄을 생성합니다...");
+      
     } catch (error) {
-      console.error('생활패턴 저장/재생성 실패:', error);
+      console.error('저장 및 스케줄 생성 실패:', error);
+      alert('저장 및 스케줄 생성에 실패했습니다: ' + error.message);
+    } finally {
+      // 스피너 종료
+      setIsLoading(false);
     }
-  }, [user?.uid, lifestyleList, lastSchedule, today, handleScheduleGeneration]);
+  }, [lifestyleList, lastSchedule, today, handleScheduleGeneration, handleSaveAndGenerateSchedule, setIsLoading]);
 
   // 폼 입력값 변경 핸들러
   const handleTaskFormChange = (e) => {
@@ -270,30 +194,13 @@ function CalendarPage() {
     });
   };
 
-  // 할 일 추가 폼 제출 핸들러
-  const handleTaskFormSubmit = () => {
-    if (!taskForm.title || !taskForm.deadline) {
-      alert('제목과 마감일은 필수 입력 항목입니다.');
-      return;
-    }
-
-    const deadlineDate = new Date(taskForm.deadline);
-    const relativeDay = convertToRelativeDay(deadlineDate, today);
-    
-    const formattedMessage = `${taskForm.title} (${taskForm.importance}중요도, ${taskForm.difficulty}난이도, 마감일: ${taskForm.deadline} day:${relativeDay})${taskForm.description ? '\n' + taskForm.description : ''}`;
-    
-    addUserMessage(formattedMessage, []);
-    handleProcessMessageWithAI(formattedMessage);
-    
-    setTaskForm({
-      title: "",
-      deadline: "",
-      importance: "",
-      difficulty: "",
-      description: ""
+  // 할 일 제출 핸들러 (새로운 훅 사용)
+  const handleTaskSubmit = () => {
+    handleTaskFormSubmit((formattedMessage) => {
+      addUserMessage(formattedMessage, []);
+      handleProcessMessageWithAI(formattedMessage);
+      setShowTaskModal(false);
     });
-    
-    setShowTaskModal(false);
   };
 
   // 메시지 제출 핸들러
@@ -305,7 +212,7 @@ function CalendarPage() {
     setAttachments([]);
     
     if (chatbotMode === "feedback") {
-      handleSubmitFeedbackMessage(currentMessage);
+      handleFeedbackSubmit();
     } else {
       handleProcessMessageWithAI(currentMessage);
     }
@@ -313,50 +220,26 @@ function CalendarPage() {
     setCurrentMessage("");
   };
 
-  // 피드백 메시지 처리
-  const handleSubmitFeedbackMessage = async (messageText) => {
-    if (!currentScheduleSessionId) {
-      addAIMessage("먼저 스케줄을 생성해주세요. 피드백을 남길 스케줄이 없습니다.");
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      setShowTaskModal(false);
-      setShowLifestyleModal(false);
-      addAIMessage("피드백을 분석하고 스케줄을 조정하는 중입니다...");
-
-      const result = await apiService.saveFeedback(
-        sessionIdRef.current,
-        currentScheduleSessionId,
-        messageText.trim()
-      );
-      
-      if (result.success) {
-        if (result.analysis) {
-          addAIMessage(`📊 피드백 분석: ${result.analysis}`);
-        }
-        
-        if (result.advice && result.advice.length > 0) {
-          const adviceText = result.advice.map(item => 
-            `💡 ${item.title || '조언'}: ${item.content}`
-          ).join('\n');
-          addAIMessage(adviceText);
-        }
-        
-        addAIMessage("피드백을 반영하여 스케줄을 조정합니다...");
-        
-        const lifestyleText = lifestyleList.join("\n");
-        const feedbackPrompt = buildFeedbackPrompt(lifestyleText, messageText, lastSchedule);
-        
-        await handleScheduleGeneration(feedbackPrompt, "피드백을 반영하여 스케줄을 조정합니다...");
+  // 피드백 제출 핸들러 (새로운 훅 사용)
+  const handleFeedbackSubmit = () => {
+    handleSubmitFeedbackMessage(currentMessage, (messageText, analysis, advice) => {
+      if (analysis) {
+        addAIMessage(`📊 피드백 분석: ${analysis}`);
       }
-    } catch (error) {
-      console.error("피드백 제출 실패:", error);
-      addAIMessage("피드백 처리에 실패했습니다. 다시 시도해주세요.");
-    } finally {
-      setIsLoading(false);
-    }
+      
+      if (advice && advice.length > 0) {
+        const adviceText = advice.map(item => 
+          `💡 ${item.title || '조언'}: ${item.content}`
+        ).join('\n');
+        addAIMessage(adviceText);
+      }
+      
+      addAIMessage("피드백을 반영하여 스케줄을 조정합니다...");
+      
+      const lifestyleText = lifestyleList.join("\n");
+      const feedbackPrompt = buildFeedbackPrompt(lifestyleText, messageText, lastSchedule);
+      handleScheduleGeneration(feedbackPrompt, "피드백을 반영하여 스케줄을 조정합니다...");
+    });
   };
   
   // 메시지를 AI로 처리하는 함수
@@ -407,16 +290,34 @@ function CalendarPage() {
       
       const newSchedule = await apiService.generateSchedule(
         prompt,
-        conversationContext.slice(-12),
+        {
+          conversationContext: conversationContext.slice(-12),
+          lifestylePatterns: lifestyleList
+        },
         sessionIdRef.current
       );
       
       clearTimeout(timeoutId);
 
+
       setLastSchedule(newSchedule.schedule);
 
-      if (newSchedule.scheduleSessionId) {
-        setCurrentScheduleSessionId(newSchedule.scheduleSessionId);
+      // Firebase에 스케줄 저장
+      try {
+        const saveData = {
+          scheduleData: newSchedule.schedule,
+          hasSchedule: true,
+          lifestyleContext: lifestyleList.join('\n'),
+          taskContext: prompt,
+          conversationContext: conversationContext.slice(-12)
+        };
+        
+        
+        const scheduleSessionId = await firestoreService.saveScheduleSession(user.uid, saveData);
+        
+        setCurrentScheduleSessionId(scheduleSessionId);
+      } catch (error) {
+        console.error('[Calendar] Firebase 저장 실패:', error);
       }
 
       const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
@@ -426,6 +327,7 @@ function CalendarPage() {
           isDone: false,
         }
       }));
+
 
       setAllEvents(events);
       // 이벤트는 Calendar 컴포넌트에서 자동으로 처리됨
@@ -443,6 +345,7 @@ function CalendarPage() {
       addAIMessage("스케줄을 생성했습니다!");
       addAIMessage(aiResponse);
     } catch (e) {
+      console.error('스케줄 생성 요청 실패:', e);
       addAIMessage("요청 실패: 다시 시도해주세요.");
     } finally {
       setIsLoading(false);
@@ -693,7 +596,7 @@ function CalendarPage() {
         taskForm={taskForm}
         onTaskFormChange={handleTaskFormChange}
         onLevelSelect={handleLevelSelect}
-        onTaskFormSubmit={handleTaskFormSubmit}
+        onTaskFormSubmit={handleTaskSubmit}
         
         // Lifestyle Modal Props
         showLifestyleModal={showLifestyleModal}
@@ -701,12 +604,13 @@ function CalendarPage() {
         lifestyleList={lifestyleList}
         lifestyleInput={lifestyleInput}
         setLifestyleInput={setLifestyleInput}
+        isClearing={isClearing}
         onAddLifestyle={handleAddLifestyle}
         onDeleteLifestyle={handleDeleteLifestyle}
         onClearAllLifestyles={handleClearAllLifestyles}
         onLifestyleImageUpload={handleLifestyleImageUpload}
         onLifestyleVoiceRecording={handleLifestyleVoiceRecording}
-        onSaveLifestyleAndRegenerate={handleSaveLifestyleAndRegenerate}
+        onSaveLifestyleAndRegenerate={handleSaveAndGenerate}
       />
     </div>
   );

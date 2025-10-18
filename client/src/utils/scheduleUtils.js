@@ -435,40 +435,13 @@ export function resetToStartOfDay(date, isEnd = false) {
       return [];
     }
 
-    const dayMap = new Map(); // day별로 activities를 그룹화
-
-    gptResponse.schedule.forEach(activityBlock => {
-      if (!activityBlock.days || !Array.isArray(activityBlock.days)) {
-        console.warn('flattenSchedule: activityBlock.days가 유효하지 않음', activityBlock);
-        return;
-      }
-
-      activityBlock.days.forEach(dayInfo => {
-        if (!dayInfo.day || !dayInfo.start || !dayInfo.end) {
-          console.warn('flattenSchedule: dayInfo가 유효하지 않음', dayInfo);
-          return;
-        }
-
-        const day = dayInfo.day;
-        if (!dayMap.has(day)) {
-          dayMap.set(day, {
-            day: day,
-            weekday: getKoreanDayName(day),
-            activities: []
-          });
-        }
-
-        dayMap.get(day).activities.push({
-          start: dayInfo.start,
-          end: dayInfo.end,
-          title: dayInfo.title || activityBlock.title || activityBlock.activity,
-          type: dayInfo.type || activityBlock.type || 'task'
-        });
-      });
-    });
-
-    // day 순서대로 정렬하여 반환
-    return Array.from(dayMap.values()).sort((a, b) => a.day - b.day);
+    // 서버에서 보내는 형식: [{day, weekday, activities}]
+    // 이미 올바른 형식이므로 그대로 반환
+    return gptResponse.schedule.map(daySchedule => ({
+      day: daySchedule.day,
+      weekday: daySchedule.weekday,
+      activities: daySchedule.activities || []
+    }));
   }
 
   // day 번호를 한국어 요일로 변환

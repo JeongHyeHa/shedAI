@@ -56,6 +56,54 @@
   .modal button:hover {
     background-color: #2e3f6d;
   }
+
+  /* 간단 입력 모드 스타일 */
+  .input-mode-toggle {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .mode-button {
+    padding: 6px 12px;
+    font-size: 12px;
+    background-color: #f5f5f5;
+    color: #666;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .mode-button.active {
+    background-color: #1C2D5A;
+    color: white;
+    border-color: #1C2D5A;
+  }
+
+  .mode-button:hover {
+    background-color: #e0e0e0;
+  }
+
+  .mode-button.active:hover {
+    background-color: #0F1A3A;
+  }
+
+  .simple-input-container {
+    padding: 16px 0;
+  }
+
+  .simple-textarea {
+    min-height: 120px;
+    resize: vertical;
+  }
+
+  .input-hint {
+    font-size: 12px;
+    color: #666;
+    margin-top: 8px;
+    margin-bottom: 0;
+  }
   
   .close-btn {
     margin-top: 16px;

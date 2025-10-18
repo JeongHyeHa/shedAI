@@ -15,8 +15,8 @@ const extractUserPreferencesFromHistory = (allFeedbacks) => {
 
   allFeedbacks.forEach(feedback => {
     if (feedback.type === 'conversational') {
-      const userMessage = feedback.userMessage?.toLowerCase() || '';
-      const aiResponse = feedback.aiResponse?.toLowerCase() || '';
+      const userMessage = (typeof feedback.userMessage === 'string' ? feedback.userMessage : String(feedback.userMessage || '')).toLowerCase();
+      const aiResponse = (typeof feedback.aiResponse === 'string' ? feedback.aiResponse : String(feedback.aiResponse || '')).toLowerCase();
       
       // 시간 관련 선호도
       if (userMessage.includes('아침') || userMessage.includes('오전')) {

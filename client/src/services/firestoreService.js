@@ -96,6 +96,41 @@ class FirestoreService {
     }
   }
 
+  // 할 일 저장
+  async saveTask(userId, taskData) {
+    try {
+      const tasksRef = collection(this.db, 'users', userId, 'tasks');
+      
+      const docRef = await addDoc(tasksRef, {
+        ...taskData,
+        createdAt: serverTimestamp(),
+        isActive: true
+      });
+      
+      return docRef.id;
+    } catch (error) {
+      console.error('할 일 저장 실패:', error);
+      throw error;
+    }
+  }
+
+  // 할 일 조회
+  async getTasks(userId) {
+    try {
+      const tasksRef = collection(this.db, 'users', userId, 'tasks');
+      const q = query(tasksRef, where('isActive', '==', true), orderBy('createdAt', 'desc'));
+      const querySnapshot = await getDocs(q);
+      
+      return querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+    } catch (error) {
+      console.error('할 일 조회 실패:', error);
+      return [];
+    }
+  }
+
   // 스케줄 세션 저장
   async saveScheduleSession(userId, sessionData) {
     try {
@@ -197,8 +232,8 @@ class FirestoreService {
       const docRef = await addDoc(feedbacksRef, {
         type: 'conversational',
         userMessage,
-        aiResponse,
-        context,
+        aiResponse: aiResponse || null,
+        context: context || null,
         createdAt: serverTimestamp()
       });
       

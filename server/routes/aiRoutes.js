@@ -11,8 +11,8 @@ const upload = multer({
     }
 });
 
-// GPT-4o 이미지 처리
-router.post('/gpt4o-image', aiController.processImage);
+// GPT-4o 이미지 처리 (임시 비활성화)
+// router.post('/gpt4o-image', aiController.processImage);
 
 // Whisper 음성 인식
 router.post('/whisper-audio', upload.single('audio'), aiController.transcribeAudio);
@@ -22,6 +22,9 @@ router.post('/analyze-conversational-feedback', aiController.analyzeConversation
 
 // 스케줄 생성 엔드포인트
 router.post('/schedule/generate', aiController.generateSchedule);
+
+// 피드백 저장 엔드포인트
+router.post('/feedback', aiController.saveFeedback);
 
 // AI 조언 생성 엔드포인트
 router.post('/advice/generate', aiController.generateAdvice);

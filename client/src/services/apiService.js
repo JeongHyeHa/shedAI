@@ -18,28 +18,45 @@ class ApiService {
 
     try {
       const response = await fetch(url, config);
-      
+
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`API 요청 실패: ${response.status} ${response.statusText} - ${errorText}`);
       }
-      
-      return await response.json();
+
+      const data = await response.json();
+      return data;
     } catch (error) {
-      console.error('API 요청 실패:', error);
+      console.error('[API] 요청 실패:', error);
       throw error;
     }
   }
 
   // 스케줄 생성(gpt-4o)
   async generateSchedule(prompt, context, sessionId) {
+    // context가 객체인지 배열인지 확인하여 적절히 처리
+    let conversationContext = [];
+    let lifestylePatterns = [];
+
+    if (Array.isArray(context)) {
+      // context가 배열인 경우 (conversationContext)
+      conversationContext = context;
+    } else if (context && typeof context === 'object') {
+      // context가 객체인 경우
+      conversationContext = context.conversationContext || [];
+      lifestylePatterns = context.lifestylePatterns || [];
+    }
+
+    const requestData = {
+      prompt,
+      conversationContext,
+      lifestylePatterns,
+      sessionId
+    };
+
     return this.request(API_ENDPOINTS.SCHEDULE.GENERATE, {
       method: 'POST',
-      body: JSON.stringify({
-        prompt,
-        conversationContext: context.conversationContext || [],
-        lifestylePatterns: context.lifestylePatterns || [],
-        sessionId
-      })
+      body: JSON.stringify(requestData)
     });
   }
 
@@ -202,9 +219,17 @@ class ApiService {
 
   // AI 조언 생성
   async generateAdvice(userData, activityAnalysis) {
-    return this.request('/api/ai/advice/generate', {
+    return this.request('/api/advice/generate', {
       method: 'POST',
       body: JSON.stringify({ userData, activityAnalysis })
+    });
+  }
+
+  // 피드백 제출
+  async submitFeedback(sessionId, scheduleId, feedbackText) {
+    return this.request('/api/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, scheduleId, feedbackText })
     });
   }
 }

@@ -6,8 +6,8 @@ function polarToCartesian(cx, cy, r, angle) {
 }
 
 function arcPath(cx, cy, r, startAngle, endAngle) {
-  // 각도가 같으면 빈 경로 반환
-  if (startAngle === endAngle) {
+  // 각도가 같거나 매우 작으면 빈 경로 반환
+  if (startAngle === endAngle || endAngle - startAngle < 0.1) {
     return '';
   }
   
@@ -18,7 +18,7 @@ function arcPath(cx, cy, r, startAngle, endAngle) {
   const path = [
     'M', cx, cy,
     'L', start.x, start.y,
-    'A', r, r, 0, largeArcFlag, 0, end.x, end.y,
+    'A', r, r, 0, largeArcFlag, 1, end.x, end.y,
     'Z'
   ].join(' ');
   
@@ -29,7 +29,7 @@ export default function PieChart({ data = [], colors = [], size = 180 }) {
   const total = data.reduce((s, d) => s + (d.value || 0), 0);
   const cx = size / 2;
   const cy = size / 2;
-  const r = size / 2;
+  const r = (size / 2) - 10; // 여백을 위해 반지름을 조금 줄임
   let angle = 0;
 
   // 데이터가 없거나 모든 값이 0인 경우

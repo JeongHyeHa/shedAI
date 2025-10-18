@@ -37,6 +37,7 @@ const Modals = ({
   lifestyleList,            // 생활패턴 목록
   lifestyleInput,           // 생활패턴 입력 필드
   setLifestyleInput,        // 생활패턴 입력 필드 변경 함수
+  isClearing,               // 전체 삭제 중인지 여부
   onAddLifestyle,           // 생활패턴 추가 함수
   onDeleteLifestyle,        // 생활패턴 삭제 함수
   onClearAllLifestyles,     // 모든 생활패턴 삭제 함수
@@ -90,6 +91,7 @@ const Modals = ({
         lifestyleList={lifestyleList}
         lifestyleInput={lifestyleInput}
         setLifestyleInput={setLifestyleInput}
+        isClearing={isClearing}
         onAddLifestyle={onAddLifestyle}
         onDeleteLifestyle={onDeleteLifestyle}
         onClearAllLifestyles={onClearAllLifestyles}

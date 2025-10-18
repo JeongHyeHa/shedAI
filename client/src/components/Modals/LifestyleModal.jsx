@@ -15,6 +15,7 @@ const LifestyleModal = ({
   onVoiceRecording,
   isRecording,
   isConverting,
+  isClearing,         // 전체 삭제 중인지 여부
   overlayZIndex,
   onSaveLifestyleAndRegenerate
 }) => {
@@ -95,8 +96,14 @@ const LifestyleModal = ({
             </button>
           </div>
           <div className="lifestyle-buttons">
-            <button className="lifestyle-clear-btn" onClick={onClearAllLifestyles}>전체 삭제</button>
-            <button className="lifestyle-add-btn" onClick={onSaveLifestyleAndRegenerate}>시간표 생성</button>
+            <button 
+              className="lifestyle-clear-btn" 
+              onClick={onClearAllLifestyles}
+              disabled={isClearing}
+            >
+              {isClearing ? '삭제 중...' : '전체 삭제'}
+            </button>
+            <button className="lifestyle-add-btn" onClick={onSaveLifestyleAndRegenerate}>저장</button>
           </div>
         </div>
       </div>
