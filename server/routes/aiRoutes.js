@@ -16,12 +16,22 @@ const upload = multer({
 
 // Whisper 음성 인식
 router.post('/whisper-audio', upload.single('audio'), aiController.transcribeAudio);
+router.post('/whisper-transcribe', upload.single('audio'), aiController.transcribeAudio);
 
 // 대화형 피드백 분석
 router.post('/analyze-conversational-feedback', aiController.analyzeConversationalFeedback);
 
 // 스케줄 생성 엔드포인트
 router.post('/schedule/generate', aiController.generateSchedule);
+
+// 할 일 조회 엔드포인트
+router.get('/tasks/:sessionId', aiController.getTasks);
+
+// 할 일 삭제 엔드포인트
+router.delete('/tasks/:sessionId/:taskId', aiController.deleteTask);
+
+// 할 일 활성화/비활성화 토글 엔드포인트
+router.patch('/tasks/:sessionId/:taskId/toggle', aiController.toggleTaskStatus);
 
 // 피드백 저장 엔드포인트
 router.post('/feedback', aiController.saveFeedback);

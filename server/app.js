@@ -1,30 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-require('dotenv').config();
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-// Firebase Admin SDK 초기화 (환경변수가 있을 때만)
-let admin = null;
-if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
-    try {
-        admin = require('firebase-admin');
-        if (!admin.apps.length) {
-            admin.initializeApp({
-                credential: admin.credential.cert({
-                    projectId: process.env.FIREBASE_PROJECT_ID,
-                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                    privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-                })
-            });
-            console.log('Firebase Admin SDK 초기화 완료');
-        }
-    } catch (error) {
-        console.warn('Firebase Admin SDK 초기화 실패:', error.message);
-        admin = null;
-    }
-} else {
-    console.warn('Firebase 환경변수가 설정되지 않아 Admin SDK를 사용하지 않습니다.');
-}
+// Firebase Admin SDK는 필요할 때만 초기화 (지연 로딩)
 
 const aiRoutes = require('./routes/aiRoutes');
 const app = express();
