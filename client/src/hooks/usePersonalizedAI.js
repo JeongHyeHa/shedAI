@@ -133,8 +133,9 @@ export const usePersonalizedAI = () => {
       
       let insights;
       if (conversationalFeedbacks.length > 0) {
-        // 대화형 피드백이 있으면 이를 기반으로 분석
-        const analysisResult = await apiService.analyzeConversationalFeedback(conversationalFeedbacks);
+        // 대화형 피드백이 있으면 이를 기반으로 분석 (가장 최근 메시지 텍스트만 서버 시그니처에 맞게 전송)
+        const last = conversationalFeedbacks[0]?.userMessage || '';
+        const analysisResult = await apiService.analyzeConversationalFeedback(last, user?.uid);
         
         // 추출된 선호도와 AI 분석 결과를 결합
         insights = {

@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import firestoreService from '../services/firestoreService';
+import apiService from '../services/apiService';
 import { convertToRelativeDay } from '../utils/dateUtils';
 
 export function useTaskManagement() {
@@ -26,7 +26,7 @@ export function useTaskManagement() {
     
     const formattedMessage = `${taskForm.title} (${taskForm.importance}중요도, ${taskForm.difficulty}난이도, 마감일: ${taskForm.deadline} day:${relativeDay})${taskForm.description ? '\n' + taskForm.description : ''}`;
     
-    // 할 일 데이터를 Firebase에 저장
+    // 할 일 데이터를 서버(Firestore)로 저장
     try {
       const taskData = {
         title: taskForm.title,
@@ -35,10 +35,17 @@ export function useTaskManagement() {
         difficulty: taskForm.difficulty,
         description: taskForm.description,
         relativeDay: relativeDay,
-        createdAt: new Date()
+        estimatedMinutes: 60
       };
-      
-      await firestoreService.saveTask(user.uid, taskData);
+
+      // 세션 ID 확보: 기존 값 사용, 없으면 생성하여 localStorage에 저장
+      let sessionId = localStorage.getItem('shedai_session_id');
+      if (!sessionId) {
+        sessionId = `sess_${Date.now()}`;
+        localStorage.setItem('shedai_session_id', sessionId);
+      }
+
+      await apiService.saveTaskToDB(user.uid, sessionId, taskData);
       
       // 성공 콜백 실행
       if (onSuccess) {

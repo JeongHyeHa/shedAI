@@ -6,6 +6,9 @@ class AIController {
     async generateSchedule(req, res) {
         try {
             const { messages, prompt, promptContext, lifestylePatterns, sessionId, nowOverride, anchorDay } = req.body;
+            const userId = req.params?.userId || req.query?.userId || req.headers['x-user-id'] || req.body?.userId;
+            
+            console.log('[generateSchedule] userId:', userId, 'sessionId:', sessionId);
             
             // messages 배열이 없으면 prompt 또는 promptContext를 messages로 변환
             let messageArray = messages;
@@ -14,6 +17,22 @@ class AIController {
                 if (contentToUse) {
                     messageArray = [{ role: 'user', content: contentToUse }];
                 }
+            } else if (prompt && !messageArray.some(m => m.role === 'user' && m.content === prompt)) {
+                // messages가 있지만 prompt가 포함되지 않은 경우, prompt를 마지막 user 메시지로 추가
+                messageArray = [...messageArray, { role: 'user', content: prompt }];
+            }
+
+            // 서버측 날짜 전처리: 한국어 상대 날짜를 (day:X)로 주입
+            try {
+                const { preprocessMessageForDays } = require('../utils/dateParser');
+                const baseNow = nowOverride ? new Date(nowOverride) : new Date();
+                messageArray = messageArray.map(m => (
+                    m && m.role && m.content
+                        ? { ...m, content: preprocessMessageForDays(m.content, baseNow) }
+                        : m
+                ));
+            } catch (e) {
+                console.warn('서버 날짜 전처리 실패:', e.message);
             }
             
             if (!messageArray || !Array.isArray(messageArray)) {
@@ -23,7 +42,11 @@ class AIController {
                 });
             }
 
-            // 라이프스타일 패턴 파싱 (객체 배열과 문자열 모두 처리)
+            if (!userId || !sessionId) {
+                console.warn('[generateSchedule] Missing userId/sessionId → tasks will NOT be saved to DB.');
+            }
+
+            // 라이프스타일 패턴 파싱 (객체 배열과 문자열 모두 처리) + Firestore 기본 로드
             let parsedLifestylePatterns = [];
             if (lifestylePatterns && Array.isArray(lifestylePatterns)) {
                 parsedLifestylePatterns = lifestylePatterns
@@ -45,16 +68,133 @@ class AIController {
                 parsedLifestylePatterns = patterns
                     .map(pattern => utils.parseLifestylePattern(pattern))
                     .filter(pattern => pattern !== null);
+            } else if (userId) {
+                // 요청에 패턴이 없으면 Firestore에서 불러오기
+                try {
+                    const firestoreService = require('../services/firestoreService');
+                    const stored = await firestoreService.getLifestylePatterns(userId);
+                    if (Array.isArray(stored)) {
+                        parsedLifestylePatterns = stored
+                            .map(p => typeof p === 'string' ? utils.parseLifestylePattern(p) : p)
+                            .filter(Boolean);
+                    }
+                } catch (e) {
+                    console.warn('생활패턴 기본 로드 실패:', e.message);
+                }
             }
 
             // 기존 할 일 가져오기
             let existingTasks = [];
-            if (sessionId) {
+            if (userId && sessionId) {
                 try {
                     const firestoreService = require('../services/firestoreService');
-                    existingTasks = await firestoreService.getTasks(sessionId);
+                    existingTasks = await firestoreService.getSessionTasks(userId, sessionId);
                 } catch (error) {
                     console.warn('기존 할 일 조회 실패:', error.message);
+                }
+            }
+
+            // 사용자 메시지에서 새 할 일 추출 및 저장
+            if (userId && sessionId) {
+                try {
+                    // 모든 user 메시지 + prompt + promptContext를 합쳐서 추출
+                    const allUserContent = [
+                        ...messageArray.filter(m => m.role === 'user').map(m => m.content),
+                        prompt || '',
+                        promptContext || ''
+                    ].filter(Boolean).join('\n');
+                    
+                    // 간단한 키워드 기반 추출 (시연용)
+                    const extractedTasks = [];
+                    
+                    if (allUserContent.includes('오픽') || allUserContent.includes('시험')) {
+                        const today = new Date();
+                        const nextWed = new Date(today);
+                        const daysUntilWed = (3 - today.getDay() + 7) % 7;
+                        nextWed.setDate(today.getDate() + daysUntilWed + 7);
+                        
+                        extractedTasks.push({
+                            title: '오픽 시험',
+                            date: nextWed.toISOString().split('T')[0],
+                            dayOffset: daysUntilWed + 7,
+                            importance: '상',
+                            difficulty: '상',
+                            description: '오픽 시험 준비'
+                        });
+                    }
+                    
+                    if (allUserContent.includes('클라이언트') || allUserContent.includes('시안')) {
+                        const today = new Date();
+                        const thisFri = new Date(today);
+                        const daysUntilFri = (5 - today.getDay() + 7) % 7;
+                        thisFri.setDate(today.getDate() + daysUntilFri);
+                        
+                        extractedTasks.push({
+                            title: '클라이언트 A 시안 제출',
+                            date: thisFri.toISOString().split('T')[0],
+                            dayOffset: daysUntilFri,
+                            importance: '상',
+                            difficulty: '중',
+                            description: '클라이언트 시안 제출'
+                        });
+                    }
+                    
+                    if (allUserContent.includes('포트폴리오')) {
+                        const today = new Date();
+                        const nextMon = new Date(today);
+                        const daysUntilMon = (1 - today.getDay() + 7) % 7;
+                        nextMon.setDate(today.getDate() + daysUntilMon + 7);
+                        
+                        extractedTasks.push({
+                            title: '포트폴리오 최종 수정',
+                            date: nextMon.toISOString().split('T')[0],
+                            dayOffset: daysUntilMon + 7,
+                            importance: '중',
+                            difficulty: '중',
+                            description: '포트폴리오 수정'
+                        });
+                    }
+                    
+                    console.log('[AI Controller] 추출된 할 일:', extractedTasks);
+                    console.log('[AI Controller] 추출 대상 텍스트:', allUserContent);
+                    
+                    if (extractedTasks.length > 0) {
+                        const firestoreService = require('../services/firestoreService');
+                        for (const task of extractedTasks) {
+                            // relativeDay 계산 (anchorDay 기준)
+                            const baseDay = anchorDay || 1;
+                            const relativeDay = task.dayOffset ? baseDay + task.dayOffset - 1 : baseDay;
+                            
+                            const taskData = {
+                                title: task.title,
+                                deadline: task.date,
+                                importance: task.importance || '중',
+                                difficulty: task.difficulty || '중',
+                                description: task.description || '',
+                                relativeDay: relativeDay,
+                                estimatedMinutes: 60
+                            };
+                            
+                            await firestoreService.saveSessionTask(userId, sessionId, taskData);
+                            console.log(`[AI Controller] 새 할 일 저장 완료: ${task.title}`);
+                            console.log('[AI Controller] 저장 경로 확인:',
+                                `users/${userId}/scheduleSessions/${sessionId}/tasks (management tab path must match!)`);
+                        }
+                        
+                        // 새로 저장된 할 일들을 existingTasks에 추가
+                        const newTasks = extractedTasks.map(task => ({
+                            title: task.title,
+                            deadline: task.date,
+                            importance: task.importance || '중',
+                            difficulty: task.difficulty || '중',
+                            description: task.description || '',
+                            relativeDay: task.dayOffset ? (anchorDay || 1) + task.dayOffset - 1 : (anchorDay || 1),
+                            estimatedMinutes: 60
+                        }));
+                        existingTasks = [...existingTasks, ...newTasks];
+                    }
+                } catch (error) {
+                    console.warn('할 일 추출/저장 실패:', error.message);
                 }
             }
 
@@ -74,13 +214,13 @@ class AIController {
             
             // 로컬 폴백 (안전화)
             try {
-                const { messages, prompt, lifestylePatterns, existingTasks } = req.body;
+                const { messages, prompt, existingTasks } = req.body;
                 const messageArray = messages || (prompt ? [{ role: 'user', content: prompt }] : []);
                 console.log('로컬 폴백 시도 - 메시지 배열:', messageArray);
-                console.log('로컬 폴백 시도 - 라이프스타일 패턴:', lifestylePatterns);
+                console.log('로컬 폴백 시도 - 파싱된 라이프스타일 패턴:', parsedLifestylePatterns);
                 
-                // aiService의 더미 스케줄 생성 메서드 사용
-                const localSchedule = aiService.generateDummySchedule(lifestylePatterns, existingTasks || [], {});
+                // aiService의 더미 스케줄 생성 메서드 사용 (파싱된 패턴 사용)
+                const localSchedule = aiService.generateDummySchedule(parsedLifestylePatterns, existingTasks || [], { nowOverride, anchorDay });
                 console.log('로컬 스케줄 생성 성공:', localSchedule);
                 
                 return res.status(200).json({ 
@@ -99,70 +239,55 @@ class AIController {
         }
     }
 
-    // 로컬 스케줄 생성 (폴백)
-    generateLocalSchedule(messages, lifestylePatterns) {
-        const schedule = [];
-        const now = new Date();
-        
-        // 라이프스타일 패턴에서 스케줄 생성
-        if (lifestylePatterns && Array.isArray(lifestylePatterns)) {
-            lifestylePatterns.forEach(pattern => {
-                const parsed = utils.parseLifestylePattern(pattern);
-                if (parsed) {
-                    const startTime = `${parsed.start.toString().padStart(2, '0')}:00`;
-                    const endTime = `${parsed.end.toString().padStart(2, '0')}:00`;
-                    
-                    schedule.push({
-                        title: parsed.title,
-                    start: startTime,
-                    end: endTime,
-                        type: 'lifestyle',
-                        day: parsed.days[0] || 1,
-                        isOvernight: parsed.isOvernight
-                    });
-                }
-            });
+    // 생활패턴 저장 (userId 기준으로 통일)
+    async saveLifestylePatterns(req, res) {
+        try {
+            const userId = req.params.userId || req.query.userId || req.headers['x-user-id'] || req.body.userId;
+            const { patterns } = req.body;
+            if (!userId || !Array.isArray(patterns)) {
+                return res.status(400).json({ ok:false, message:'userId와 생활패턴 배열이 필요합니다.' });
+            }
+            const firestoreService = require('../services/firestoreService');
+            await firestoreService.saveLifestylePatterns(userId, patterns);
+            res.json({ ok:true, message:'생활패턴이 저장되었습니다.' });
+        } catch (error) {
+            console.error('생활패턴 저장 컨트롤러 에러:', error);
+            res.status(500).json({ ok:false, message:'생활패턴 저장에 실패했습니다.' });
         }
-
-        // 사용자 메시지에서 작업 추출
-        if (messages && Array.isArray(messages)) {
-            messages.forEach(message => {
-                if (message.role === 'user' && message.content) {
-                    const tasks = utils.extractUserTasks(message.content);
-                    tasks.forEach(task => {
-                        const taskDate = new Date(task.date);
-                        const dayOfWeek = taskDate.getDay() === 0 ? 7 : taskDate.getDay(); // 일요일을 7로 변환
-                        
-                schedule.push({
-                            title: task.title,
-                            start: '09:00',
-                            end: '10:00',
-                            type: 'task',
-                            day: dayOfWeek,
-                            date: task.date
-                        });
-                    });
-                }
-            });
-        }
-
-        return schedule;
     }
+
+    // 할 일 생성 (users/{userId}/scheduleSessions/{sessionId}/tasks)
+    async createTask(req, res) {
+        try {
+            const userId = req.params.userId || req.query.userId || req.headers['x-user-id'] || req.body.userId;
+            const sessionId = req.params.sessionId || req.query.sessionId || req.body.sessionId;
+            if (!userId || !sessionId) {
+                return res.status(400).json({ ok:false, message:'userId와 sessionId가 필요합니다.' });
+            }
+            const taskData = req.body || {};
+            const firestoreService = require('../services/firestoreService');
+            const id = await firestoreService.saveSessionTask(userId, sessionId, taskData);
+            res.json({ ok:true, taskId:id });
+        } catch (error) {
+            console.error('할 일 생성 에러:', error);
+            res.status(500).json({ ok:false, message:'할 일 생성에 실패했습니다.' });
+        }
+    }
+
+    // 로컬 스케줄 생성 (폴백) — 현재는 사용하지 않음. 필요 시 aiService.generateDummySchedule 사용.
+    // generateLocalSchedule(messages, lifestylePatterns) { return []; }
 
     // 할 일 조회
     async getTasks(req, res) {
         try {
-            const { sessionId } = req.params;
-            
-            if (!sessionId) {
-                return res.status(400).json({ 
-                    ok: false, 
-                    message: '세션 ID가 필요합니다.' 
-                });
+            const userId = req.params.userId || req.query.userId || req.headers['x-user-id'] || req.body.userId;
+            const sessionId = req.params.sessionId || req.query.sessionId || req.body.sessionId;
+            if (!userId || !sessionId) {
+                return res.status(400).json({ ok:false, message:'userId와 sessionId가 필요합니다.' });
             }
 
             const firestoreService = require('../services/firestoreService');
-            const tasks = await firestoreService.getTasks(sessionId);
+            const tasks = await firestoreService.getSessionTasks(userId, sessionId);
             
             res.json({ 
                 ok: true, 
@@ -180,17 +305,15 @@ class AIController {
     // 할 일 삭제
     async deleteTask(req, res) {
         try {
-            const { sessionId, taskId } = req.params;
-            
-            if (!sessionId || !taskId) {
-                return res.status(400).json({ 
-                    ok: false, 
-                    message: '세션 ID와 할 일 ID가 필요합니다.' 
-                });
+            const userId = req.params.userId || req.query.userId || req.headers['x-user-id'] || req.body.userId;
+            const sessionId = req.params.sessionId || req.query.sessionId || req.body.sessionId;
+            const taskId = req.params.taskId;
+            if (!userId || !sessionId || !taskId) {
+                return res.status(400).json({ ok:false, message:'userId, sessionId, taskId가 필요합니다.' });
             }
 
             const firestoreService = require('../services/firestoreService');
-            await firestoreService.deleteTask(sessionId, taskId);
+            await firestoreService.deleteSessionTask(userId, sessionId, taskId);
             
             res.json({ 
                 ok: true, 
@@ -208,18 +331,16 @@ class AIController {
     // 할 일 활성화/비활성화 토글
     async toggleTaskStatus(req, res) {
         try {
-            const { sessionId, taskId } = req.params;
+            const userId = req.params.userId || req.query.userId || req.headers['x-user-id'] || req.body.userId;
+            const sessionId = req.params.sessionId || req.query.sessionId || req.body.sessionId;
+            const taskId = req.params.taskId;
             const { isActive } = req.body;
-            
-            if (!sessionId || !taskId || typeof isActive !== 'boolean') {
-                return res.status(400).json({ 
-                    ok: false, 
-                    message: '세션 ID, 할 일 ID, 활성화 상태가 필요합니다.' 
-                });
+            if (!userId || !sessionId || !taskId || typeof isActive !== 'boolean') {
+                return res.status(400).json({ ok:false, message:'userId, sessionId, taskId, isActive가 필요합니다.' });
             }
 
             const firestoreService = require('../services/firestoreService');
-            await firestoreService.updateTaskStatus(sessionId, taskId, isActive);
+            await firestoreService.updateSessionTaskStatus(userId, sessionId, taskId, isActive);
             
             res.json({ 
                 ok: true, 

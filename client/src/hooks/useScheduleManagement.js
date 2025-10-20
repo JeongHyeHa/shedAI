@@ -31,11 +31,18 @@ export const useScheduleManagement = (setAllEvents) => {
         console.warn('[useScheduleManagement] 마지막 프롬프트가 비어 있습니다.');
       }
       
+      // 세션 ID 확보: 로컬 유지
+      let sessionId = localStorage.getItem('shedai_session_id');
+      if (!sessionId) {
+        sessionId = `sess_${Date.now()}`;
+        localStorage.setItem('shedai_session_id', sessionId);
+      }
+
       const apiResponse = await apiService.generateSchedule(
         messages,
         lifestylePatterns,
         existingTasks,
-        opts
+        { ...opts, userId: user.uid, sessionId }
       );
       // normalize to { schedule: [...] }
       const normalized = apiResponse?.schedule ? apiResponse : { schedule: apiResponse };

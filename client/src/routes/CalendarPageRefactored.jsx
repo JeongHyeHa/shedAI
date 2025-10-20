@@ -62,7 +62,18 @@ const buildTasksForAI = async (uid) => {
 };
 
 
-// 스케줄 세션 저장(형식 통일) — ⭐ aiPrompt를 별도 필드로 저장
+// 세션 ID 헬퍼
+const getOrCreateSessionId = () => {
+  let sid = null;
+  try { sid = localStorage.getItem('shedai_session_id'); } catch {}
+  if (!sid) {
+    sid = `sess_${Date.now()}`;
+    try { localStorage.setItem('shedai_session_id', sid); } catch {}
+  }
+  return sid;
+};
+
+// 스케줄 세션 저장(형식 통일) — 프롬프트는 미리보기로 제한 저장
 const saveScheduleSessionUnified = async ({
   uid,
   schedule,
@@ -89,12 +100,14 @@ const saveScheduleSessionUnified = async ({
       }).filter(p => p)
     : [];
 
+  const promptPreview = typeof aiPrompt === 'string' ? aiPrompt.slice(0, 10000) : '';
+
   const data = {
     scheduleData: schedule,
     hasSchedule: true,
     isActive: true,
     lifestyleContext: lifestyleContextForSave, // 문자열 배열로 저장
-    aiPrompt,                                // ⭐ 프롬프트 원문 필드 추가
+    aiPromptPreview: promptPreview,          // 대용량 방지: 미리보기만 저장
     conversationContext: conversationContext.slice(-12),
     createdAt: new Date(),
     updatedAt: new Date()
@@ -199,11 +212,12 @@ function CalendarPage() {
         { role: 'user', content: prompt }     // ✅ 프롬프트 포함
       ];
       
+      const sessionId = getOrCreateSessionId();
       const result = await generateSchedule(
         messages,
         patternsForAI, // ✅ 객체 패턴 보장
         existingTasksForAI,                    // ✅ 할 일 테이블 반영
-        {} // opts (빈 객체)
+        { userId: user.uid, sessionId } // opts
       );
       
       setLastSchedule(result.schedule);
@@ -278,11 +292,12 @@ function CalendarPage() {
         { role: 'user', content: prompt }
       ];
       
+      const sessionId = getOrCreateSessionId();
       const result = await generateSchedule(
         messages,
         savedLifestylePatterns, // ✅ DB 객체 패턴 사용
         existingTasksForAI,
-        {}
+        { userId: user.uid, sessionId }
       );
       
       setLastSchedule(result.schedule);
@@ -627,11 +642,16 @@ function CalendarPage() {
         : (await firestoreService.getLifestylePatterns(user.uid)); // 객체 배열이면 Firestore에서 로드
       const { existingTasksForAI } = await buildTasksForAI(user.uid);
 
+      const sessionId = getOrCreateSessionId();
       const apiResp = await apiService.generateSchedule(
         messagesForAPI,           // 1) messages
         patternsForAI,            // 2) lifestylePatterns (객체 배열)
         existingTasksForAI,       // 3) existingTasks ✅ 할 일 반영
-        {}                        // 4) opts (필요 없으면 빈 객체)
+        { 
+          userId: user.uid, 
+          sessionId,
+          promptContext: prompt  // 4) 사용자 자연어 입력을 promptContext로 전달
+        }
       );
       const newSchedule = apiResp?.schedule ? apiResp : { schedule: apiResp };
       

@@ -5,10 +5,23 @@ class AIService {
         this.openaiApiKey = process.env.OPENAI_API_KEY;
     }
 
-    // 허용 day 집합 추출 (사용자 메시지만 대상)
+    // 허용 day 집합 추출 (사용자 메시지만 대상, 예시/가이드 텍스트 무시)
     extractAllowedDays(messages) {
         const lastUser = [...messages].reverse().find(m => m.role === 'user')?.content || '';
-        const days = [...lastUser.matchAll(/\(day:(\d+)\)/g)].map(m => parseInt(m[1], 10));
+        
+        // 예시/가이드 텍스트는 무시 (예:, example:, 백틱, 따옴표 근처)
+        const isExampleText = (text, index) => {
+            const before = text.substring(Math.max(0, index - 50), index);
+            return /예[:： ]{0,3}|example[:： ]{0,3}|`[^`]{0,20}|["'][^"']{0,20}/.test(before);
+        };
+        
+        const re = /\(day:(\d+)\)/g;
+        const days = [];
+        for (const m of lastUser.matchAll(re)) {
+            if (!isExampleText(lastUser, m.index)) {
+                days.push(parseInt(m[1],10));
+            }
+        }
         return Array.from(new Set(days)).sort((a,b)=>a-b);
     }
 
@@ -96,7 +109,40 @@ class AIService {
                 }
             };
             
-            // 시간 범위 파싱
+            // 시간 범위 파싱 (HH:MM ~ HH:MM 지원 포함)
+            const hhmmRange = patternStr.match(/(\d{1,2}:\d{2})\s*[~\-]\s*(\d{1,2}:\d{2})/);
+            if (hhmmRange) {
+                const start = hhmmRange[1];
+                const end = hhmmRange[2];
+                // 요일 파싱
+                let days = [];
+                if (patternStr.includes('평일')) {
+                    days = [1,2,3,4,5];
+                } else if (patternStr.includes('주말')) {
+                    days = [6,7];
+                } else if (patternStr.includes('매일')) {
+                    days = [1,2,3,4,5,6,7];
+                } else {
+                    // 명시가 없으면 매일로 가정
+                    days = [1,2,3,4,5,6,7];
+                }
+                // 제목 추출 (시간 부분 제거)
+                const title = patternStr
+                    .replace(hhmmRange[0], '')
+                    .replace(/(평일|주말|매일)\s*/g, '')
+                    .replace(/[\s:]+$/, '')
+                    .trim()
+                    .replace(/^[:\-~]+/, '')
+                    .trim();
+                return {
+                    title: title || '활동',
+                    start,
+                    end,
+                    days
+                };
+            }
+
+            // 시간 범위 파싱 (오전/오후 시각 표현)
             const timeRangeMatch = patternStr.match(/([가-힣\s]*\d{1,2}시?)\s*[~-]\s*([가-힣\s]*\d{1,2}시?)/);
             if (!timeRangeMatch) return null;
             
@@ -116,6 +162,9 @@ class AIService {
                 days = [6, 7]; // 토, 일
             } else if (patternStr.includes('매일')) {
                 days = [1, 2, 3, 4, 5, 6, 7]; // 모든 요일
+            } else {
+                // 명시가 없으면 매일로 가정
+                days = [1, 2, 3, 4, 5, 6, 7];
             }
             
             // 제목 추출 (시간 부분과 요일 부분 제거)
@@ -170,7 +219,12 @@ class AIService {
             const forcedToday = /(오늘|금일)(까지)?/.test(rawUser);
             const forcedTomorrow = /(내일|익일|명일)(까지)?/.test(rawUser);
             const hasSpecificDate = /\(day:\d+\)/.test(rawUser);
-            const hasDeadline = /마감일.*day:\d+/.test(rawUser) || /(\d+월\s*\d+일|다음주|이번주)/.test(rawUser);
+            const hasDeadline =
+                /마감일.*day:\d+/.test(rawUser) ||
+                /(\d+월\s*\d+일|다음주|이번주)/.test(rawUser) ||
+                /(\d+)\s*일\s*(내|이내|안에)/.test(rawUser) ||
+                /(\d+)\s*주\s*(내|이내|안에)/.test(rawUser) ||
+                /(\d+)\s*(일|주)\s*(후|뒤)/.test(rawUser);
             
             // 작업용 day와 생활패턴용 day 분리
             let taskDays = [];
@@ -179,16 +233,16 @@ class AIService {
             if (forcedToday) {
                 // "오늘까지" 작업: 작업은 오늘만, 생활패턴은 7일치
                 taskDays = [baseRelDay];                  // 오늘만
-                lifestyleDays = Array.from({ length: 7 }, (_, i) => baseRelDay + i);  // 7일 연속
+                lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);  // 14일 연속
             } else if (forcedTomorrow) {
                 // "내일까지" 작업: 작업은 내일만, 생활패턴은 7일치
                 taskDays = [baseRelDay + 1];              // 내일만
-                lifestyleDays = Array.from({ length: 7 }, (_, i) => baseRelDay + i);
+                lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
             } else if (hasSpecificDate) {
                 // 특정 날짜 작업: 해당 날짜에만 작업, 생활패턴은 7일치
                 const extractedDays = this.extractAllowedDays(messages);
                 taskDays = extractedDays;
-                lifestyleDays = Array.from({ length: 7 }, (_, i) => baseRelDay + i);
+                lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
             } else if (hasDeadline) {
                 // 마감일이 있는 작업: 오늘부터 마감일까지 연속된 스케줄 생성
                 const extractedDays = this.extractAllowedDays(messages);
@@ -196,14 +250,34 @@ class AIService {
                     const maxDay = Math.max(...extractedDays);
                     taskDays = Array.from({ length: maxDay - baseRelDay + 1 }, (_, i) => baseRelDay + i);
                 } else {
-                    // 마감일을 파싱할 수 없는 경우 기본 14일
-                    taskDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
+                    // 상대 표현에서 기간 추출 (예: 3일 내, 2주 내, 3일 후)
+                    let windowDays = 14;
+                    const mDayWithin = rawUser.match(/(\d+)\s*일\s*(내|이내|안에)/);
+                    const mWeekWithin = rawUser.match(/(\d+)\s*주\s*(내|이내|안에)/);
+                    const mAfter = rawUser.match(/(\d+)\s*(일|주)\s*(후|뒤)/);
+                    if (mDayWithin) {
+                        const n = parseInt(mDayWithin[1], 10);
+                        if (Number.isFinite(n) && n > 0) windowDays = Math.min(14, Math.max(1, n));
+                    } else if (mWeekWithin) {
+                        const n = parseInt(mWeekWithin[1], 10);
+                        if (Number.isFinite(n) && n > 0) windowDays = Math.min(28, Math.max(7, n * 7));
+                    } else if (mAfter) {
+                        const n = parseInt(mAfter[1], 10);
+                        const unit = mAfter[2];
+                        if (unit === '주') {
+                            const days = n * 7;
+                            windowDays = Math.min(28, Math.max(1, days));
+                        } else {
+                            windowDays = Math.min(14, Math.max(1, n));
+                        }
+                    }
+                    taskDays = Array.from({ length: windowDays }, (_, i) => baseRelDay + i);
                 }
                 lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
             } else {
                 // 일반 작업: 오늘부터 7일간, 생활패턴은 7일치
-                taskDays = Array.from({ length: 7 }, (_, i) => baseRelDay + i);
-                lifestyleDays = Array.from({ length: 7 }, (_, i) => baseRelDay + i);
+                taskDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
+                lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
             }
             
             const allowedDays = [...new Set([...taskDays, ...lifestyleDays])].sort((a,b)=>a-b);
@@ -226,11 +300,11 @@ class AIService {
 [CONSTRAINTS]
 BASE_DAY: ${anchorDay}
 ALLOWED_DAYS: ${allowedDays.join(',') || '없음'}
-RETURN_FORMAT: day별로 스케줄을 생성하세요. 각 day는 {day, weekday, activities} 형태로 구성하세요.
+RETURN_FORMAT: day별로 스케줄을 생성하세요. 각 day는 {day, weekday, activities} 형태로 구성하세요. 최소 day:${anchorDay}부터 day:${anchorDay+13}까지 14일을 모두 포함하세요. 누락 없이 day 오름차순으로 출력하세요.
 [/CONSTRAINTS]
 
 **핵심 규칙:**
-1. 생활 패턴은 고정 시간대로 먼저 배치하고, 남는 시간에만 할 일을 배치하세요
+1. 생활 패턴은 14일 동안 매일/평일/주말 규칙에 맞게 먼저 배치하고, 남는 시간에만 할 일을 배치하세요
 2. 평일(day:1~5)과 주말(day:6~7)을 정확히 구분하세요
 3. 시간이 겹치지 않도록 주의하세요
 4. 반복/확장 일정은 금지. 입력에 없는 날짜로 일정 만들지 마세요
@@ -331,7 +405,13 @@ ${existingTasks.length > 0 ? existingTasks.map(task => `- ${task.title} (마감�
       ]
     }
   ],
-  "explanation": "스케줄 설계 이유를 구체적으로 설명하세요. 다음 사항들을 포함해야 합니다:\n1. 각 할 일을 왜 그 시간대에 배치했는지\n2. 중요도와 긴급도를 어떻게 고려했는지\n3. 생활패턴과의 조화는 어떻게 이루었는지\n4. 주말과 평일의 차이점은 어떻게 반영했는지\n5. 마감일까지의 시간 분배는 어떻게 계획했는지\n6. 사용자의 요구사항은 어떻게 반영했는지"
+  "explanation": "스케줄 설계 이유를 구체적으로 설명하세요. 다음 사항들을 포함해야 합니다:\n1. 각 할 일을 왜 그 시간대에 배치했는지\n2. 중요도×긴급도(Eisenhower) + 마감일 잔여시간 + 난이도 + 예상 소요시간을 어떻게 반영했는지\n3. 생활패턴과의 조화는 어떻게 이루었는지\n4. 주말과 평일의 차이점은 어떻게 반영했는지\n5. 마감일까지의 시간 분배는 어떻게 계획했는지 (연속적인 일자 배치 포함)\n6. 사용자의 요구사항은 어떻게 반영했는지"
+}
+
+"배치 기준(엄격)":
+- 중요도 상이면서 난이도 상인 작업은 하루 최소 90분 이상, 연속 45~60분 단위 블록으로 배치하세요.
+- 마감까지 남은 시간이 짧을수록 하루 투입 시간을 늘리되, 생활패턴과 겹치지 않도록 조정하세요.
+- 같은 작업은 가능한 동일 시간대에 반복 배치하여 루틴을 형성하되, 겹치면 이웃 시간대로 이동하세요.
 }
 
 **중요**: 
@@ -488,15 +568,17 @@ JSON만 반환하세요.`
                     activitiesOnly = parsed.activities;
                     meta.explanation = parsed.explanation ?? '';
                 } else if (Array.isArray(parsed.schedule)) {
-                    // 신(新) schedule 모드 → day는 무시하고 activities만 수집
+                    // 신(新) schedule 모드 → day-structured를 우선 보존
+                    meta.parsedSchedule = parsed.schedule;
+                    meta.explanation = parsed.explanation ?? '';
+                    meta.activityAnalysis = parsed.activityAnalysis ?? null;
+                    meta.notes = Array.isArray(parsed.notes) ? parsed.notes : [];
+                    // also collect activities for validation below
                     for (const dayObj of parsed.schedule) {
                         if (dayObj && Array.isArray(dayObj.activities)) {
                             activitiesOnly.push(...dayObj.activities);
                         }
                     }
-                    meta.explanation = parsed.explanation ?? '';
-                    meta.activityAnalysis = parsed.activityAnalysis ?? null;
-                    meta.notes = Array.isArray(parsed.notes) ? parsed.notes : [];
                 } else {
                     throw new Error('AI 응답에 activities 또는 schedule이 없습니다.');
                 }
@@ -608,6 +690,59 @@ JSON만 반환하세요.`
 
                 // === 서버가 day를 결정하고 스케줄 조립 ===
                 let finalSchedule = [];
+                // 0) AI가 day-structured 스케줄을 준 경우 그대로 사용하되,
+                //    lifestyle의 요일 일관성만 적용하여 필터링
+                if (Array.isArray(meta.parsedSchedule) && meta.parsedSchedule.length > 0) {
+                    const normalized = [];
+                    for (const dayObj of meta.parsedSchedule) {
+                        if (!dayObj || !Array.isArray(dayObj.activities)) continue;
+                        const dayVal = typeof dayObj.day === 'number' ? dayObj.day : anchorDay;
+                        const weekdayNum = this.relDayToWeekdayNumber(dayVal, now);
+                        const normActs = dayObj.activities.map(a => ({
+                            ...a,
+                            start: this.normalizeHHMM(a.start),
+                            end: this.normalizeHHMM(a.end)
+                        }));
+                        // lifestyle는 해당 요일만, task는 그대로 유지
+                        const filtered = normActs.filter(a => {
+                            if (a.type === 'lifestyle') {
+                                const s = this.normalizeHHMM(a.start);
+                                const e = this.normalizeHHMM(a.end);
+                                const key = `${(a.title || '').trim()}|${s}|${e}`;
+                                const days = patternIndex.get(key);
+                                return Array.isArray(days) ? days.includes(weekdayNum) : true;
+                            }
+                            return true;
+                        });
+                        normalized.push({
+                            day: dayVal,
+                            weekday: this.mapDayToWeekday(dayVal, now),
+                            activities: filtered
+                        });
+                    }
+                    // 14일 라이프스타일 베이스로 확장: 누락된 day는 lifestyle-only로 채우기
+                    const haveDays = new Set(normalized.map(d => d.day));
+                    for (const day of lifestyleDays) {
+                        if (!haveDays.has(day)) {
+                            const weekdayNum = this.relDayToWeekdayNumber(day, now);
+                            const dayLifestyles = lifestyles.filter(l => Array.isArray(l.__days) && l.__days.includes(weekdayNum));
+                            if (dayLifestyles.length) {
+                                normalized.push({
+                                    day,
+                                    weekday: this.mapDayToWeekday(day, now),
+                                    activities: dayLifestyles
+                                });
+                            }
+                        }
+                    }
+                    normalized.sort((a,b)=>a.day-b.day);
+                    if (normalized.length > 0) {
+                        finalSchedule = normalized;
+                    }
+                }
+
+                // 1) 위 보존 경로가 비어있는 경우에만 서버 조립 경로 사용
+                if (finalSchedule.length === 0) {
                 if (allowedDays.length === 1) {
                     const targetDay = allowedDays[0];
                     const weekdayNum = this.relDayToWeekdayNumber(targetDay, now);
@@ -625,7 +760,7 @@ JSON만 반환하세요.`
                         weekday: this.mapDayToWeekday(targetDay, now),
                         activities: dayActivities
                     }];
-                } else if (allowedDays.length > 1) {
+                    } else if (allowedDays.length > 1) {
                     // 다중 day 분배: 요일별로 정확한 생활패턴 적용
                     for (const day of allowedDays) {
                         const weekdayNum = this.relDayToWeekdayNumber(day, now); // 1..7
@@ -647,6 +782,7 @@ JSON만 반환하세요.`
                                 activities: dayActivities
                             });
                         }
+                        }
                     }
                 } else {
                     // 허용 day가 없으면 anchorDay에 배치
@@ -663,6 +799,7 @@ JSON만 반환하세요.`
                         activities: dayActivities
                     }];
                 }
+                // end of server assembly fallback
                 
                 // 빈 스케줄 방지 안전망
                 if (!finalSchedule.length) {
@@ -677,12 +814,180 @@ JSON만 반환하세요.`
                 }
                 
                 console.log('JSON 파싱 성공, activities 개수:', activitiesOnly.length);
+                
+                // === (신규) 분산 재배치 유틸 ===
+                const toMin = hhmm => {
+                    const [h,m] = hhmm.split(':').map(n=>parseInt(n,10));
+                    return h*60+m;
+                };
+                const overlap = (a,b) => !(toMin(a.end)<=toMin(b.start) || toMin(b.end)<=toMin(a.start));
+
+                function redistributeTasks(finalSchedule, { taskDays=[] } = {}) {
+                    // 1) 시간대 슬롯(120분) 정의 (UI 라운딩 고려)
+                    const SLOT_POOL = [
+                        ['09:00','11:00'], ['11:00','13:00'],
+                        ['14:00','16:00'], ['16:00','18:00'], ['19:00','21:00']
+                    ];
+
+                    // 2) day별로 lifestyle(고정) 점유표 만들고, task들은 임시 제거
+                    const dayMap = new Map();
+                    for (const dayObj of finalSchedule) {
+                        const fixed = [];
+                        const tasks = [];
+                        for (const a of (dayObj.activities||[])) {
+                            if (a.type === 'lifestyle') fixed.push({ start:a.start, end:a.end, title:a.title, type:a.type });
+                            else tasks.push(a);
+                        }
+                        dayMap.set(dayObj.day, { fixed, tasks });
+                        // 일단 task 비움
+                        dayObj.activities = fixed.slice();
+                    }
+
+                    // 3) 우선순위 점수 (없어도 안전한 기본값)
+                    const importanceMap = { '상':3, '중':2, '하':1 };
+                    const difficultyMap = { '상':1, '중':0, '하':-0.5 };
+
+                    // 4) 모든 day의 task를 하나의 배열로 모은 뒤, 마감/중요도 기반으로 정렬
+                    const bundled = [];
+                    for (const [day, { tasks }] of dayMap.entries()) {
+                        for (const t of tasks) {
+                            bundled.push({ day, t });
+                        }
+                    }
+                    bundled.sort((x,y)=>{
+                        const tx = x.t, ty = y.t;
+                        const s1 = (importanceMap[tx.importance] ?? 1) + (difficultyMap[tx.difficulty] ?? 0);
+                        const s2 = (importanceMap[ty.importance] ?? 1) + (difficultyMap[ty.difficulty] ?? 0);
+                        // 긴급도: 남은 일수 적을수록 가산 (finalSchedule의 최소 day 기준)
+                        const minDay = Math.min(...finalSchedule.map(d=>d.day));
+                        const dueX = Number.isFinite(tx.relativeDay) ? Math.max(1, tx.relativeDay - minDay + 1) : 999;
+                        const dueY = Number.isFinite(ty.relativeDay) ? Math.max(1, ty.relativeDay - minDay + 1) : 999;
+                        const u1 = 1 / dueX, u2 = 1 / dueY;
+                        return (s2 + u2) - (s1 + u1);
+                    });
+
+                    // 5) 해시로 시작 슬롯 다양화(같은 제목이 매일 같은 슬롯 고정되게)
+                    const hash = str => [...String(str)].reduce((a,c)=>((a<<5)-a+c.charCodeAt(0))|0,0);
+
+                    // 6) day별로 빈 슬롯 탐색해 task 배치
+                    const allDays = finalSchedule.map(d=>d.day).sort((a,b)=>a-b);
+                    const dayList = taskDays.length ? allDays.filter(d=>taskDays.includes(d)) : allDays;
+                    const byDay = (d)=>finalSchedule.find(x=>x.day===d);
+
+                    for (const item of bundled) {
+                        const task = item.t;
+                        // 상대 마감일이 있으면 그 날까지만, 없으면 전체 기간 고려
+                        const dueRel = Number.isFinite(task.relativeDay) ? task.relativeDay : Math.max(...dayList);
+                        for (const day of dayList) {
+                            if (day > dueRel) continue;
+                            const node = byDay(day);
+                            const taken = node.activities.map(a=>({start:a.start,end:a.end}));
+                            // 시작 슬롯을 제목 해시로 시프팅
+                            const offset = Math.abs(hash(task.title||'할 일')) % SLOT_POOL.length;
+                            let placed = false;
+                            for (let i=0;i<SLOT_POOL.length;i++){
+                                const [s,e] = SLOT_POOL[(i+offset)%SLOT_POOL.length];
+                                const probe = { start:s, end:e };
+                                const clash = taken.some(x=>overlap(x, probe));
+                                if (!clash) {
+                                    node.activities.push({ title: task.title || '할 일', start:s, end:e, type:'task' });
+                                    placed = true;
+                                    break;
+                                }
+                            }
+                            if (placed) break; // 하루 1블록만 먼저 채우고 다음 날로
+                        }
+                    }
+
+                    // 7) 시간순 정렬
+                    for (const d of finalSchedule) {
+                        d.activities.sort((a,b)=>toMin(a.start)-toMin(b.start));
+                    }
+                }
+
+                // === (여기에 추가) 만약 task가 한 시간대로 몰리면 재배치 ===
+                (function fixClustering(){
+                    const starts = [];
+                    for (const d of finalSchedule) {
+                        for (const a of (d.activities||[])) {
+                            if (a.type==='task') starts.push(a.start);
+                        }
+                    }
+                    if (starts.length >= 3) {
+                        // 30분 버킷으로 클러스터링 감지 (14:00, 14:30 → 14:00 버킷)
+                        const bucket = s => {
+                            const [h,m]=s.split(':').map(Number);
+                            const half = m<30? '00':'30';
+                            return `${String(h).padStart(2,'0')}:${half}`;
+                        };
+                        const freq = starts.map(bucket).reduce((m,s)=>(m[s]=(m[s]||0)+1,m),{});
+                        const [topStart, topCnt] = Object.entries(freq).sort((a,b)=>b[1]-a[1])[0] || [];
+                        if (topCnt / starts.length >= 0.6) { // 60% 이상이 한 시간대면 클러스터로 판단
+                            console.log(`[REDISTRIBUTE] 클러스터링 감지: ${topStart}에 ${topCnt}/${starts.length} 집중`);
+                            redistributeTasks(finalSchedule, { taskDays });
+                        }
+                    }
+                })();
+                
                 console.log('[AISVC_V2] FINAL schedule days =', finalSchedule.map(d=>d.day));
                 console.log('최종 스케줄:', JSON.stringify(finalSchedule, null, 2));
                 
+                // 안전망: 최소 분산 배치 (라운드로빈 + 여러 슬롯)
+                const hasAnyTask = finalSchedule.some(d => Array.isArray(d.activities) && d.activities.some(a => a.type === 'task'));
+                if (!hasAnyTask && Array.isArray(existingTasks) && existingTasks.length) {
+                    // 우선순위 점수(대략): 중요 상=3/중=2/하=1, 난이도 상=+1/중=+0/하=-0.5, 긴급(남은일수 적을수록 가산)
+                    const importanceMap = { '상': 3, '중': 2, '하': 1 };
+                    const difficultyMap = { '상': 1, '중': 0, '하': -0.5 };
+                    const slots = [
+                        ['09:00','10:30'], ['10:30','12:00'], ['14:00','15:30'], ['15:30','17:00']
+                    ];
+                    const days = finalSchedule.map(d => d.day);
+                    let slotIndex = 0, dayIndex = 0;
+
+                    const scored = existingTasks.map(t => {
+                        const imp = importanceMap[t.importance] ?? 1;
+                        const diff = difficultyMap[t.difficulty] ?? 0;
+                        const dueRel = Number.isFinite(t.relativeDay) ? t.relativeDay : (anchorDay + 6);
+                        const daysLeft = Math.max(1, dueRel - anchorDay + 1);
+                        const urgency = 1 / daysLeft;
+                        return { task: t, score: imp + diff + urgency };
+                    }).sort((a,b)=>b.score-a.score);
+
+                    // 라운드로빈으로 여러 날/여러 슬롯에 흩뿌리기
+                    for (const { task } of scored) {
+                        const day = days[dayIndex % days.length];
+                        const [start, end] = slots[slotIndex % slots.length];
+                        const idx = finalSchedule.findIndex(d => d.day === day);
+                        if (idx >= 0) {
+                            finalSchedule[idx].activities.push({ title: task.title || '할 일', start, end, type: 'task' });
+                        }
+                        slotIndex++; dayIndex++;
+                    }
+                }
+
+                // 설명 자동 생성 (AI가 빈 설명을 주면)
+                const buildFallbackExplanation = (schedule, tasks) => {
+                    const taskCount = schedule.reduce((sum, day) => 
+                        sum + (day.activities?.filter(a => a.type === 'task').length || 0), 0);
+                    const highPriorityTasks = tasks.filter(t => t.importance === '상').length;
+                    const days = schedule.length;
+                    
+                    return `총 ${days}일간의 스케줄을 생성했습니다. ${taskCount}개의 작업을 배치했으며, ${highPriorityTasks}개의 고우선순위 작업을 포함합니다. 생활 패턴을 고려하여 충돌 없는 시간대에 작업을 분산 배치했습니다.`;
+                };
+
+                // 추가 안전망: 여전히 tasks가 없다면 하루 1개라도 꽂기
+                const stillNoTask = !finalSchedule.some(d => d.activities?.some(a => a.type==='task'));
+                if (stillNoTask && existingTasks.length) {
+                    const first = finalSchedule[0];
+                    if (first) {
+                        first.activities = first.activities || [];
+                        first.activities.push({ title: existingTasks[0].title, start:'19:00', end:'21:00', type:'task' });
+                    }
+                }
+
                 return {
                     schedule: finalSchedule,
-                    explanation: meta.explanation || "스케줄 설계 이유",
+                    explanation: meta.explanation?.trim() || buildFallbackExplanation(finalSchedule, existingTasks),
                     activityAnalysis: meta.activityAnalysis ?? null,
                     notes: meta.notes ?? [],
                     __debug: {
@@ -1129,8 +1434,8 @@ ${conversationText}
         // 생활패턴을 기반으로 더미 스케줄 생성
         const schedule = [];
         
-        // 7일간의 스케줄 생성
-        for (let i = 1; i <= 7; i++) {
+        // 14일간의 스케줄 생성
+        for (let i = 1; i <= 14; i++) {
             const dayRel = baseRelDay + i - 1;
             const weekdayNum = this.relDayToWeekdayNumber(dayRel, now);
             const weekday = this.mapDayToWeekday(dayRel, now);
@@ -1185,15 +1490,17 @@ ${conversationText}
                 });
             }
             
-            // 기존 할 일 추가 (첫째 날에만)
-            if (i === 1 && existingTasks && Array.isArray(existingTasks)) {
-                existingTasks.forEach(task => {
-                    activities.push({
-                        title: task.title || '할 일',
-                        start: '09:00',
-                        end: '10:00',
-                        type: 'task'
-                    });
+            // 기존 할 일 분산 주입 (라운드로빈 + 마감일 윈도우)
+            const slots = [['09:00','10:30'], ['10:30','12:00'], ['14:00','15:30'], ['15:30','17:00']];
+            let rrIndex = (dayRel - baseRelDay) % slots.length;
+            if (existingTasks?.length) {
+                const todaysTasks = existingTasks.filter(t => {
+                    const untilRel = Number.isFinite(t.relativeDay) ? t.relativeDay : (baseRelDay + 13);
+                    return dayRel <= untilRel;
+                });
+                todaysTasks.forEach((t, i) => {
+                    const [start, end] = slots[(rrIndex + i) % slots.length];
+                    activities.push({ title: t.title || '할 일', start, end, type: 'task' });
                 });
             }
             

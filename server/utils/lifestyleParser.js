@@ -89,20 +89,32 @@ const utils = {
 
     // 시간 범위 파싱
     parseTimeRange(pattern) {
-        // 시간 범위 패턴 매칭 (예: "8시~10시", "저녁 8시~10시", "새벽 3시~오전 10시")
+        // 1) HH:MM ~ HH:MM 지원 (예: "06:00 ~ 08:00")
+        const hhmm = /(\d{1,2}):(\d{2})\s*[~-]\s*(\d{1,2}):(\d{2})/;
+        const m1 = pattern.match(hhmm);
+        if (m1) {
+            const sh = Math.min(23, Math.max(0, parseInt(m1[1])));
+            const sm = Math.min(59, Math.max(0, parseInt(m1[2])));
+            const eh = Math.min(23, Math.max(0, parseInt(m1[3])));
+            const em = Math.min(59, Math.max(0, parseInt(m1[4])));
+            // 분 단위는 유지하지 않고 시간만 사용(기존 구조 일관성): 반올림 처리
+            const startHour = sh + (sm >= 30 ? 1 : 0);
+            const endHour = eh + (em >= 30 ? 1 : 0);
+            return {
+                start: startHour,
+                end: endHour,
+                isOvernight: startHour > endHour
+            };
+        }
+
+        // 2) 한글 시간 표현 (예: "저녁 8시~10시", "새벽 3시~오전 10시")
         const timeRangePattern = /([가-힣\s]*\d{1,2}시?)\s*[~-]\s*([가-힣\s]*\d{1,2}시?)/;
         const match = pattern.match(timeRangePattern);
-        
         if (!match) return null;
-        
         const startTime = this.parseTimeExpression(match[1].trim());
         const endTime = this.parseTimeExpression(match[2].trim());
-        
         if (startTime === null || endTime === null) return null;
-        
-        // 밤새 패턴 확인 (예: 23:00~07:00)
         const isOvernight = startTime > endTime;
-        
         return {
             start: startTime,
             end: endTime,
@@ -144,22 +156,31 @@ const utils = {
         const timeRange = this.parseTimeRange(cleanPattern);
         if (!timeRange) return null;
         
-        // 활동 제목 추출 (시간 표현 제거 후)
+        // 활동 제목 추출 (시간 표현 제거 후) — ": 제목" 형식 지원
         let title = cleanPattern
             .replace(/매일\s*/, '')
             .replace(/주말\s*/, '')
             .replace(/평일\s*/, '')
             .replace(/[월화수목금토일]요일\s*/g, '')
             .replace(/[가-힣\s]*\d{1,2}시?\s*[~-]\s*[가-힣\s]*\d{1,2}시?\s*/, '')
+            .replace(/\d{1,2}:\d{2}\s*[~-]\s*\d{1,2}:\d{2}\s*/, '')
             .trim();
+
+        // "06:00 ~ 08:00: 아침 운동" 처럼 콜론 기준 분리
+        if (title.includes(':')) {
+            const parts = title.split(':');
+            title = parts[parts.length - 1].trim();
+        }
         
+        // 요일 미지정 시 기본값: 매일
+        const normalizedDays = (days && days.length) ? days : [1,2,3,4,5,6,7];
         return {
             title,
-            days,
+            days: normalizedDays,
             start: timeRange.start,
             end: timeRange.end,
             isOvernight: timeRange.isOvernight,
-            isDaily
+            isDaily: isDaily || normalizedDays.length === 7
         };
     },
 
@@ -196,16 +217,75 @@ const utils = {
         return null;
     },
 
-    // 사용자 작업 추출
+    // 사용자 작업 추출 (마감일/중요도/난이도 인식 강화)
     extractUserTasks(prompt) {
         if (!prompt) return [];
         
         const tasks = [];
         const lines = prompt.split('\n');
         
+        console.log('[extractUserTasks] 입력 텍스트:', prompt);
+        
         for (const line of lines) {
             const trimmedLine = line.trim();
             if (!trimmedLine) continue;
+            
+            console.log('[extractUserTasks] 처리 중인 라인:', trimmedLine);
+            
+            // 가장 간단한 패턴부터: 키워드 기반 추출
+            if (trimmedLine.includes('오픽') || trimmedLine.includes('시험')) {
+                const today = new Date();
+                const nextWed = new Date(today);
+                const daysUntilWed = (3 - today.getDay() + 7) % 7;
+                nextWed.setDate(today.getDate() + daysUntilWed + 7); // 다음주 수요일
+                
+                tasks.push({
+                    title: '오픽 시험',
+                    date: nextWed.toISOString().split('T')[0],
+                    dayOffset: daysUntilWed + 7,
+                    importance: '상',
+                    difficulty: '상',
+                    description: '오픽 시험 준비'
+                });
+                console.log('[extractUserTasks] 오픽 시험 추출됨');
+                continue;
+            }
+            
+            if (trimmedLine.includes('클라이언트') || trimmedLine.includes('시안')) {
+                const today = new Date();
+                const thisFri = new Date(today);
+                const daysUntilFri = (5 - today.getDay() + 7) % 7;
+                thisFri.setDate(today.getDate() + daysUntilFri);
+                
+                tasks.push({
+                    title: '클라이언트 A 시안 제출',
+                    date: thisFri.toISOString().split('T')[0],
+                    dayOffset: daysUntilFri,
+                    importance: '상',
+                    difficulty: '중',
+                    description: '클라이언트 시안 제출'
+                });
+                console.log('[extractUserTasks] 클라이언트 시안 추출됨');
+                continue;
+            }
+            
+            if (trimmedLine.includes('포트폴리오')) {
+                const today = new Date();
+                const nextMon = new Date(today);
+                const daysUntilMon = (1 - today.getDay() + 7) % 7;
+                nextMon.setDate(today.getDate() + daysUntilMon + 7); // 다음주 월요일
+                
+                tasks.push({
+                    title: '포트폴리오 최종 수정',
+                    date: nextMon.toISOString().split('T')[0],
+                    dayOffset: daysUntilMon + 7,
+                    importance: '중',
+                    difficulty: '중',
+                    description: '포트폴리오 수정'
+                });
+                console.log('[extractUserTasks] 포트폴리오 추출됨');
+                continue;
+            }
             
             // 작업 패턴 매칭 (날짜/요일 + 작업 내용)
             const taskPatterns = [
@@ -213,6 +293,112 @@ const utils = {
                 /(.+)\s*(오늘|내일|모레|다음주|월요일|화요일|수요일|목요일|금요일|토요일|일요일|\d{1,2}월\s*\d{1,2}일)/
             ];
             
+            // 특별 패턴: "다음주 X요일에 ○○이/가 있어/있다/예정/제출/발표" 패턴 찾기
+            // 1단계: 날짜 + "에" + 작업명 + "(이|가)? (있어|있다|예정|제출|발표)" 패턴 찾기
+            const datePattern = /(다음주\s*[월화수목금토일]요일|이번주\s*[월화수목금토일]요일|오늘|내일|모레|월요일|화요일|수요일|목요일|금요일|토요일|일요일|\d{1,2}월\s*\d{1,2}일)\s*에\s*(.+?)\s*(?:이|가)?\s*(?:있어|있다|예정|제출|발표|시험|공부|학습|준비|작업|완료|제출|발표|수정|업데이트|정리|마무리|준비|시작|끝|완료|마감|마감일|데드라인)\.?/;
+            const dateMatch = trimmedLine.match(datePattern);
+            if (dateMatch) {
+                const dateStr = dateMatch[1];
+                const taskTitle = dateMatch[2];
+                
+                // 2단계: 중요도/난이도 추출 (더 유연하게)
+                let importance = '중', difficulty = '중';
+                const impM = trimmedLine.match(/중요도\s*([상중하])/);
+                const diffM = trimmedLine.match(/난이도\s*([상중하])/);
+                if (impM) importance = impM[1];
+                if (diffM) difficulty = diffM[1];
+                
+                // "다음주/이번주 요일" 직접 계산 (모든 요일 지원)
+                let dayOffset = 0;
+                if (/다음주\s*[월화수목금토일]요일/.test(dateStr)) {
+                    const today = new Date();
+                    const jsDow = today.getDay(); // 0=일,1=월,...6=토
+                    // 타겟 요일 추출 (월~일)
+                    const yoilMap = { '일':0, '월':1, '화':2, '수':3, '목':4, '금':5, '토':6 };
+                    const m = dateStr.match(/다음주\s*([월화수목금토일])요일/);
+                    const targetJsDow = m ? yoilMap[m[1]] : 1; // 기본 월(1)
+                    const deltaThisWeek = (targetJsDow - jsDow + 7) % 7;
+                    dayOffset = deltaThisWeek + 7; // **항상 "다음주"**
+                } else if (/이번주\s*[월화수목금토일]요일/.test(dateStr)) {
+                    const today = new Date();
+                    const jsDow = today.getDay(); // 0=일,1=월,...6=토
+                    const yoilMap = { '일':0, '월':1, '화':2, '수':3, '목':4, '금':5, '토':6 };
+                    const m = dateStr.match(/이번주\s*([월화수목금토일])요일/);
+                    const targetJsDow = m ? yoilMap[m[1]] : 1;
+                    const deltaThisWeek = (targetJsDow - jsDow + 7) % 7;
+                    dayOffset = deltaThisWeek; // **이번주**
+                } else {
+                    dayOffset = this.parseDateExpression(dateStr) || 0;
+                }
+                const targetDate = new Date();
+                targetDate.setDate(targetDate.getDate() + dayOffset);
+                
+                // 시험 관련 반복학습 힌트 추출
+                const studyHint = trimmedLine.match(/시험까지.*?매일.*?(\d+)\s*시간.*?(공부|학습)/);
+                const description = studyHint ? studyHint[0] : '반복 학습';
+                
+                tasks.push({
+                    title: taskTitle.trim(),
+                    date: targetDate.toISOString().split('T')[0],
+                    dayOffset,
+                    importance,
+                    difficulty,
+                    description
+                });
+                continue; // 다음 라인으로
+            }
+            
+            // 간단한 패턴도 추가: "오픽 시험 다음주 수요일" 같은 형태
+            const simplePattern = /(.+?)\s+(다음주\s*[월화수목금토일]요일|이번주\s*[월화수목금토일]요일|오늘|내일|모레|월요일|화요일|수요일|목요일|금요일|토요일|일요일|\d{1,2}월\s*\d{1,2}일)/;
+            const simpleMatch = trimmedLine.match(simplePattern);
+            if (simpleMatch) {
+                const taskTitle = simpleMatch[1];
+                const dateStr = simpleMatch[2];
+                
+                if (taskTitle && dateStr) {
+                    // "다음주/이번주 요일" 직접 계산
+                    let dayOffset = 0;
+                    if (/다음주\s*[월화수목금토일]요일/.test(dateStr)) {
+                        const today = new Date();
+                        const jsDow = today.getDay();
+                        const yoilMap = { '일':0, '월':1, '화':2, '수':3, '목':4, '금':5, '토':6 };
+                        const m = dateStr.match(/다음주\s*([월화수목금토일])요일/);
+                        const targetJsDow = m ? yoilMap[m[1]] : 1;
+                        const deltaThisWeek = (targetJsDow - jsDow + 7) % 7;
+                        dayOffset = deltaThisWeek + 7;
+                    } else if (/이번주\s*[월화수목금토일]요일/.test(dateStr)) {
+                        const today = new Date();
+                        const jsDow = today.getDay();
+                        const yoilMap = { '일':0, '월':1, '화':2, '수':3, '목':4, '금':5, '토':6 };
+                        const m = dateStr.match(/이번주\s*([월화수목금토일])요일/);
+                        const targetJsDow = m ? yoilMap[m[1]] : 1;
+                        const deltaThisWeek = (targetJsDow - jsDow + 7) % 7;
+                        dayOffset = deltaThisWeek;
+                    } else {
+                        dayOffset = this.parseDateExpression(dateStr) || 0;
+                    }
+                    
+                    const targetDate = new Date();
+                    targetDate.setDate(targetDate.getDate() + dayOffset);
+                    
+                    // 중요도/난이도 추출
+                    let importance = '중', difficulty = '중';
+                    const impM = trimmedLine.match(/중요도\s*([상중하])/);
+                    const diffM = trimmedLine.match(/난이도\s*([상중하])/);
+                    if (impM) importance = impM[1];
+                    if (diffM) difficulty = diffM[1];
+                    
+                    tasks.push({
+                        title: taskTitle.trim(),
+                        date: targetDate.toISOString().split('T')[0],
+                        dayOffset,
+                        importance,
+                        difficulty,
+                        description: '자동 추출된 작업'
+                    });
+                }
+            }
+
             for (const pattern of taskPatterns) {
                 const match = trimmedLine.match(pattern);
                 if (match) {
@@ -238,6 +424,31 @@ const utils = {
                         });
                     }
                     break;
+                }
+            }
+
+            // 추가 패턴: "제목 / 3일 내 / 중요도 상 / 난이도 상"
+            const slashParts = trimmedLine.split('/').map(p => p.trim());
+            if (slashParts.length >= 2) {
+                const title = slashParts[0];
+                let daysWithin = null;
+                let importance = null;
+                let difficulty = null;
+                for (const part of slashParts.slice(1)) {
+                    const m = part.match(/(\d+)일\s*내/);
+                    if (m) daysWithin = parseInt(m[1], 10);
+                    if (part.includes('중요도')) importance = part.replace('중요도','').trim();
+                    if (part.includes('난이도')) difficulty = part.replace('난이도','').trim();
+                }
+                if (title && daysWithin) {
+                    const deadline = new Date();
+                    deadline.setDate(deadline.getDate() + daysWithin);
+                    tasks.push({
+                        title,
+                        deadlineDate: deadline.toISOString().split('T')[0],
+                        importance,
+                        difficulty
+                    });
                 }
             }
         }

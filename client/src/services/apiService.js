@@ -50,13 +50,27 @@ class ApiService {
       // 서버 구현체 호환을 위해 둘 다 포함 (백엔드에서 하나만 읽어도 됨)
       aiPrompt: lastContent,
       prompt: lastContent,
+      promptContext: opts.promptContext || lastContent, // 사용자 자연어 입력을 promptContext로 전달
       ...opts
     };
 
     console.log('[API] generateSchedule payload bytes:', new Blob([JSON.stringify(requestData)]).size);
+    
+    // userId/sessionId가 있으면 쿼리와 헤더에도 함께 넣어 서버에서 안전하게 읽도록
+    const qs = (opts?.userId && opts?.sessionId)
+      ? `?userId=${encodeURIComponent(opts.userId)}&sessionId=${encodeURIComponent(opts.sessionId)}`
+      : '';
 
-    return this.request(API_ENDPOINTS.SCHEDULE.GENERATE, {
+    const endpoint = `${API_ENDPOINTS.SCHEDULE.GENERATE}${qs}`;
+
+    const headers = {
+      ...API_HEADERS.JSON,
+      ...(opts?.userId ? { 'x-user-id': opts.userId } : {})
+    };
+
+    return this.request(endpoint, {
       method: 'POST',
+      headers,
       body: JSON.stringify(requestData)
     });
   }
@@ -130,9 +144,9 @@ class ApiService {
   }
 
   // 할 일 저장
-  async saveTaskToDB(sessionId, taskData) {
-    // ✅ 엔드포인트 체계 통일: /api/users/:sessionId/tasks
-    return this.request(`/api/users/${sessionId}/tasks`, {
+  async saveTaskToDB(userId, sessionId, taskData) {
+    // 정식 경로: /api/users/:userId/sessions/:sessionId/tasks
+    return this.request(`/api/users/${userId}/sessions/${sessionId}/tasks`, {
       method: 'POST',
       body: JSON.stringify({
         ...taskData
@@ -141,20 +155,20 @@ class ApiService {
   }
 
   // 할 일 조회 (중복 제거 + 통일)
-  async getTasks(sessionId) {
-    return this.request(`/api/users/${sessionId}/tasks`, { method: 'GET' });
+  async getTasks(userId, sessionId) {
+    return this.request(`/api/users/${userId}/sessions/${sessionId}/tasks`, { method: 'GET' });
   }
 
   // 할 일 삭제
-  async deleteTask(sessionId, taskId) {
-    return this.request(`/api/users/${sessionId}/tasks/${taskId}`, {
+  async deleteTask(userId, sessionId, taskId) {
+    return this.request(`/api/users/${userId}/sessions/${sessionId}/tasks/${taskId}`, {
       method: 'DELETE'
     });
   }
 
   // 할 일 활성/비활성 토글
-  async toggleTaskStatus(sessionId, taskId, isActive) {
-    return this.request(`/api/users/${sessionId}/tasks/${taskId}/toggle`, {
+  async toggleTaskStatus(userId, sessionId, taskId, isActive) {
+    return this.request(`/api/users/${userId}/sessions/${sessionId}/tasks/${taskId}/toggle`, {
       method: 'PATCH',
       body: JSON.stringify({ isActive })
     });
@@ -230,10 +244,10 @@ class ApiService {
   }
 
   // 대화형 피드백 분석
-  async analyzeConversationalFeedback(conversationalFeedbacks) {
+  async analyzeConversationalFeedback(message, sessionId) {
     return this.request('/api/ai/analyze-conversational-feedback', {
       method: 'POST',
-      body: JSON.stringify({ conversationalFeedbacks })
+      body: JSON.stringify({ message, sessionId })
     });
   }
 
