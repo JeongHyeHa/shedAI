@@ -170,6 +170,7 @@ class AIService {
             const forcedToday = /(오늘|금일)(까지)?/.test(rawUser);
             const forcedTomorrow = /(내일|익일|명일)(까지)?/.test(rawUser);
             const hasSpecificDate = /\(day:\d+\)/.test(rawUser);
+            const hasDeadline = /마감일.*day:\d+/.test(rawUser) || /(\d+월\s*\d+일|다음주|이번주)/.test(rawUser);
             
             // 작업용 day와 생활패턴용 day 분리
             let taskDays = [];
@@ -188,9 +189,20 @@ class AIService {
                 const extractedDays = this.extractAllowedDays(messages);
                 taskDays = extractedDays;
                 lifestyleDays = Array.from({ length: 7 }, (_, i) => baseRelDay + i);
+            } else if (hasDeadline) {
+                // 마감일이 있는 작업: 오늘부터 마감일까지 연속된 스케줄 생성
+                const extractedDays = this.extractAllowedDays(messages);
+                if (extractedDays.length > 0) {
+                    const maxDay = Math.max(...extractedDays);
+                    taskDays = Array.from({ length: maxDay - baseRelDay + 1 }, (_, i) => baseRelDay + i);
+                } else {
+                    // 마감일을 파싱할 수 없는 경우 기본 14일
+                    taskDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
+                }
+                lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
             } else {
-                // 일반 작업: 오늘에만 작업, 생활패턴은 7일치
-                taskDays = [baseRelDay];                   // 기본은 오늘
+                // 일반 작업: 오늘부터 7일간, 생활패턴은 7일치
+                taskDays = Array.from({ length: 7 }, (_, i) => baseRelDay + i);
                 lifestyleDays = Array.from({ length: 7 }, (_, i) => baseRelDay + i);
             }
             
@@ -214,7 +226,7 @@ class AIService {
 [CONSTRAINTS]
 BASE_DAY: ${anchorDay}
 ALLOWED_DAYS: ${allowedDays.join(',') || '없음'}
-RETURN_FORMAT: activities만 생성하세요. day 숫자는 만들지 마세요.
+RETURN_FORMAT: day별로 스케줄을 생성하세요. 각 day는 {day, weekday, activities} 형태로 구성하세요.
 [/CONSTRAINTS]
 
 **핵심 규칙:**
@@ -280,28 +292,46 @@ ${lifestylePatterns.length > 0
 ${existingTasks.length > 0 ? existingTasks.map(task => `- ${task.title} (마감일: ${task.deadline}, 중요도: ${task.importance}, 난이도: ${task.difficulty})`).join('\n') : '- 기존 할 일 없음'}
 
 **🚨🚨🚨 절대적인 규칙:**
-- 반드시 "activities" 배열만 반환하세요
-- "schedule" 배열은 절대 만들지 마세요
-- "day" 필드는 절대 포함하지 마세요
-- "weekday" 필드는 절대 포함하지 마세요
+- 반드시 day별로 스케줄을 생성하세요
+- 각 day는 {day, weekday, activities} 형태로 구성하세요
+- 마감일이 있는 작업은 오늘부터 마감일까지 연속된 스케줄을 생성하세요
+- 주말(day:6, day:7)에도 적절한 활동을 배치하세요
 
-**출력 형식 (activities만):**
+**출력 형식 (day별 스케줄):**
 {
-  "activities": [
+  "schedule": [
     {
-      "title": "수면",
-      "start": "02:00",
-      "end": "10:00",
-      "type": "lifestyle"
+      "day": 3,
+      "weekday": "수요일",
+      "activities": [
+        {
+          "title": "수면",
+          "start": "02:00",
+          "end": "10:00",
+          "type": "lifestyle"
+        },
+        {
+          "title": "졸업작품 제출",
+          "start": "09:00",
+          "end": "10:00",
+          "type": "task"
+        }
+      ]
     },
     {
-      "title": "졸업작품 제출",
-      "start": "09:00",
-      "end": "10:00",
-      "type": "task"
+      "day": 4,
+      "weekday": "목요일",
+      "activities": [
+        {
+          "title": "수면",
+          "start": "02:00",
+          "end": "10:00",
+          "type": "lifestyle"
+        }
+      ]
     }
   ],
-  "explanation": "스케줄 설계 이유를 구체적으로 설명하세요. 왜 이 시간대에 배치했는지, 어떤 우선순위를 고려했는지, 생활패턴과 어떻게 조화를 이루었는지 등을 포함하세요."
+  "explanation": "스케줄 설계 이유를 구체적으로 설명하세요. 다음 사항들을 포함해야 합니다:\n1. 각 할 일을 왜 그 시간대에 배치했는지\n2. 중요도와 긴급도를 어떻게 고려했는지\n3. 생활패턴과의 조화는 어떻게 이루었는지\n4. 주말과 평일의 차이점은 어떻게 반영했는지\n5. 마감일까지의 시간 분배는 어떻게 계획했는지\n6. 사용자의 요구사항은 어떻게 반영했는지"
 }
 
 **중요**: 

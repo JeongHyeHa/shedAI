@@ -252,6 +252,12 @@
   margin-top: 16px;
 }
 
+/* 챗봇 버튼 그룹 (관리 버튼과 간단 입력 버튼) */
+.chatbot-buttons-row > div {
+  display: flex;
+  gap: 10px;
+}
+
 /* 챗봇 모드 전환 버튼 */
 .chatbot-mode-btn {
   background-color: #1C2D5A !important;
@@ -266,4 +272,26 @@
 
 .chatbot-mode-btn:hover {
   background-color: #2a3f74 !important;
+}
+
+/* 챗봇 할 일 관리 버튼 */
+.chatbot-task-management-btn {
+  background: none;
+  border: 1px solid #1C2D5A;
+  color: #1C2D5A;
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+}
+
+.chatbot-task-management-btn:hover {
+  background-color: #1C2D5A;
+  color: white;
 } 

@@ -1,6 +1,7 @@
 // 생활패턴 입력/관리하는 창
 import React from 'react';
 import '../../styles/modal.css';
+import LoadingSpinner from '../UI/LoadingSpinner';
 
 const LifestyleModal = ({
   isOpen,             // 모달이 열려있는지 여부
@@ -29,13 +30,42 @@ const LifestyleModal = ({
         
         {/* 생활패턴 목록 표시 */}
         <div className="lifestyle-grid">
-          {lifestyleList.map((item, index) => (
-            <div key={index} className="lifestyle-item">
-              <pre style={{whiteSpace: 'pre-line', overflow: 'auto', maxHeight: '5em', margin: 0}} title={item}>{item}</pre>
-              <button className="lifestyle-delete-btn" onClick={() => onDeleteLifestyle(index)}>삭제</button>
+          {isClearing ? (
+            <div className="lifestyle-loading">
+              <LoadingSpinner />
+              <p>생활패턴을 삭제하는 중...</p>
             </div>
-          ))}
-          {lifestyleList.length === 0 && (
+          ) : (
+            lifestyleList.map((item, index) => {
+            // 안전한 문자열 변환 (객체/문자열 모두 처리)
+            let displayText = '';
+            try {
+              if (typeof item === 'string') {
+                displayText = item;
+              } else if (item && typeof item === 'object') {
+                const formatDays = (days = []) => {
+                  const dayNames = ['월', '화', '수', '목', '금', '토', '일'];
+                  return days.map(d => dayNames[d - 1] || d).join(', ');
+                };
+                const days = Array.isArray(item.days) ? formatDays(item.days) : '미정';
+                displayText = `${item.title || '제목없음'} (${item.start || '00:00'}-${item.end || '00:00'}, 요일: ${days})`;
+              } else {
+                displayText = String(item || '알 수 없음');
+              }
+            } catch (error) {
+              console.error('생활패턴 렌더링 에러:', error, item);
+              displayText = '렌더링 오류';
+            }
+            
+            return (
+              <div key={index} className="lifestyle-item">
+                <pre style={{whiteSpace: 'pre-line', overflow: 'auto', maxHeight: '5em', margin: 0}} title={displayText}>{displayText}</pre>
+                <button className="lifestyle-delete-btn" onClick={() => onDeleteLifestyle(index)}>삭제</button>
+              </div>
+            );
+          })
+          )}
+          {!isClearing && lifestyleList.length === 0 && (
             <div className="empty-message">등록된 생활 패턴이 없습니다. 아래에서 추가해주세요.</div>
           )}
         </div>
@@ -91,6 +121,7 @@ const LifestyleModal = ({
             <button 
               className="chat-send-button"
               onClick={(e) => { e.preventDefault(); onAddLifestyle(); }}
+              disabled={isClearing}
             >
               추가
             </button>
@@ -103,7 +134,13 @@ const LifestyleModal = ({
             >
               {isClearing ? '삭제 중...' : '전체 삭제'}
             </button>
-            <button className="lifestyle-add-btn" onClick={onSaveLifestyleAndRegenerate}>저장</button>
+            <button 
+              className="lifestyle-add-btn" 
+              onClick={onSaveLifestyleAndRegenerate}
+              disabled={isClearing}
+            >
+              저장
+            </button>
           </div>
         </div>
       </div>

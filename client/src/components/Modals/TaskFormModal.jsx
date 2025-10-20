@@ -11,10 +11,9 @@ const TaskFormModal = ({
   onTaskFormChange,     // 할 일 폼 변경 함수
   onLevelSelect,        // 할 일 중요도, 난이도 선택 함수
   onSubmit,             // 할 일 폼 전송 함수
+  isEditing,            // 수정 모드인지 여부
   overlayZIndex,
 }) => {
-  const [isSimpleMode, setIsSimpleMode] = useState(false);
-  const [simpleInput, setSimpleInput] = useState('');
 
   if (!isOpen) return null;
 
@@ -25,93 +24,12 @@ const TaskFormModal = ({
           <button className="back-to-chatbot-btn" onClick={onBackToChatbot}>
             <img src={arrowBackIcon} alt="뒤로가기" width="20" height="20" />
           </button>
-          <h2 className="task-form-title">할 일 입력</h2>
-          <div className="input-mode-toggle">
-            <button 
-              className={`mode-button ${!isSimpleMode ? 'active' : ''}`}
-              onClick={() => setIsSimpleMode(false)}
-            >
-              상세 입력
-            </button>
-            <button 
-              className={`mode-button ${isSimpleMode ? 'active' : ''}`}
-              onClick={() => setIsSimpleMode(true)}
-            >
-              간단 입력
-            </button>
-          </div>
+          <h2 className="task-form-title">{isEditing ? '할 일 수정' : '할 일 입력'}</h2>
         </div>
         
         <div className="task-form-container">
-          {isSimpleMode ? (
-            // 간단 입력 모드
-            <div className="simple-input-container">
-              <div className="form-group">
-                <label htmlFor="simple-task-input">할 일을 간단히 입력하세요</label>
-                <textarea 
-                  id="simple-task-input" 
-                  className="task-input simple-textarea" 
-                  placeholder="예: 내일 오전 9시 회의, 오후 2시 프로젝트 발표, 저녁 운동"
-                  value={simpleInput}
-                  onChange={(e) => setSimpleInput(e.target.value)}
-                  rows={4}
-                ></textarea>
-                <p className="input-hint">
-                  여러 할 일을 쉼표나 줄바꿈으로 구분해서 입력하세요.
-                </p>
-              </div>
-              
-              <div className="task-form-buttons">
-                <button 
-                  type="button"
-                  className="task-submit-button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    if (simpleInput.trim()) {
-                      // 간단 입력을 상세 폼으로 변환
-                      const tasks = simpleInput.split(/[,\n]/).map(task => task.trim()).filter(task => task);
-                      if (tasks.length > 0) {
-                        // 첫 번째 할 일을 기본 폼에 설정
-                        onTaskFormChange({
-                          target: {
-                            name: 'title',
-                            value: tasks[0]
-                          }
-                        });
-                        // 나머지 할 일들은 설명에 추가
-                        if (tasks.length > 1) {
-                          onTaskFormChange({
-                            target: {
-                              name: 'description',
-                              value: tasks.slice(1).join(', ')
-                            }
-                          });
-                        }
-                        // 기본값 설정
-                        onLevelSelect("importance", "중");
-                        onLevelSelect("difficulty", "중");
-                        // 마감일을 내일로 설정
-                        const tomorrow = new Date();
-                        tomorrow.setDate(tomorrow.getDate() + 1);
-                        onTaskFormChange({
-                          target: {
-                            name: 'deadline',
-                            value: tomorrow.toISOString().split('T')[0]
-                          }
-                        });
-                        onSubmit();
-                        setSimpleInput('');
-                      }
-                    }
-                  }}
-                >
-                  추가
-                </button>
-              </div>
-            </div>
-          ) : (
-            // 상세 입력 모드
-            <>
+          {/* 상세 입력 모드 */}
+          <>
               {/* 제목, 마감일 입력 폼 */}
               <div className="form-row">
                 <div className="form-group">
@@ -237,11 +155,10 @@ const TaskFormModal = ({
                     onSubmit();
                   }}
                 >
-                  추가
+{isEditing ? '수정' : '추가'}
                 </button>
               </div>
             </>
-          )}
         </div>
       </div>
     </div>

@@ -19,7 +19,9 @@ const Chatbot = ({
   isConverting = false,// 파일을 변환 중인지 여부 (기본값: false)
   isLoading = false,   // 로딩 중인지 여부 (기본값: false)
   chatbotMode = 'task',// 챗봇 모드 ('task' 또는 'feedback')
-  onModeChange         // 모드를 변경할 때 실행할 함수
+  onModeChange,        // 모드를 변경할 때 실행할 함수
+  onSwitchToForm,      // 간단 입력 폼으로 전환할 때 실행할 함수
+  onTaskManagementClick // 할 일 관리 버튼 클릭 시 실행할 함수
 }) => {
   const chatContainerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -186,6 +188,16 @@ const Chatbot = ({
         
         <div className="chatbot-buttons-row">
           <button className="chatbot-close-btn" onClick={onClose}>닫기</button>
+          {chatbotMode === 'task' && (
+            <div>
+              <button className="chatbot-task-management-btn" onClick={onTaskManagementClick} title="할 일 관리">
+                관리
+              </button>
+              <button className="chatbot-mode-btn" onClick={onSwitchToForm}>
+                간단 입력
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

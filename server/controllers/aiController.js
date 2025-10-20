@@ -290,9 +290,12 @@ class AIController {
     // 피드백 저장
     async saveFeedback(req, res) {
         try {
-            const { sessionId, feedback, rating } = req.body;
+            const { sessionId, scheduleId, feedbackText, feedback, rating } = req.body;
             
-            if (!sessionId || !feedback) {
+            // 클라이언트에서 feedbackText 또는 feedback으로 보낼 수 있음
+            const feedbackContent = feedbackText || feedback;
+            
+            if (!sessionId || !feedbackContent) {
                 return res.status(400).json({ 
                     ok: false, 
                     message: '세션 ID와 피드백이 필요합니다.' 
@@ -300,7 +303,7 @@ class AIController {
             }
 
             const firestoreService = require('../services/firestoreService');
-            await firestoreService.saveFeedback(sessionId, feedback, rating);
+            await firestoreService.saveFeedback(sessionId, feedbackContent, rating);
             
             res.json({ 
                 ok: true, 

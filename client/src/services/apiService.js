@@ -1,7 +1,6 @@
 // 서버와 통신하는 모든 API 호출을 관리 
 import { API_BASE_URL, API_ENDPOINTS, API_HEADERS } from '../constants/api';
 import firestoreService from './firestoreService';
-import { useAuth } from '../contexts/AuthContext';
 
 class ApiService {
   constructor() {
@@ -13,6 +12,8 @@ class ApiService {
     const url = `${this.baseURL}${endpoint}`;
     const config = {
       headers: API_HEADERS.JSON,
+      // 쿠키 세션을 쓴다면 주석 해제
+      // credentials: 'include',
       ...options
     };
 
@@ -32,27 +33,27 @@ class ApiService {
     }
   }
 
-  // 스케줄 생성(gpt-4o)
-  async generateSchedule(prompt, context, sessionId) {
-    // context가 객체인지 배열인지 확인하여 적절히 처리
-    let conversationContext = [];
-    let lifestylePatterns = [];
+  // 스케줄 생성(gpt-4o) - 서버 시그니처와 일치하도록 수정
+  async generateSchedule(messages, lifestylePatterns = [], existingTasks = [], opts = {}) {
+    console.log('=== API Service generateSchedule 호출 ===');
+    console.log('messages:', messages);
+    console.log('lifestylePatterns:', lifestylePatterns);
+    console.log('existingTasks:', existingTasks);
+    console.log('opts:', opts);
 
-    if (Array.isArray(context)) {
-      // context가 배열인 경우 (conversationContext)
-      conversationContext = context;
-    } else if (context && typeof context === 'object') {
-      // context가 객체인 경우
-      conversationContext = context.conversationContext || [];
-      lifestylePatterns = context.lifestylePatterns || [];
-    }
+    const lastContent = messages?.[messages.length - 1]?.content || '';
 
     const requestData = {
-      prompt,
-      conversationContext,
+      messages,
       lifestylePatterns,
-      sessionId
+      existingTasks,
+      // 서버 구현체 호환을 위해 둘 다 포함 (백엔드에서 하나만 읽어도 됨)
+      aiPrompt: lastContent,
+      prompt: lastContent,
+      ...opts
     };
+
+    console.log('[API] generateSchedule payload bytes:', new Blob([JSON.stringify(requestData)]).size);
 
     return this.request(API_ENDPOINTS.SCHEDULE.GENERATE, {
       method: 'POST',
@@ -130,21 +131,40 @@ class ApiService {
 
   // 할 일 저장
   async saveTaskToDB(sessionId, taskData) {
-    return this.request('/api/users/tasks', {
+    // ✅ 엔드포인트 체계 통일: /api/users/:sessionId/tasks
+    return this.request(`/api/users/${sessionId}/tasks`, {
       method: 'POST',
       body: JSON.stringify({
-        sessionId,
         ...taskData
       })
     });
   }
 
+  // 할 일 조회 (중복 제거 + 통일)
+  async getTasks(sessionId) {
+    return this.request(`/api/users/${sessionId}/tasks`, { method: 'GET' });
+  }
+
+  // 할 일 삭제
+  async deleteTask(sessionId, taskId) {
+    return this.request(`/api/users/${sessionId}/tasks/${taskId}`, {
+      method: 'DELETE'
+    });
+  }
+
+  // 할 일 활성/비활성 토글
+  async toggleTaskStatus(sessionId, taskId, isActive) {
+    return this.request(`/api/users/${sessionId}/tasks/${taskId}/toggle`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive })
+    });
+  }
+
   // 스케줄 저장
   async saveScheduleToDB(sessionId, scheduleData, scheduleSessionId) {
-    return this.request('/api/users/schedules', {
+    return this.request(`/api/users/${sessionId}/schedules`, {
       method: 'POST',
       body: JSON.stringify({
-        sessionId,
         scheduleData,
         scheduleSessionId
       })

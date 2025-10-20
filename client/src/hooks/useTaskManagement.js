@@ -14,7 +14,7 @@ export function useTaskManagement() {
   });
 
   // 할 일 폼 제출
-  const handleTaskFormSubmit = useCallback(async (onSuccess) => {
+  const handleTaskFormSubmit = useCallback(async (onSuccess, onScheduleRegenerate) => {
     if (!taskForm.title || !taskForm.deadline) {
       alert('제목과 마감일은 필수 입력 항목입니다.');
       return;
@@ -43,6 +43,11 @@ export function useTaskManagement() {
       // 성공 콜백 실행
       if (onSuccess) {
         onSuccess(formattedMessage);
+      }
+      
+      // 스케줄 재생성 콜백 실행
+      if (onScheduleRegenerate) {
+        onScheduleRegenerate();
       }
       
       // 폼 초기화

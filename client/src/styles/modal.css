@@ -57,6 +57,32 @@
     background-color: #2e3f6d;
   }
 
+  .modal button:disabled {
+    background-color: #ccc;
+    color: #666;
+    cursor: not-allowed;
+  }
+
+  .modal button:disabled:hover {
+    background-color: #ccc;
+  }
+
+  /* 생활패턴 로딩 스타일 */
+  .lifestyle-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    text-align: center;
+  }
+
+  .lifestyle-loading p {
+    margin-top: 16px;
+    color: #666;
+    font-size: 14px;
+  }
+
   /* 간단 입력 모드 스타일 */
   .input-mode-toggle {
     display: flex;
@@ -347,9 +373,9 @@
   .task-form-modal {
     max-width: 600px; 
     width: 90%;
-    max-height: 500px;
+    max-height: 450px;
     height: auto;
-    padding: 20px;
+    padding: 16px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -360,8 +386,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: 20px;
+    margin-bottom: 8px;
     width: 100%;
+    gap: 8px;
   }
   
   .task-form-title {
@@ -391,17 +418,35 @@
   .back-to-chatbot-btn:hover {
     opacity: 0.7;
   }
+
+  .task-management-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+  }
+
+  .task-management-btn:hover {
+    background-color: rgba(28, 45, 90, 0.1);
+  }
   
   .task-form-container {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 4px;
   }
   
   .form-row {
     display: flex;
     gap: 10px;
-    margin-bottom: 10px;
     width: 100%;
   }
   
@@ -445,7 +490,7 @@
   .form-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     margin-bottom: 0;
   }
   
@@ -532,7 +577,7 @@
   .task-form-buttons {
     display: flex;
     justify-content: center;
-    margin-top: 16px;
+    /* margin-top: 4px; */
   }
   
   .task-submit-button {

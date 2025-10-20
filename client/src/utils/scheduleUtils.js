@@ -1,4 +1,133 @@
-// 스케줄과 관련된 모든 처리 로직을 담당하는 유틸리티 
+// 스케줄과 관련된 모든 처리 로직을 담당하는 유틸리티
+import { parseDateString } from './dateParser';
+
+// 클라이언트용 날짜 전처리 함수 (test_dates.js와 동일한 로직)
+export function preprocessMessage(message) {
+  const base = new Date();
+  // 브라우저 호환성을 위해 lookbehind 제거
+  const KB = { L: '(^|[^가-힣A-Za-z0-9])', R: '($|[^가-힣A-Za-z0-9])' };
+  
+  let out = message;
+  let foundTime = false;
+  
+  // === 1) 상대 날짜들 (이미 태깅된 토큰 재태깅 방지) ===
+  const REL = [
+    { word: '오늘', days: 0 },
+    { word: '금일', days: 0 },
+    { word: '내일', days: 1 },
+    { word: '익일', days: 1 },
+    { word: '명일', days: 1 },
+    { word: '모레', days: 2 },
+    { word: '내일모레', days: 2 }
+  ];
+  
+  const toDay = (offset) => {
+    const d = new Date(base);
+    d.setDate(d.getDate() + offset);
+    return getGptDayIndex(d);
+  };
+  
+  const wrap = (re, fn) => {
+    out = out.replace(re, fn);
+  };
+  
+  for (const { word, days } of REL) {
+    wrap(new RegExp(`${KB.L}(${word})(?![^()]*\\))${KB.R}`, 'g'), (match, prefix, word) => {
+      return `${prefix}${word} (day:${toDay(days)})`;
+    });
+  }
+  
+  // === 2) 주간 표현들 ===
+  const WEEK = [
+    { word: '이번주', offset: 0 },
+    { word: '다음주', offset: 7 },
+    { word: '다다음주', offset: 14 }
+  ];
+  
+  const WEEKDAYS = [
+    { word: '월요일', day: 1 },
+    { word: '화요일', day: 2 },
+    { word: '수요일', day: 3 },
+    { word: '목요일', day: 4 },
+    { word: '금요일', day: 5 },
+    { word: '토요일', day: 6 },
+    { word: '일요일', day: 7 }
+  ];
+  
+  for (const { word: week, offset } of WEEK) {
+    for (const { word: day, day: dayNum } of WEEKDAYS) {
+      const re = new RegExp(`${KB.L}${week}\\s*${day}(?![^()]*\\))${KB.R}`, 'g');
+      wrap(re, (match, prefix, week, day) => {
+        // 해당 주의 시작일(월요일)을 기준으로 계산
+        const d = new Date(base);
+        d.setDate(d.getDate() + offset);
+        
+        // 해당 주의 월요일을 찾기
+        const currentDayOfWeek = d.getDay(); // 0=일요일, 1=월요일, ..., 6=토요일
+        const daysToMonday = currentDayOfWeek === 0 ? 6 : currentDayOfWeek - 1; // 월요일까지의 일수
+        d.setDate(d.getDate() - daysToMonday);
+        
+        // 월요일부터 목표 요일까지의 일수 계산
+        const targetDayOffset = dayNum - 1; // dayNum은 1=월요일, 7=일요일
+        d.setDate(d.getDate() + targetDayOffset);
+        
+        const finalDay = getGptDayIndex(d);
+        return `${prefix}${week} ${day} (day:${finalDay})`;
+      });
+    }
+  }
+  
+  // === 3) 특정 날짜들 ===
+  const DATE_PATTERNS = [
+    { re: /(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, fn: (m, month, day) => {
+      const d = new Date(base.getFullYear(), parseInt(month, 10) - 1, parseInt(day, 10));
+      return `${m} (day:${getGptDayIndex(d)})`;
+    }},
+    { re: /(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, fn: (m, year, month, day) => {
+      const d = new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
+      return `${m} (day:${getGptDayIndex(d)})`;
+    }},
+    { re: /(\d+)\s*(일|주)\s*(후|뒤)/g, fn: (m, num, unit, _) => {
+      const offset = unit === '주' ? parseInt(num, 10) * 7 : parseInt(num, 10);
+      const d = new Date(base);
+      d.setDate(d.getDate() + offset);
+      return `${m} (day:${getGptDayIndex(d)})`;
+    }}
+  ];
+  
+  for (const { re, fn } of DATE_PATTERNS) {
+    wrap(re, fn);
+  }
+  
+  // === 4) 시간 표현들 ===
+  const injectTime = (body, hour) => {
+    foundTime = true;
+    return `${body} (${hour.toString().padStart(2, '0')}:00)`;
+  };
+  
+  wrap(new RegExp(`${KB.L}(자정)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 0));
+  wrap(new RegExp(`${KB.L}(정오)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 12));
+  wrap(new RegExp(`${KB.L}(오전\\s*12시)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 0));
+  wrap(new RegExp(`${KB.L}(오후\\s*12시)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 12));
+  wrap(new RegExp(`${KB.L}(00시)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 0));
+  wrap(new RegExp(`${KB.L}(12시)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 12));
+  wrap(new RegExp(`${KB.L}오전\\s*(\\d{1,2})시${KB.R}`, 'g'), (match, prefix, word, h) => injectTime(`${prefix}${word}`, (parseInt(h, 10) % 12)));
+  wrap(new RegExp(`${KB.L}오후\\s*(\\d{1,2})시${KB.R}`, 'g'), (match, prefix, word, h) => injectTime(`${prefix}${word}`, (parseInt(h, 10) % 12) + 12));
+  wrap(new RegExp(`${KB.L}(\\d{1,2})시${KB.R}`, 'g'), (match, prefix, word, h) => {
+    const n = parseInt(h, 10);
+    return injectTime(`${prefix}${word}`, n === 12 ? 12 : n);
+  });
+  
+  // === 5) '시간만 있고 날짜가 전혀 없는 경우'에만 day 보강 ===
+  const hasDay = /\(day:\d+\)/.test(out);
+  const hasExplicitDate = /((이번|다음|다다음)\s*주\s*[월화수목금토일]요일)|(오늘|금일|익일|내일|명일|모레|내일모레)|(\d{1,2}\s*월\s*\d{1,2}\s*일)|(\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일)|(\d+\s*(일|주)\s*(후|뒤))/.test(out);
+  
+  if (!hasDay && foundTime && !hasExplicitDate) {
+    out = `(day:${getGptDayIndex(base)}) ` + out;
+  }
+  
+  return out;
+} 
 
 // 시간 리셋 함수: 하루의 시작 또는 끝으로 설정
 export function resetToStartOfDay(date, isEnd = false) {
@@ -21,122 +150,6 @@ export function resetToStartOfDay(date, isEnd = false) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:00`;
   }
 
-  // 날짜 문자열을 파싱하여 Date 객체로 변환
-  export function parseDateString(dateStr, baseDate = new Date()) {
-    if (!dateStr) return null;
-    
-    const today = resetToStartOfDay(baseDate);
-    const currentYear = today.getFullYear();
-    const currentMonth = today.getMonth();
-    const currentDate = today.getDate();
-    const currentDay = today.getDay(); // 0: 일요일, 6: 토요일
-    
-    // 이번주 토요일/일요일 패턴 처리
-    const thisWeekPattern = /이번\s*주\s*(월|화|수|목|금|토|일)요일/i;
-    const nextWeekPattern = /다음\s*주\s*(월|화|수|목|금|토|일)요일/i;
-    
-    if (thisWeekPattern.test(dateStr)) {
-      const match = dateStr.match(thisWeekPattern);
-      const targetDay = getKoreanDayIndex(match[1]);
-      const daysToAdd = (targetDay - currentDay + 7) % 7;
-      
-      const result = new Date(today);
-      result.setDate(currentDate + daysToAdd);
-      return result;
-    }
-    
-    if (nextWeekPattern.test(dateStr)) {
-      const match = dateStr.match(nextWeekPattern);
-      const targetDay = getKoreanDayIndex(match[1]);
-      const daysToAdd = (targetDay - currentDay + 7) % 7 + 7; // 다음주니까 +7
-      
-      const result = new Date(today);
-      result.setDate(currentDate + daysToAdd);
-      return result;
-    }
-    
-    // "다음 X요일", "오는 X요일" 패턴 처리
-    const nextDayPattern = /다음\s*(월|화|수|목|금|토|일)요일/i;
-    const comingDayPattern = /오는\s*(월|화|수|목|금|토|일)요일/i;
-    const thisDayPattern = /이번\s*(월|화|수|목|금|토|일)요일/i;
-    
-    if (nextDayPattern.test(dateStr) || comingDayPattern.test(dateStr)) {
-      const match = dateStr.match(nextDayPattern) || dateStr.match(comingDayPattern);
-      const targetDay = getKoreanDayIndex(match[1]);
-      // 현재 요일이 목표 요일보다 작으면 이번 주, 크거나 같으면 다음 주
-      const daysToAdd = currentDay < targetDay 
-        ? targetDay - currentDay 
-        : 7 - (currentDay - targetDay);
-      
-      const result = new Date(today);
-      result.setDate(currentDate + daysToAdd);
-      return result;
-    }
-    
-    if (thisDayPattern.test(dateStr)) {
-      const match = dateStr.match(thisDayPattern);
-      const targetDay = getKoreanDayIndex(match[1]);
-      // 목표 요일이 현재 요일보다 작거나 같으면 다음 주, 크면 이번 주
-      const daysToAdd = targetDay <= currentDay 
-        ? 7 - (currentDay - targetDay) 
-        : targetDay - currentDay;
-      
-      const result = new Date(today);
-      result.setDate(currentDate + daysToAdd);
-      return result;
-    }
-    
-    // 연도를 포함한 날짜 패턴 (2023년 5월 19일)
-    const fullDatePattern = /(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일/;
-    if (fullDatePattern.test(dateStr)) {
-      const match = dateStr.match(fullDatePattern);
-      const year = parseInt(match[1], 10);
-      const month = parseInt(match[2], 10) - 1; // 월은 0부터 시작
-      const day = parseInt(match[3], 10);
-      
-      return new Date(year, month, day);
-    }
-    
-    // X월 XX일 패턴 처리
-    const monthDayPattern = /(\d{1,2})월\s*(\d{1,2})일/;
-    if (monthDayPattern.test(dateStr)) {
-      const match = dateStr.match(monthDayPattern);
-      const month = parseInt(match[1], 10) - 1; // 월은 0부터 시작
-      const day = parseInt(match[2], 10);
-      
-      let year = currentYear;
-      // 현재 월보다 작으면 내년으로 설정
-      if (month < currentMonth || (month === currentMonth && day < currentDate)) {
-        year += 1;
-      }
-      
-      return new Date(year, month, day);
-    }
-    
-    // N일 후 패턴 처리
-    const daysLaterPattern = /(\d+)일\s*(후|뒤)/;
-    if (daysLaterPattern.test(dateStr)) {
-      const match = dateStr.match(daysLaterPattern);
-      const daysToAdd = parseInt(match[1], 10);
-      
-      const result = new Date(today);
-      result.setDate(currentDate + daysToAdd);
-      return result;
-    }
-    
-    // N주 후 패턴 처리
-    const weeksLaterPattern = /(\d+)주\s*(후|뒤)/;
-    if (weeksLaterPattern.test(dateStr)) {
-      const match = dateStr.match(weeksLaterPattern);
-      const weeksToAdd = parseInt(match[1], 10);
-      
-      const result = new Date(today);
-      result.setDate(currentDate + (weeksToAdd * 7));
-      return result;
-    }
-    
-    return null;
-  }
   
   // 한국어 요일 이름을 숫자 인덱스로 변환 (월:1 ~ 일:7)
   function getKoreanDayIndex(dayName) {
@@ -466,7 +479,13 @@ export function resetToStartOfDay(date, isEnd = false) {
     
     // 방어 코드: scheduleData가 유효하지 않으면 빈 배열 반환
     if (!scheduleData || !Array.isArray(scheduleData) || scheduleData.length === 0) {
-      console.warn('convertScheduleToEvents: 유효하지 않은 scheduleData', scheduleData);
+      // 빈 스케줄은 정상적인 경우이므로 경고 대신 디버그 로그만 출력
+      console.log('convertScheduleToEvents: 빈 스케줄 데이터', {
+        scheduleData,
+        type: typeof scheduleData,
+        isArray: Array.isArray(scheduleData),
+        length: scheduleData?.length
+      });
       return events;
     }
     

@@ -6,6 +6,22 @@ import apiService from '../services/apiService';
 import PieChart from '../components/Report/PieChart';
 import HabitTracker from '../components/Report/HabitTracker';
 
+// 마크다운 텍스트 파싱 함수
+const parseMarkdownText = (text) => {
+  if (!text) return text;
+  
+  // **텍스트** 패턴을 <strong>태그로 변환
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      const content = part.slice(2, -2);
+      return <strong key={index} style={{ fontWeight: 'bold', color: '#333' }}>{content}</strong>;
+    }
+    return part;
+  });
+};
+
 function extractCategoriesFromPatternsAndTasks({ lifestylePatterns = [], lastSchedule = null }) {
   // AI가 제공한 활동 비중 데이터가 있으면 우선 사용
   if (lastSchedule?.activityAnalysis) {
@@ -118,6 +134,7 @@ export default function MonthlyReport() {
   const [habits, setHabits] = useState([]);
   const [logsByHabit, setLogsByHabit] = useState({});
   const [aiAdvice, setAiAdvice] = useState('');
+  const [aiAdviceTimestamp, setAiAdviceTimestamp] = useState(null);
   const [isGeneratingAdvice, setIsGeneratingAdvice] = useState(false);
   const now = new Date();
   const year = now.getFullYear();
@@ -133,7 +150,9 @@ export default function MonthlyReport() {
       const activityAnalysis = userData ? extractCategoriesFromPatternsAndTasks(userData) : {};
       const response = await apiService.generateAdvice(userData, activityAnalysis);
       if (response.ok) {
+        const currentTime = new Date();
         setAiAdvice(response.advice);
+        setAiAdviceTimestamp(currentTime);
         
         // AI 조언을 Firestore에 저장
         try {
@@ -141,7 +160,7 @@ export default function MonthlyReport() {
             type: 'ai_advice',
             advice: response.advice,
             activityAnalysis: activityAnalysis,
-            generatedAt: new Date(),
+            generatedAt: currentTime,
             month: month,
             year: year
           });
@@ -209,6 +228,7 @@ export default function MonthlyReport() {
         
         if (latestAdvice) {
           setAiAdvice(latestAdvice.advice);
+          setAiAdviceTimestamp(latestAdvice.generatedAt);
           console.log('저장된 AI 조언을 로드했습니다.');
         }
       } catch (error) {
@@ -352,7 +372,17 @@ export default function MonthlyReport() {
             </button>
           </div>
           <div style={{ color: '#555', fontSize: '12px', marginBottom: 8, opacity: 0.7 }}>
-            (하루가 끝나가는 22시에 AI 조언이 생성됩니다.)
+            {aiAdviceTimestamp ? (
+              `마지막 생성: ${aiAdviceTimestamp.toLocaleString('ko-KR', { 
+                year: 'numeric', 
+                month: '2-digit', 
+                day: '2-digit', 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              })}`
+            ) : (
+              '(하루가 끝나가는 22시에 AI 조언이 생성됩니다.)'
+            )}
           </div>
           <div style={{ 
             color: '#555', 
@@ -367,7 +397,7 @@ export default function MonthlyReport() {
               <div style={{ margin: 0, lineHeight: '1.6', whiteSpace: 'pre-line' }}>
                 {aiAdvice.split('\n').map((line, index) => (
                   <div key={index} style={{ marginBottom: line.trim() ? '8px' : '4px' }}>
-                    {line.trim() ? line : <br />}
+                    {line.trim() ? parseMarkdownText(line) : <br />}
                   </div>
                 ))}
               </div>

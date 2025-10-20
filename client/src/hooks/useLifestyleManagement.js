@@ -46,7 +46,12 @@ export function useLifestyleManagement() {
     
     const newPatterns = lifestyleInput.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     const allPatterns = [...lifestyleList, ...newPatterns];
-    const uniquePatterns = Array.from(new Set(allPatterns.map(s => (s || '').trim()).filter(Boolean)));
+    const uniquePatterns = Array.from(new Set(allPatterns.map(s => {
+      if (typeof s === 'string') {
+        return s.trim();
+      }
+      return '';
+    }).filter(Boolean)));
     
     console.log('새 패턴들:', newPatterns);
     console.log('전체 패턴들:', allPatterns);
