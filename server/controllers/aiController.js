@@ -4,14 +4,28 @@ const utils = require('../utils/lifestyleParser');
 class AIController {
     // 스케줄 생성
     async generateSchedule(req, res) {
+        // ✅ try 밖으로 '입력 값/중간 산출물' 전부 끌어올려 스코프 보존
+        const {
+            messages,
+            prompt,
+            promptContext,
+            lifestylePatterns,
+            sessionId,
+            nowOverride,
+            anchorDay,
+            existingTasks: existingTasksFromClient
+        } = req.body || {};
+        const userId =
+            req.params?.userId || req.query?.userId || req.headers['x-user-id'] || req.body?.userId;
+
+        let messageArray = messages;
+        let parsedLifestylePatterns = [];
+        let existingTasks = Array.isArray(existingTasksFromClient) ? existingTasksFromClient.slice() : [];
+        let sessionIdFinal = sessionId;
+
         try {
-            const { messages, prompt, promptContext, lifestylePatterns, sessionId, nowOverride, anchorDay } = req.body;
-            const userId = req.params?.userId || req.query?.userId || req.headers['x-user-id'] || req.body?.userId;
             
-            console.log('[generateSchedule] userId:', userId, 'sessionId:', sessionId);
-            
-            // messages 배열이 없으면 prompt 또는 promptContext를 messages로 변환
-            let messageArray = messages;
+            // 스케줄 생성 요청 처리
             if (!messageArray) {
                 const contentToUse = promptContext || prompt;
                 if (contentToUse) {
@@ -22,15 +36,20 @@ class AIController {
                 messageArray = [...messageArray, { role: 'user', content: prompt }];
             }
 
-            // 서버측 날짜 전처리: 한국어 상대 날짜를 (day:X)로 주입
+            // 메시지 필터링 (빈/공백 메시지 제거)
+            messageArray = (messageArray || []).filter(
+                m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0
+            );
+
+            // 서버측 날짜 전처리: 한국어 상대 날짜를 (day:X)로 주입 (user 메시지만)
             try {
                 const { preprocessMessageForDays } = require('../utils/dateParser');
                 const baseNow = nowOverride ? new Date(nowOverride) : new Date();
-                messageArray = messageArray.map(m => (
-                    m && m.role && m.content
+                messageArray = messageArray.map(m =>
+                    (m && m.role === 'user' && m.content)
                         ? { ...m, content: preprocessMessageForDays(m.content, baseNow) }
                         : m
-                ));
+                );
             } catch (e) {
                 console.warn('서버 날짜 전처리 실패:', e.message);
             }
@@ -42,40 +61,30 @@ class AIController {
                 });
             }
 
-            if (!userId || !sessionId) {
-                console.warn('[generateSchedule] Missing userId/sessionId → tasks will NOT be saved to DB.');
-            }
+            if (!userId) console.warn('[generateSchedule] Missing userId …');
+            if (!sessionIdFinal) console.warn('[generateSchedule] Missing sessionId …');
 
-            // 라이프스타일 패턴 파싱 (객체 배열과 문자열 모두 처리) + Firestore 기본 로드
-            let parsedLifestylePatterns = [];
+            // 라이프스타일 패턴 파싱/로드
             if (lifestylePatterns && Array.isArray(lifestylePatterns)) {
                 parsedLifestylePatterns = lifestylePatterns
-                    .map(pattern => {
-                        // 이미 객체인 경우 그대로 사용
-                        if (typeof pattern === 'object' && pattern !== null) {
-                            return pattern;
-                        }
-                        // 문자열인 경우 파싱
-                        if (typeof pattern === 'string') {
-                            return utils.parseLifestylePattern(pattern);
-                        }
-            return null;
-                    })
-                    .filter(pattern => pattern !== null);
+                    .map(pattern => (typeof pattern === 'object' ? pattern :
+                        (typeof pattern === 'string' ? utils.parseLifestylePattern(pattern) : null)))
+                    .filter(Boolean);
             } else if (typeof lifestylePatterns === 'string' && lifestylePatterns.trim()) {
-                // 문자열로 전달된 경우 개별 패턴으로 분리
-                const patterns = lifestylePatterns.split(/\s+(?=\w)/).filter(p => p.trim());
+                const patterns = lifestylePatterns
+                    .split(/\r?\n|[;,]+/)
+                    .map(s => s.trim())
+                    .filter(Boolean);
                 parsedLifestylePatterns = patterns
                     .map(pattern => utils.parseLifestylePattern(pattern))
-                    .filter(pattern => pattern !== null);
+                    .filter(Boolean);
             } else if (userId) {
-                // 요청에 패턴이 없으면 Firestore에서 불러오기
                 try {
                     const firestoreService = require('../services/firestoreService');
                     const stored = await firestoreService.getLifestylePatterns(userId);
                     if (Array.isArray(stored)) {
                         parsedLifestylePatterns = stored
-                            .map(p => typeof p === 'string' ? utils.parseLifestylePattern(p) : p)
+                            .map(p => (typeof p === 'string' ? utils.parseLifestylePattern(p) : p))
                             .filter(Boolean);
                     }
                 } catch (e) {
@@ -83,14 +92,66 @@ class AIController {
                 }
             }
 
-            // 기존 할 일 가져오기
-            let existingTasks = [];
-            if (userId && sessionId) {
+            // 기존 할 일 준비
+            console.log('[AI Controller] 클라이언트에서 전달된 할 일:', existingTasks.length, '개');
+            const normFromClient = t => {
+                let dl = t?.deadline;
+                if (dl?.toDate) dl = dl.toDate();
+                if (dl instanceof Date) dl = dl.toISOString().split('T')[0];
+                if (typeof dl === 'string' && dl.includes('T')) dl = dl.split('T')[0];
+                return {
+                    title: t?.title || '제목없음',
+                    deadline: dl || null,
+                    importance: t?.importance || '중',
+                    difficulty: t?.difficulty || '중',
+                    description: t?.description || '',
+                    ...(Number.isFinite(t?.relativeDay) ? { relativeDay: t.relativeDay } : {})
+                };
+            };
+            existingTasks = existingTasks.map(normFromClient);
+            
+            console.log('[AI Controller] 클라이언트에서 전달된 할 일:', existingTasks.length, '개');
+            
+            if (existingTasks.length === 0 && userId) {
                 try {
                     const firestoreService = require('../services/firestoreService');
-                    existingTasks = await firestoreService.getSessionTasks(userId, sessionId);
+                    const [sessionTasks, globalTasks] = await Promise.all([
+                        sessionIdFinal ? firestoreService.getSessionTasks(userId, sessionIdFinal).catch(()=>[]) : Promise.resolve([]),
+                        firestoreService.getAllTasks ? firestoreService.getAllTasks(userId).catch(()=>[]) : Promise.resolve([])
+                    ]);
+
+                    const normalize = (t) => {
+                        // deadline 통일: ISO 'YYYY-MM-DD' 문자열
+                        let dl = t?.deadline;
+                        if (dl?.toDate) dl = dl.toDate();
+                        if (dl instanceof Date) dl = dl.toISOString().split('T')[0];
+                        if (typeof dl === 'string' && dl.includes('T')) dl = dl.split('T')[0];
+
+                        return {
+                            title: t?.title || '제목없음',
+                            deadline: dl || null,
+                            importance: t?.importance || '중',
+                            difficulty: t?.difficulty || '중',
+                            description: t?.description || '',
+                            // relativeDay가 있으면 유지 (없어도 aiService에서 안전하게 처리)
+                            ...(Number.isFinite(t?.relativeDay) ? { relativeDay: t.relativeDay } : {})
+                        };
+                    };
+
+                    // 세션+글로벌을 합치되, 제목/마감일/중요도/난이도 키로 중복 제거
+                    const merged = [...(sessionTasks||[]), ...(globalTasks||[])].map(normalize);
+                    const dedupKey = (x)=>`${x.title}||${x.deadline}||${x.importance}||${x.difficulty}`;
+                    const seen = new Set();
+                    existingTasks = merged.filter(t => {
+                        const k = dedupKey(t);
+                        if (seen.has(k)) return false;
+                        seen.add(k);
+                        return true;
+                    });
+                    
+                    console.log('[AI Controller] 병합된 할 일:', existingTasks.length, '개');
                 } catch (error) {
-                    console.warn('기존 할 일 조회 실패:', error.message);
+                    console.warn('할 일 병합 조회 실패:', error.message);
                 }
             }
 
@@ -155,52 +216,30 @@ class AIController {
                         });
                     }
                     
-                    console.log('[AI Controller] 추출된 할 일:', extractedTasks);
-                    console.log('[AI Controller] 추출 대상 텍스트:', allUserContent);
+                    // 할 일 추출 완료
                     
-                    if (extractedTasks.length > 0) {
-                        const firestoreService = require('../services/firestoreService');
-                        for (const task of extractedTasks) {
-                            // relativeDay 계산 (anchorDay 기준)
-                            const baseDay = anchorDay || 1;
-                            const relativeDay = task.dayOffset ? baseDay + task.dayOffset - 1 : baseDay;
-                            
-                            const taskData = {
-                                title: task.title,
-                                deadline: task.date,
-                                importance: task.importance || '중',
-                                difficulty: task.difficulty || '중',
-                                description: task.description || '',
-                                relativeDay: relativeDay,
-                                estimatedMinutes: 60
-                            };
-                            
-                            await firestoreService.saveSessionTask(userId, sessionId, taskData);
-                            console.log(`[AI Controller] 새 할 일 저장 완료: ${task.title}`);
-                            console.log('[AI Controller] 저장 경로 확인:',
-                                `users/${userId}/scheduleSessions/${sessionId}/tasks (management tab path must match!)`);
-                        }
-                        
-                        // 새로 저장된 할 일들을 existingTasks에 추가
-                        const newTasks = extractedTasks.map(task => ({
-                            title: task.title,
-                            deadline: task.date,
-                            importance: task.importance || '중',
-                            difficulty: task.difficulty || '중',
-                            description: task.description || '',
-                            relativeDay: task.dayOffset ? (anchorDay || 1) + task.dayOffset - 1 : (anchorDay || 1),
-                            estimatedMinutes: 60
-                        }));
-                        existingTasks = [...existingTasks, ...newTasks];
-                    }
+                    // 할 일은 클라이언트에서 처리하도록 변경
                 } catch (error) {
                     console.warn('할 일 추출/저장 실패:', error.message);
                 }
             }
 
-            // AI 서비스로 스케줄 생성 요청 (기존 할 일 포함)
-            const opts = { nowOverride, anchorDay };
-            const result = await aiService.generateSchedule(messageArray, parsedLifestylePatterns, existingTasks, opts);
+            // AI 서비스 호출
+            console.log('[AI Controller] AI 서비스로 전달할 할 일:', existingTasks.length, '개');
+            console.log('[AI Controller] AI 서비스 호출 시작 - 메시지:', messageArray.length, '개, 생활패턴:', parsedLifestylePatterns.length, '개');
+            
+            const result = await aiService.generateSchedule(
+                messageArray,
+                parsedLifestylePatterns,
+                existingTasks,
+                { nowOverride, anchorDay }
+            );
+            
+            console.log('[AI Controller] AI 서비스 응답 받음:', {
+                hasSchedule: !!result.schedule,
+                scheduleLength: result.schedule?.length || 0,
+                explanation: result.explanation?.substring(0, 100) + '...'
+            });
             
             // 서비스에서 반환한 모든 필드를 그대로 전달 (__debug 포함)
             res.json({ 
@@ -208,33 +247,39 @@ class AIController {
                 ...result
             });
         } catch (error) {
-            console.error('스케줄 생성 컨트롤러 에러:', error);
+            console.error('=== 스케줄 생성 컨트롤러 에러 ===');
+            console.error('에러 타입:', error.constructor.name);
+            console.error('에러 메시지:', error.message);
             console.error('에러 스택:', error.stack);
             console.error('요청 본문:', JSON.stringify(req.body, null, 2));
             
-            // 로컬 폴백 (안전화)
+            // API 키 관련 에러인지 확인
+            if (String(error.message).includes('OPENAI_API_KEY') || String(error.message).includes('API key')) {
+                console.error('[AI] API 키 관련 에러 감지. 더미 스케줄로 폴백합니다.');
+            }
+            
+            // ✅ 폴백: 여기서도 접근 가능한 외부 스코프 변수 사용
             try {
-                const { messages, prompt, existingTasks } = req.body;
-                const messageArray = messages || (prompt ? [{ role: 'user', content: prompt }] : []);
-                console.log('로컬 폴백 시도 - 메시지 배열:', messageArray);
-                console.log('로컬 폴백 시도 - 파싱된 라이프스타일 패턴:', parsedLifestylePatterns);
-                
-                // aiService의 더미 스케줄 생성 메서드 사용 (파싱된 패턴 사용)
-                const localSchedule = aiService.generateDummySchedule(parsedLifestylePatterns, existingTasks || [], { nowOverride, anchorDay });
+                const fbMessages = messageArray || (prompt ? [{ role: 'user', content: prompt }] : []);
+                console.log('로컬 폴백 시도 - 메시지 배열:', fbMessages);
+                console.log('로컬 폴백 시도 - 파싱된 라이프스타일 패턴(길이):', parsedLifestylePatterns?.length || 0);
+
+                const localSchedule = aiService.generateDummySchedule(
+                    parsedLifestylePatterns || [],
+                    existingTasks || [],
+                    { nowOverride, anchorDay }
+                );
                 console.log('로컬 스케줄 생성 성공:', localSchedule);
-                
-                return res.status(200).json({ 
-                    ok: true, 
+
+                return res.status(200).json({
+                    ok: true,
                     message: 'AI 서비스 오류로 더미 스케줄을 생성했습니다.',
                     ...localSchedule
                 });
             } catch (fallbackError) {
                 console.error('로컬 폴백 실패:', fallbackError);
                 console.error('폴백 에러 스택:', fallbackError.stack);
-                res.status(500).json({ 
-                    ok: false, 
-                    message: '스케줄 생성에 실패했습니다.' 
-                });
+                return res.status(500).json({ ok: false, message: '스케줄 생성에 실패했습니다.' });
             }
         }
     }
@@ -393,7 +438,11 @@ class AIController {
                 });
             }
 
-            const analysis = await aiService.analyzeConversationalFeedback(message, sessionId);
+            // AIService는 배열 형태를 기대 (userMessage, aiResponse 쌍들)
+            const payload = Array.isArray(message)
+                ? message
+                : [{ userMessage: String(message), aiResponse: '', sessionId }];
+            const analysis = await aiService.analyzeConversationalFeedback(payload);
             
             res.json({ 
                 ok: true, 
@@ -411,20 +460,20 @@ class AIController {
     // 피드백 저장
     async saveFeedback(req, res) {
         try {
-            const { sessionId, scheduleId, feedbackText, feedback, rating } = req.body;
+            const { userId, sessionId, scheduleId, feedbackText, feedback, rating } = req.body;
             
             // 클라이언트에서 feedbackText 또는 feedback으로 보낼 수 있음
             const feedbackContent = feedbackText || feedback;
             
-            if (!sessionId || !feedbackContent) {
+            if (!userId || !feedbackContent) {
                 return res.status(400).json({ 
                     ok: false, 
-                    message: '세션 ID와 피드백이 필요합니다.' 
+                    message: '사용자 ID와 피드백이 필요합니다.' 
                 });
             }
 
             const firestoreService = require('../services/firestoreService');
-            await firestoreService.saveFeedback(sessionId, feedbackContent, rating);
+            await firestoreService.saveFeedback(userId, feedbackContent, rating);
             
             res.json({ 
                 ok: true, 

@@ -169,6 +169,7 @@ class FirestoreService {
   // 할 일 저장
   async saveTask(userId, taskData) {
     try {
+      console.log('FirestoreService.saveTask 호출:', { userId, taskData });
       const tasksRef = collection(this.db, 'users', userId, 'tasks');
       
       const docRef = await addDoc(tasksRef, {
@@ -177,6 +178,7 @@ class FirestoreService {
         isActive: true
       });
       
+      console.log('Firestore 할 일 저장 성공, ID:', docRef.id);
       return docRef.id;
     } catch (error) {
       console.error('할 일 저장 실패:', error);
@@ -204,14 +206,18 @@ class FirestoreService {
   // 모든 할 일 조회 (활성화/비활성화 포함)
   async getAllTasks(userId) {
     try {
+      console.log('FirestoreService.getAllTasks 호출:', userId);
       const tasksRef = collection(this.db, 'users', userId, 'tasks');
       const q = query(tasksRef, orderBy('createdAt', 'desc'));
       const querySnapshot = await getDocs(q);
       
-      return querySnapshot.docs.map(doc => ({
+      const tasks = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
+      
+      console.log('Firestore 할 일 조회 성공, 개수:', tasks.length);
+      return tasks;
     } catch (error) {
       console.error('모든 할 일 조회 실패:', error);
       return [];

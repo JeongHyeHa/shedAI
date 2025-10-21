@@ -224,13 +224,9 @@ const utils = {
         const tasks = [];
         const lines = prompt.split('\n');
         
-        console.log('[extractUserTasks] 입력 텍스트:', prompt);
-        
         for (const line of lines) {
             const trimmedLine = line.trim();
             if (!trimmedLine) continue;
-            
-            console.log('[extractUserTasks] 처리 중인 라인:', trimmedLine);
             
             // 가장 간단한 패턴부터: 키워드 기반 추출
             if (trimmedLine.includes('오픽') || trimmedLine.includes('시험')) {
@@ -247,7 +243,6 @@ const utils = {
                     difficulty: '상',
                     description: '오픽 시험 준비'
                 });
-                console.log('[extractUserTasks] 오픽 시험 추출됨');
                 continue;
             }
             
@@ -265,7 +260,6 @@ const utils = {
                     difficulty: '중',
                     description: '클라이언트 시안 제출'
                 });
-                console.log('[extractUserTasks] 클라이언트 시안 추출됨');
                 continue;
             }
             
@@ -283,7 +277,6 @@ const utils = {
                     difficulty: '중',
                     description: '포트폴리오 수정'
                 });
-                console.log('[extractUserTasks] 포트폴리오 추출됨');
                 continue;
             }
             

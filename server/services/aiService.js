@@ -9,18 +9,19 @@ class AIService {
     extractAllowedDays(messages) {
         const lastUser = [...messages].reverse().find(m => m.role === 'user')?.content || '';
         
-        // 예시/가이드 텍스트는 무시 (예:, example:, 백틱, 따옴표 근처)
-        const isExampleText = (text, index) => {
-            const before = text.substring(Math.max(0, index - 50), index);
-            return /예[:： ]{0,3}|example[:： ]{0,3}|`[^`]{0,20}|["'][^"']{0,20}/.test(before);
-        };
+        // 코드블록/인라인코드/따옴표 예시 제거
+        const scrub = (txt) =>
+            txt
+                .replace(/```[\s\S]*?```/g, ' ')
+                .replace(/`[^`]*`/g, ' ')
+                .replace(/"[^"]*"/g, ' ')
+                .replace(/'[^']*'/g, ' ');
+        const clean = scrub(lastUser);
         
         const re = /\(day:(\d+)\)/g;
         const days = [];
-        for (const m of lastUser.matchAll(re)) {
-            if (!isExampleText(lastUser, m.index)) {
-                days.push(parseInt(m[1],10));
-            }
+        for (const m of clean.matchAll(re)) {
+            days.push(parseInt(m[1],10));
         }
         return Array.from(new Set(days)).sort((a,b)=>a-b);
     }
@@ -189,18 +190,26 @@ class AIService {
     // 스케줄 생성
     async generateSchedule(messages, lifestylePatterns = [], existingTasks = [], opts = {}) {
         try {
+            // API 키 상태 로깅
+            console.log('[aiService.generateSchedule] OpenAI API 키 상태:', {
+                hasKey: !!this.openaiApiKey,
+                keyLength: this.openaiApiKey ? this.openaiApiKey.length : 0,
+                keyPrefix: this.openaiApiKey ? this.openaiApiKey.substring(0, 10) + '...' : 'none'
+            });
+            
             // API 키 검증 - 개발 모드에서는 더미 데이터 반환
             if (!this.openaiApiKey) {
                 console.log('[개발 모드] OpenAI API 키가 없어서 더미 스케줄을 생성합니다.');
                 return this.generateDummySchedule(lifestylePatterns, existingTasks, opts);
             }
             
-            console.log('[AISVC_V2] activities-only mode ENABLED');
-            console.log('=== AI 서비스 generateSchedule 시작 ===');
-            console.log('메시지:', JSON.stringify(messages, null, 2));
-            console.log('라이프스타일 패턴:', JSON.stringify(lifestylePatterns, null, 2));
-            console.log('기존 할 일:', JSON.stringify(existingTasks, null, 2));
-            console.log('옵션:', JSON.stringify(opts, null, 2));
+            console.log('[aiService.generateSchedule] 실제 OpenAI API를 사용하여 스케줄을 생성합니다.');
+            console.log('[aiService.generateSchedule] 전달받은 할 일 개수:', existingTasks.length);
+            if (existingTasks.length > 0) {
+                console.log('[aiService.generateSchedule] 할 일 목록:', existingTasks.map(t => `${t.title} (${t.deadline})`));
+            }
+            
+            // AI 서비스 스케줄 생성 시작
             
             // 현재 날짜 정보 생성 (오버라이드 지원)
             const now = opts.nowOverride ? new Date(opts.nowOverride) : new Date();
@@ -283,12 +292,7 @@ class AIService {
             const allowedDays = [...new Set([...taskDays, ...lifestyleDays])].sort((a,b)=>a-b);
             const anchorDay = opts.anchorDay ?? (allowedDays.length ? allowedDays[0] : (dayOfWeek===0?7:dayOfWeek));
             
-            console.log('현재 날짜 정보:', { year, month, date, dayOfWeek, currentDayName });
-            console.log('[AISVC_V2] rawUser=', rawUser);
-            console.log('[AISVC_V2] forcedToday=', forcedToday, 'forcedTomorrow=', forcedTomorrow, 'hasSpecificDate=', hasSpecificDate);
-            console.log('[AISVC_V2] forcedTomorrow test:', /(내일|익일|명일)(까지)?/.test(rawUser));
-            console.log('[AISVC_V2] taskDays=', taskDays, 'lifestyleDays=', lifestyleDays.slice(0, 10), '...');
-            console.log('[AISVC_V2] allowedDays=', allowedDays, 'anchorDay=', anchorDay);
+            // 날짜 및 사용자 입력 분석 완료
             
             // 스케줄 생성에 특화된 시스템 프롬프트 추가
             const systemPrompt = {
@@ -304,19 +308,23 @@ RETURN_FORMAT: day별로 스케줄을 생성하세요. 각 day는 {day, weekday,
 [/CONSTRAINTS]
 
 **핵심 규칙:**
-1. 생활 패턴은 14일 동안 매일/평일/주말 규칙에 맞게 먼저 배치하고, 남는 시간에만 할 일을 배치하세요
-2. 평일(day:1~5)과 주말(day:6~7)을 정확히 구분하세요
-3. 시간이 겹치지 않도록 주의하세요
-4. 반복/확장 일정은 금지. 입력에 없는 날짜로 일정 만들지 마세요
-5. 활동 타입 구분:
+1. **🚨 CRITICAL: 할 일이 있으면 반드시 type: "task"로 배치하세요!** 
+   - 할 일 목록의 각 항목을 최소 1회 이상 반드시 'type': 'task'로 배치
+   - '자기 개발/공부' 같은 lifestyle로 대체/흡수 절대 금지
+   - task 제목에 반드시 키워드 포함: 예) "OPIc 준비: 스피킹 모의고사"
+2. 생활 패턴은 14일 동안 매일/평일/주말 규칙에 맞게 먼저 배치하고, 남는 시간에 할 일을 배치하세요
+3. 평일(day:1~5)과 주말(day:6~7)을 정확히 구분하세요
+4. 시간이 겹치지 않도록 주의하세요
+5. 반복/확장 일정은 금지. 입력에 없는 날짜로 일정 만들지 마세요
+6. 활동 타입 구분:
    - "lifestyle": 수면, 식사, 출근, 독서 등 반복되는 생활 패턴
    - "task": 특정 작업, 회의, 발표, 제출 등 일회성 할 일
-6. **절대 금지**: 
+7. **절대 금지**: 
    - 임의로 "출근 준비", "근무", "수면", "식사", "휴식", "준비", "마무리" 등을 추가하지 마세요
    - 사용자가 제공한 생활패턴과 할 일만 정확히 생성하세요
    - 중복된 활동을 생성하지 마세요
    - 생활패턴에 없는 활동은 절대 만들지 마세요
-7. **주말/평일 구분**: 
+8. **주말/평일 구분**: 
    - "주말" 패턴은 토요일(day:6), 일요일(day:7)에만 적용
    - "평일" 패턴은 월요일(day:1)~금요일(day:5)에만 적용
    - "매일" 패턴은 모든 요일에 적용
@@ -362,8 +370,11 @@ ${lifestylePatterns.length > 0
     }).join('\n')
   : '- 생활 패턴 없음'}
 
-[할 일 목록]
+[🚨 할 일 목록 - 반드시 type: "task"로 배치하세요!]
 ${existingTasks.length > 0 ? existingTasks.map(task => `- ${task.title} (마감일: ${task.deadline}, 중요도: ${task.importance}, 난이도: ${task.difficulty})`).join('\n') : '- 기존 할 일 없음'}
+
+**현재 할 일 개수: ${existingTasks.length}개**
+**⚠️ 위 할 일들을 lifestyle로 대체하지 말고 반드시 type: "task"로 배치하세요!**
 
 **🚨🚨🚨 절대적인 규칙:**
 - 반드시 day별로 스케줄을 생성하세요
@@ -422,7 +433,8 @@ JSON만 반환하세요.`
             };
 
             // 시스템 프롬프트를 맨 앞에 추가
-            const enhancedMessages = [systemPrompt, ...messages];
+            const enhancedMessages = [systemPrompt, ...messages]
+                .filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
             
             console.log('API 키 존재:', !!this.openaiApiKey);
             console.log('API 키 길이:', this.openaiApiKey ? this.openaiApiKey.length : 0);
@@ -434,7 +446,7 @@ JSON만 반환하세요.`
                     model: 'gpt-4o-mini', // 더 빠른 모델로 변경
                     messages: enhancedMessages,
                     temperature: 0.7,
-                    max_tokens: 2000, // 토큰 수 줄임
+                    max_tokens: 3000, // 토큰 수 증가
                     response_format: { type: 'json_object' }
                 },
                 {
@@ -583,6 +595,17 @@ JSON만 반환하세요.`
                     throw new Error('AI 응답에 activities 또는 schedule이 없습니다.');
                 }
 
+                // 🔁 (순서 중요) lifestyleAllowSet을 먼저 만든 뒤에 유효성 검증에서 사용
+                const lifestyleAllowSet = new Set(
+                    (lifestylePatterns || []).map(p => {
+                        if (typeof p === 'string') return p.trim();
+                        const t = (p.title || '').trim();
+                        const s = this.normalizeHHMM(p.start);
+                        const e = this.normalizeHHMM(p.end);
+                        return `${t}|${s}|${e}`;
+                    })
+                );
+
                 // 2) 최소 필수 필드 검증 (start/end/title/type)
                 const isValidAct = (a) =>
                     a && typeof a.start === 'string' && typeof a.end === 'string' &&
@@ -611,16 +634,6 @@ JSON만 반환하세요.`
                     
                     // 임의 활동 제거 (사용자가 제공하지 않은 활동들)
                     const forbiddenActivities = ['출근 준비', '근무', '준비', '마무리', '휴식'];
-                    // 생활패턴에 등록된 타이틀은 허용 (정규화된 키 스킴 사용)
-                    const lifestyleAllowSet = new Set(
-                        (lifestylePatterns || []).map(p => {
-                            if (typeof p === 'string') return p.trim();       // 문자열 패턴은 전체 문자열로
-                            const t = (p.title || '').trim();
-                            const s = this.normalizeHHMM(p.start);
-                            const e = this.normalizeHHMM(p.end);
-                            return `${t}|${s}|${e}`;                          // 동일한 키 스킴
-                        })
-                    );
                     
                     // 1) 정확 키 일치 우선
                     const activityKey = `${(activity.title || '').trim()}|${this.normalizeHHMM(activity.start)}|${this.normalizeHHMM(activity.end)}`;
@@ -628,7 +641,12 @@ JSON만 반환하세요.`
                     // 2) 타이틀만 허용(레거시 호환)
                     const allowByTitleOnly = [...lifestyleAllowSet].some(x => !x.includes('|') && x.includes((activity.title || '').trim()));
                     
-                    if (forbiddenActivities.some(f => activity.title.includes(f)) && !(allowByKey || allowByTitleOnly)) {
+                    // 금지어 정규화 비교
+                    const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '').trim();
+                    const banned = forbiddenActivities.map(norm);
+                    const activityTitleNorm = norm(activity.title);
+                    
+                    if (banned.some(b => activityTitleNorm.includes(b)) && !(allowByKey || allowByTitleOnly)) {
                         console.log(`임의 활동 제거: ${activity.title}`);
                         continue;
                     }
@@ -710,7 +728,7 @@ JSON만 반환하세요.`
                                 const e = this.normalizeHHMM(a.end);
                                 const key = `${(a.title || '').trim()}|${s}|${e}`;
                                 const days = patternIndex.get(key);
-                                return Array.isArray(days) ? days.includes(weekdayNum) : true;
+                                return Array.isArray(days) && days.includes(weekdayNum);
                             }
                             return true;
                         });
@@ -929,8 +947,25 @@ JSON만 반환하세요.`
                     }
                 })();
                 
+                // 보정: anchorDay부터 14일 연속 채우기 (누락 day는 lifestyle-only로)
+                const wantDays = Array.from({length:14}, (_,i)=>anchorDay+i);
+                const have = new Set(finalSchedule.map(d=>d.day));
+                for (const d of wantDays) {
+                    if (!have.has(d)) {
+                        const weekdayNum = this.relDayToWeekdayNumber(d, now);
+                        const dayLifestyles = lifestyles.filter(l => Array.isArray(l.__days) && l.__days.includes(weekdayNum));
+                        finalSchedule.push({
+                            day: d,
+                            weekday: this.mapDayToWeekday(d, now),
+                            activities: dayLifestyles
+                        });
+                    }
+                }
+                finalSchedule.sort((a,b)=>a.day-b.day);
+
                 console.log('[AISVC_V2] FINAL schedule days =', finalSchedule.map(d=>d.day));
-                console.log('최종 스케줄:', JSON.stringify(finalSchedule, null, 2));
+                const pretty = JSON.stringify(finalSchedule).slice(0, 4000);
+                console.log('최종 스케줄(미리보기 4KB):', pretty, '...');
                 
                 // 안전망: 최소 분산 배치 (라운드로빈 + 여러 슬롯)
                 const hasAnyTask = finalSchedule.some(d => Array.isArray(d.activities) && d.activities.some(a => a.type === 'task'));
@@ -1422,6 +1457,18 @@ ${conversationText}
             analysis: "대화형 피드백 기본 분석을 수행했습니다.",
             recommendations: []
         };
+    }
+
+    // OpenAI 연결 진단
+    async debugOpenAIConnection() {
+        try {
+            const resp = await axios.get('https://api.openai.com/v1/models', {
+                headers: { Authorization: `Bearer ${this.openaiApiKey}` }
+            });
+            return { status: resp.status, data: resp.data, message: 'OK' };
+        } catch (e) {
+            throw e;
+        }
     }
 
     // 개발용 더미 스케줄 생성

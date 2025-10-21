@@ -3,7 +3,32 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-// Firebase Admin SDK는 필요할 때만 초기화 (지연 로딩)
+// Firebase Admin SDK 초기화
+const admin = require('firebase-admin');
+
+// Firebase 초기화 (환경변수에서 서비스 계정 키 확인)
+if (!admin.apps.length) {
+    try {
+        // 환경변수에서 서비스 계정 키가 있는지 확인
+        if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+            const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount),
+                projectId: process.env.FIREBASE_PROJECT_ID
+            });
+        } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+            // 서비스 계정 파일 경로가 있는 경우
+            admin.initializeApp({
+                credential: admin.credential.applicationDefault(),
+                projectId: process.env.FIREBASE_PROJECT_ID
+            });
+        } else {
+            console.warn('[Firebase] 서비스 계정 키가 설정되지 않았습니다. Firestore 기능이 제한될 수 있습니다.');
+        }
+    } catch (error) {
+        console.error('[Firebase] 초기화 실패:', error.message);
+    }
+}
 
 const aiRoutes = require('./routes/aiRoutes');
 const app = express();

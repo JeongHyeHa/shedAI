@@ -15,6 +15,20 @@ const TaskManagementModal = ({ isOpen, onClose, onEditTask, onSaveAndRegenerate 
     }
   }, [isOpen, user]);
 
+  // 할 일 저장 이벤트 리스너
+  useEffect(() => {
+    const handleTaskSaved = () => {
+      if (isOpen) {
+        loadTasks();
+      }
+    };
+
+    window.addEventListener('taskSaved', handleTaskSaved);
+    return () => {
+      window.removeEventListener('taskSaved', handleTaskSaved);
+    };
+  }, [isOpen]);
+
   const loadTasks = async () => {
     setLoading(true);
     try {
@@ -76,7 +90,12 @@ const TaskManagementModal = ({ isOpen, onClose, onEditTask, onSaveAndRegenerate 
       <div className="modal task-management-modal" onClick={(e) => e.stopPropagation()}>
         <div className="task-management-header">
           <h2>할 일 관리</h2>
-          <button className="close-btn" onClick={onClose}>×</button>
+          <div className="header-actions">
+            <button className="refresh-btn" onClick={loadTasks} disabled={loading}>
+              {loading ? '새로고침 중...' : '새로고침'}
+            </button>
+            <button className="close-btn" onClick={onClose}>×</button>
+          </div>
         </div>
 
         <div className="task-list">

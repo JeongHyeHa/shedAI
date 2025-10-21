@@ -143,36 +143,7 @@ class ApiService {
     return await firestoreService.saveLifestylePatterns(userId, patterns);
   }
 
-  // 할 일 저장
-  async saveTaskToDB(userId, sessionId, taskData) {
-    // 정식 경로: /api/users/:userId/sessions/:sessionId/tasks
-    return this.request(`/api/users/${userId}/sessions/${sessionId}/tasks`, {
-      method: 'POST',
-      body: JSON.stringify({
-        ...taskData
-      })
-    });
-  }
-
-  // 할 일 조회 (중복 제거 + 통일)
-  async getTasks(userId, sessionId) {
-    return this.request(`/api/users/${userId}/sessions/${sessionId}/tasks`, { method: 'GET' });
-  }
-
-  // 할 일 삭제
-  async deleteTask(userId, sessionId, taskId) {
-    return this.request(`/api/users/${userId}/sessions/${sessionId}/tasks/${taskId}`, {
-      method: 'DELETE'
-    });
-  }
-
-  // 할 일 활성/비활성 토글
-  async toggleTaskStatus(userId, sessionId, taskId, isActive) {
-    return this.request(`/api/users/${userId}/sessions/${sessionId}/tasks/${taskId}/toggle`, {
-      method: 'PATCH',
-      body: JSON.stringify({ isActive })
-    });
-  }
+  // 할 일 관련 API는 클라이언트 Firestore 서비스를 직접 사용
 
   // 스케줄 저장
   async saveScheduleToDB(sessionId, scheduleData, scheduleSessionId) {

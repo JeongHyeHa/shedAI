@@ -1,7 +1,9 @@
 import { useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import apiService from '../services/apiService';
+import firestoreService from '../services/firestoreService';
 import { convertToRelativeDay } from '../utils/dateUtils';
+import { Timestamp, serverTimestamp } from 'firebase/firestore';
+import { toLocalMidnightDate } from '../utils/dateNormalize';
 
 export function useTaskManagement() {
   const { user } = useAuth();
@@ -14,7 +16,7 @@ export function useTaskManagement() {
   });
 
   // 할 일 폼 제출
-  const handleTaskFormSubmit = useCallback(async (onSuccess, onScheduleRegenerate) => {
+  const handleTaskFormSubmit = useCallback(async (onSuccess, onScheduleRegenerate, onTaskSaved) => {
     if (!taskForm.title || !taskForm.deadline) {
       alert('제목과 마감일은 필수 입력 항목입니다.');
       return;
@@ -30,29 +32,34 @@ export function useTaskManagement() {
     try {
       const taskData = {
         title: taskForm.title,
-        deadline: taskForm.deadline,
+        deadline: Timestamp.fromDate(toLocalMidnightDate(taskForm.deadline)), // ✔ 로컬 자정 고정
         importance: taskForm.importance,
         difficulty: taskForm.difficulty,
         description: taskForm.description,
         relativeDay: relativeDay,
-        estimatedMinutes: 60
+        estimatedMinutes: 60,
+        isActive: true,                 // ✅ 기본 활성
+        createdAt: serverTimestamp()    // ✅ 정렬/쿼리용 타임스탬프
       };
 
-      // 세션 ID 확보: 기존 값 사용, 없으면 생성하여 localStorage에 저장
-      let sessionId = localStorage.getItem('shedai_session_id');
-      if (!sessionId) {
-        sessionId = `sess_${Date.now()}`;
-        localStorage.setItem('shedai_session_id', sessionId);
-      }
+      // 세션 ID는 더 이상 필요하지 않음 (클라이언트 Firestore 직접 사용)
 
-      await apiService.saveTaskToDB(user.uid, sessionId, taskData);
+      // 클라이언트 Firestore에 직접 저장 (일관성을 위해)
+      console.log('할 일 저장 시도:', taskData);
+      const taskId = await firestoreService.saveTask(user.uid, taskData);
+      console.log('할 일 저장 완료, ID:', taskId);
+      
+      // 할 일 저장 완료 콜백 실행
+      if (onTaskSaved) {
+        onTaskSaved();
+      }
       
       // 성공 콜백 실행
       if (onSuccess) {
         onSuccess(formattedMessage);
       }
       
-      // 스케줄 재생성 콜백 실행
+      // 스케줄 재생성 콜백 실행 (Firestore는 강한 일관성)
       if (onScheduleRegenerate) {
         onScheduleRegenerate();
       }

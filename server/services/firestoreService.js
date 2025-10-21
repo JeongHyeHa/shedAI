@@ -21,8 +21,13 @@ class FirestoreService {
             throw error;
         }
     }
+
+    // 할 일 저장 (saveTaskToFirestore의 별칭)
+    async saveTask(userId, taskData) {
+        return this.saveTaskToFirestore(userId, taskData);
+    }
     
-    // 사용자의 할 일 목록 조회
+    // 사용자의 할 일 목록 조회 (활성화된 것만)
     async getTasks(userId) {
         try {
             const tasksRef = db.collection('users').doc(userId).collection('tasks');
@@ -34,6 +39,22 @@ class FirestoreService {
             }));
         } catch (error) {
             console.error('[Firestore] 할 일 조회 실패:', error);
+            return [];
+        }
+    }
+
+    // 모든 할 일 조회 (활성화/비활성화 포함)
+    async getAllTasks(userId) {
+        try {
+            const tasksRef = db.collection('users').doc(userId).collection('tasks');
+            const snapshot = await tasksRef.orderBy('createdAt', 'desc').get();
+            
+            return snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+        } catch (error) {
+            console.error('[Firestore] 모든 할 일 조회 실패:', error);
             return [];
         }
     }

@@ -527,6 +527,16 @@ export function resetToStartOfDay(date, isEnd = false) {
         const extendedProps = {
           type: activity.type || "task"
         };
+        
+        // 디버깅을 위한 로그 추가
+        if (activity.type === 'task') {
+          console.log('[convertScheduleToEvents] task 타입 이벤트 생성:', {
+            title: activity.title,
+            type: activity.type,
+            start: activity.start,
+            end: activity.end
+          });
+        }
 
         if (end < start) {
           const startOfToday = resetToStartOfDay(start);
