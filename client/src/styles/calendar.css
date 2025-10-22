@@ -170,6 +170,35 @@ button:disabled {
   max-width: 500px;
 }
 
+/* 월간 뷰 +more 안정화 (FullCalendar 기본 기능 활용) */
+.fc-daygrid-day-events .fc-h-event { 
+  display: none; 
+}
+.fc-daygrid-day-events .fc-h-event:nth-child(-n+3) { 
+  display: block; 
+}
+
+/* FullCalendar 기본 more-link 스타일 개선 */
+.fc-more-link {
+  font-size: 12px;
+  color: #666;
+  text-decoration: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background-color: #f0f0f0;
+  transition: background-color 0.2s;
+}
+
+.fc-more-link:hover {
+  background-color: #e0e0e0;
+  color: #333;
+}
+
+/* 월간 뷰 lifestyle 숨김 폴백 */
+.fc-hidden-lifestyle { 
+  display: none !important; 
+}
+
 /* 기본 버튼 스타일 */
 .level-button {
   background: #22336b;

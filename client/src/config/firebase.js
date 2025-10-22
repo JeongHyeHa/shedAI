@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore } from "firebase/firestore";
 import { getAnalytics } from "firebase/analytics";
 
 const firebaseConfig = {
@@ -30,7 +30,11 @@ try {
   if (requiredKeys.every(Boolean)) {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
-    db = getFirestore(app);
+    // Firestore 안정화 옵션 적용
+    db = initializeFirestore(app, {
+      experimentalAutoDetectLongPolling: true,  // 네트워크 이슈 시 자동으로 XHR long-polling
+      useFetchStreams: false                    // 일부 브라우저/확장과 충돌 방지
+    });
     // analytics는 브라우저 환경/HTTPS/measurementId가 있을 때만
     if (typeof window !== "undefined" && firebaseConfig.measurementId) {
       analytics = getAnalytics(app);

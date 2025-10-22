@@ -1,6 +1,7 @@
 // CalendarPageRefactored.jsx
 // 앱의 메인 페이지
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Calendar from '../components/Calendar/Calendar';
 import CalendarHeader from '../components/Calendar/CalendarHeader';
 import Modals from '../components/Modals/Modals';
@@ -26,9 +27,9 @@ import { UI_CONSTANTS } from '../constants/ui';
 import { 
   buildShedAIPrompt,
   buildFeedbackPrompt,
-  convertScheduleToEvents,
-  preprocessMessage
+  convertScheduleToEvents
 } from '../utils/scheduleUtils';
+import { detectComprehensiveFallback } from '../utils/fallbackTaskGenerator';
 import { 
   resetToStartOfDay,
   parseDateString,
@@ -42,7 +43,7 @@ import '../styles/floating.css';
 // 할 일을 existingTasks와 사람이 읽는 taskText로 동시에 만들기
 const buildTasksForAI = async (uid) => {
   const all = await firestoreService.getAllTasks(uid);
-  console.log('[buildTasksForAI] 전체 할 일:', all.length, '개');
+  console.log('[buildTasksForAI] 전체 할 일:', (all || []).length, '개');
   const active = (all || []).filter(t => t && (t.isActive === undefined || t.isActive === true));
   console.log('[buildTasksForAI] 활성 할 일:', active.length, '개');
   
@@ -53,7 +54,7 @@ const buildTasksForAI = async (uid) => {
 
   const existingTasksForAI = active.map(t => ({
     title: t.title || '제목없음',
-    deadline: toISODateLocal(t.deadline),   // ✅ 통일
+    deadline: toISODateLocal(t.deadline?.toDate ? t.deadline.toDate() : t.deadline),
     importance: t.importance || '중',
     difficulty: t.difficulty || '중',
     description: t.description || ''
@@ -68,6 +69,258 @@ const buildTasksForAI = async (uid) => {
 };
 
 
+// 프롬프트에 강제 규칙 주입
+const enforceScheduleRules = (basePrompt) => `${basePrompt}
+
+[반드시 지켜야 할 규칙]
+- [현재 할 일 목록]에 있는 모든 항목은 반드시 스케줄 JSON의 activities에 'type': 'task' 로 포함할 것.
+- lifestyle 항목과 병합/대체 금지. task는 task로 남길 것.
+- 모든 task는 start, end, title, type 필드를 포함해야 한다. (예: {"start":"19:00","end":"21:00","title":"오픽 시험 준비","type":"task"})
+- lifestyle과 task의 시간은 절대 겹치지 않도록 조정할 것. 겹친다면 task를 가장 가까운 빈 시간대로 이동하라.
+- 출력은 day별 객체 배열(JSON 하나)만 반환하라. 불필요한 텍스트 금지.
+`;
+
+// Conflict Resolver - 겹치면 자동 재배치
+const hhmmToMin = (s) => {
+  const [h,m] = String(s||'').split(':').map(n=>parseInt(n||'0',10));
+  return (isNaN(h)?0:h)*60 + (isNaN(m)?0:m);
+};
+const minToHHMM = (min) => {
+  const h = Math.floor(min/60)%24;
+  const m = min%60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+};
+const overlap = (aStart, aEnd, bStart, bEnd) => Math.max(aStart,bStart) < Math.min(aEnd,bEnd);
+
+// 상수 정의 (가독성 + 향후 설정화)
+const PREFERRED_MIN = 19 * 60;    // TODO: 사용자 설정화
+const MIN_SPLIT_CHUNK = 30;       // 최소 분할 단위(분)
+const FALLBACK_BLOCK = [21*60, 23*60]; // 최후 fallback
+
+// 시험/평가류 제목 판별 (함수 선언문으로 호이스팅 보장)
+function isExamTitle(t='') {
+  return /시험|테스트|평가|자격증|오픽|토익|토플|텝스|면접/i.test(String(t));
+}
+
+// day별 lifestyle 블록에서 빈 시간대 계산
+const buildFreeBlocks = (activities) => {
+  const dayStart = 0;       // 00:00
+  const dayEnd   = 24*60;   // 24:00
+  
+  // 자정 넘김 처리: 23:00~05:00 → [0,05:00] + [23:00,24:00]
+  const rawLifestyle = (activities||[])
+    .filter(a => (a.type||'').toLowerCase()==='lifestyle' && a.start && a.end)
+    .map(a => [hhmmToMin(a.start), hhmmToMin(a.end)]);
+
+  const lifestyle = [];
+  for (const [s,e] of rawLifestyle) {
+    if (e >= s) {
+      // 일반적인 경우: 09:00~17:00
+      lifestyle.push([s,e]);
+    } else {
+      // 자정 래핑: 23:00~05:00 → [0,05:00] + [23:00,24:00]
+      lifestyle.push([0, e]);
+      lifestyle.push([s, dayEnd]);
+    }
+  }
+  lifestyle.sort((x,y)=>x[0]-y[0]);
+
+  const merged = [];
+  for (const [s,e] of lifestyle) {
+    if (!merged.length || s>merged[merged.length-1][1]) merged.push([s,e]);
+    else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], e);
+  }
+
+  const free = [];
+  let cursor = dayStart;
+  for (const [s,e] of merged) {
+    if (cursor < s) free.push([cursor, s]);
+    cursor = Math.max(cursor, e);
+  }
+  if (cursor < dayEnd) free.push([cursor, dayEnd]);
+  return free;
+};
+
+// 19:00 근접도 가중치 기반 배치 (기본 120분). 맞는 블록 없으면 가장 큰 블록에 잘라 넣음.
+const placeIntoFree = (freeBlocks, durationMin) => {
+  const preferred = PREFERRED_MIN;
+  
+  // 19:00 근접도 기반으로 후보 정렬
+  const candidates = freeBlocks
+    .filter(([fs,fe]) => fe - fs >= durationMin)
+    .map(([fs,fe]) => {
+      const mid = fs + durationMin/2;
+      const distance = Math.abs(mid - preferred);
+      return { fs, fe, distance };
+    })
+    .sort((a,b) => a.distance - b.distance || a.fs - b.fs);
+  
+  if (candidates.length > 0) {
+    const { fs } = candidates[0];
+    return { start: fs, end: fs + durationMin };
+  }
+  
+  // 19:00 근접도로 찾을 수 없으면 가장 큰 블록에 우선 배치
+  let best = null, bestLen = -1;
+  for (const [fs,fe] of freeBlocks) {
+    const len = fe - fs;
+    if (len > bestLen) { bestLen = len; best = [fs,fe]; }
+  }
+  if (best) return { start: best[0], end: best[0] + Math.min(bestLen, durationMin) };
+  return null;
+};
+
+// 분할 배치 함수 (긴 작업을 여러 블록으로 나누어 배치)
+const splitPlaceIntoFree = (freeBlocks, durationMin) => {
+  // 긴 블록 순 정렬
+  const sorted = [...freeBlocks].sort((a,b)=> (b[1]-b[0]) - (a[1]-a[0]));
+  const segments = [];
+  let remain = durationMin;
+
+  for (const [fs, fe] of sorted) {
+    if (remain <= 0) break;
+    const len = fe - fs;
+    if (len <= MIN_SPLIT_CHUNK) continue;
+    const use = Math.min(len, remain);
+    segments.push({ start: fs, end: fs + use });
+    remain -= use;
+  }
+  return remain <= 0 ? segments : null;
+};
+
+// 스케줄 전역에서 lifestyle과 task 충돌 제거 + 누락 task에 시간 채움
+const fixOverlaps = (schedule) => {
+  const copy = (schedule||[]).map(day => ({
+    ...day,
+    activities: (day.activities||[]).map(a=>({...a}))
+  }));
+
+              // 🔍 시험/중요 작업 식별 (매일 반복 배치 대상)
+              const examTasks = [];
+              for (const day of copy) {
+                for (const a of day.activities || []) {
+                  if ((a.type||'').toLowerCase() === 'task' && 
+                      (a.importance === '상' || a.difficulty === '상' || a.isRepeating || isExamTitle(a.title))) {
+                    examTasks.push({
+                      title: a.title,
+                      importance: a.importance || (isExamTitle(a.title) ? '상' : '중'),
+                      difficulty: a.difficulty || (isExamTitle(a.title) ? '상' : '중'),
+                      duration: a.duration || 150,
+                      isRepeating: a.isRepeating ?? (isExamTitle(a.title) || false)
+                    });
+                  }
+                }
+              }
+
+  for (const day of copy) {
+    // free 블록 구해서 task 배치
+    const freeBlocks = buildFreeBlocks(day.activities);
+
+    for (const a of day.activities) {
+      const isLifestyle = (a.type||'').toLowerCase()==='lifestyle';
+      if (isLifestyle) continue;
+
+      // 기본 지속시간 (몰입 2시간 원칙) - 난이도/중요도 기반 조정
+      let dur = 120;
+      if (a.importance === '상' || a.difficulty === '상') {
+        dur = 150; // 집중 우선 배치형: 2.5시간
+      } else if (a.difficulty === '하') {
+        dur = 90; // 유동형: 1.5시간
+      }
+      
+      if (a.start && a.end) {
+        const s = hhmmToMin(a.start), e = hhmmToMin(a.end);
+        // lifestyle과 겹치면 무효 처리하여 재배치
+        const ls = day.activities.filter(x => (x.type||'').toLowerCase()==='lifestyle' && x.start && x.end);
+        const hasOverlap = ls.some(x => overlap(s,e, hhmmToMin(x.start), hhmmToMin(x.end)));
+        if (!hasOverlap && e>s) {
+          dur = e - s;
+          continue; // 그대로 둔다
+        }
+      }
+      // 시간 정보가 없거나 겹침 → 재배치
+      let placed = placeIntoFree(freeBlocks, dur);
+      if (placed) {
+        a.start = minToHHMM(placed.start);
+        a.end   = minToHHMM(placed.end);
+      } else {
+        // 분할 배치 시도
+        const parts = splitPlaceIntoFree(freeBlocks, dur);
+        if (parts && parts.length) {
+          // 첫 조각을 현재 activity로 사용
+          a.start = minToHHMM(parts[0].start);
+          a.end   = minToHHMM(parts[0].end);
+          // 나머지 조각은 동일 제목의 연속 task로 추가
+          for (let i=1;i<parts.length;i++) {
+            day.activities.push({
+              title: a.title,
+              start: minToHHMM(parts[i].start),
+              end: minToHHMM(parts[i].end),
+              type: a.type || 'task',
+              importance: a.importance,
+              difficulty: a.difficulty,
+              isRepeating: a.isRepeating
+            });
+          }
+        } else {
+          // 빈 블록 전혀 없으면, 밤 21:00~23:00 시도 (수면 23:00 고정 가정)
+          a.start = minToHHMM(FALLBACK_BLOCK[0]);
+          a.end   = minToHHMM(Math.min(FALLBACK_BLOCK[0] + dur, FALLBACK_BLOCK[1]));
+        }
+      }
+      // type 누락 방지
+      if (!a.type) a.type = 'task';
+    }
+
+    // 🔍 시험/중요 작업이 없는 날에 매일 반복 배치 추가
+    const hasExamTask = day.activities.some(a => 
+      (a.type||'').toLowerCase() === 'task' && 
+      (a.importance === '상' || a.difficulty === '상' || a.isRepeating)
+    );
+    
+    if (!hasExamTask && examTasks.length > 0) {
+      // 라운드 로빈을 위해 day.day 기준 선택
+      const examTask = examTasks[(day.day - (copy[0]?.day ?? day.day)) % examTasks.length];
+      
+      // 같은 제목의 task가 이미 있으면 skip
+      const hasSameTitle = day.activities.some(a =>
+        (a.type||'').toLowerCase() === 'task' && a.title === examTask.title
+      );
+      
+      if (!hasSameTitle) {
+        const freeBlocks = buildFreeBlocks(day.activities);
+        const placed = placeIntoFree(freeBlocks, examTask.duration);
+        
+        if (placed) {
+          const repeatedTask = {
+            title: examTask.title,
+            start: minToHHMM(placed.start),
+            end: minToHHMM(placed.end),
+            type: 'task',
+            importance: examTask.importance,
+            difficulty: examTask.difficulty,
+            isRepeating: true,
+            source: 'auto_repeat'
+          };
+          
+          day.activities.push(repeatedTask);
+          
+          // 🔄 반복 힌트를 실제 배치에 반영 (3일 연속 배치)
+          if (examTask.isRepeating) {
+            console.info('[Auto Repeat] 반복 배치 추가:', examTask.title, `(${minToHHMM(placed.start)}-${minToHHMM(placed.end)})`);
+          }
+        }
+      } else {
+        console.log('[Auto Repeat] 중복 제목으로 인해 스킵:', examTask.title);
+      }
+    }
+
+    // 마지막으로 활동을 시작시간 기준 정렬(가독성)
+    day.activities.sort((x,y)=>hhmmToMin(x.start||'00:00')-hhmmToMin(y.start||'00:00'));
+  }
+  return copy;
+};
+
 // 세션 ID 헬퍼 (사용자별 세션 분리)
 const getOrCreateSessionId = (userId) => {
   const sidKey = `shedai_session_id_${userId ?? 'anon'}`;
@@ -78,6 +331,112 @@ const getOrCreateSessionId = (userId) => {
     try { localStorage.setItem(sidKey, sid); } catch {}
   }
   return sid;
+};
+
+// 요일 정규화 함수
+const getKoreanWeekday = (day) => {
+  const weekdays = ['', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'];
+  return weekdays[day] || '알 수 없음';
+};
+
+// 상대 day 정규화 (랩핑 금지: 단조 증가 보장). 요일 텍스트는 1~7 순환
+const normalizeRelativeDays = (schedule, baseDay) => {
+  const arr = Array.isArray(schedule) ? schedule : [];
+  let current = baseDay;
+  return arr.map((dayObj, idx) => {
+    let dayNum = Number.isInteger(dayObj?.day) ? dayObj.day : (baseDay + idx);
+    // 첫날은 항상 baseDay로 리셋 (예측 가능성)
+    if (idx === 0 && dayNum !== baseDay) dayNum = baseDay;
+    // 오늘 이전 금지 + 단조 증가 보장
+    if (dayNum < current) dayNum = current;
+    if (idx > 0 && dayNum <= current) dayNum = current + 1;
+    current = dayNum;
+    const weekdayNum = ((dayNum - 1) % 7) + 1; // 1~7
+    return {
+      ...dayObj,
+      day: dayNum,
+      weekday: getKoreanWeekday(weekdayNum)
+    };
+  });
+};
+
+// 도우미: 각 제목의 마감 day 계산
+const buildDeadlineDayMap = (existingTasks = [], todayDate) => {
+  const map = new Map();
+  const base = todayDate.getDay() === 0 ? 7 : todayDate.getDay(); // 오늘의 day 값
+  const toMid = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()); // 로컬 자정
+  for (const t of (existingTasks || [])) {
+    const iso = toISODateLocal(t.deadline);
+    if (!iso) continue;
+    const d = new Date(iso);
+    const diffDays = Math.floor((toMid(d) - toMid(todayDate)) / (24*60*60*1000));
+    const deadlineDay = base + Math.max(0, diffDays);
+    map.set((t.title || '').trim(), deadlineDay);
+  }
+  return map;
+};
+
+// 후처리: 마감일 이후의 task 제거
+const capTasksByDeadline = (schedule, deadlineMap) => {
+  return (schedule || []).map(day => ({
+    ...day,
+    activities: (day.activities || []).filter(a => {
+      if ((a.type || 'task').toLowerCase() !== 'task') return true;
+      const dl = deadlineMap.get((a.title || '').trim());
+      return !dl || day.day <= dl;
+    })
+  }));
+};
+
+// (선택) 주말 업무 방지 하드가드
+const stripWeekendWork = (schedule) => {
+  return (schedule || []).map(day => ({
+    ...day,
+    activities: (day.activities || []).filter(a => {
+      const isWeekend = (day.day % 7 === 6) || (day.day % 7 === 0); // day:6,7
+      const isWorkLike = /업무|근무|회사|프로젝트|개발|리뷰|배포|코드|미팅|회의/.test(a.title || '');
+      return !(isWeekend && isWorkLike);
+    })
+  }));
+};
+
+// === NEW: task 메타 보강 유틸 ===
+const enrichTaskMeta = (schedule, existingTasks=[]) => {
+  if (!Array.isArray(schedule)) return schedule;
+  // existingTasks를 title 매칭용 맵으로
+  const byTitle = new Map();
+  (existingTasks||[]).forEach(t => byTitle.set((t.title||'').trim(), t));
+
+  for (const day of schedule) {
+    for (const a of (day.activities||[])) {
+      if ((a.type||'').toLowerCase() !== 'task') continue;
+
+      // 1) 기존 태스크 테이블에서 메타 가져오기 (title 기준)
+      const base = byTitle.get((a.title||'').trim());
+
+      // 2) 제목이 시험류면 상/상 + 반복
+      if (isExamTitle(a.title)) {
+        a.importance  = a.importance  || '상';
+        a.difficulty  = a.difficulty  || '상';
+        a.isRepeating = a.isRepeating ?? true;
+      }
+
+      // 3) 기존 태스크가 상/상이면 그대로 반영 (없으면 유지)
+      if (base) {
+        if (!a.importance)  a.importance  = base.importance || '중';
+        if (!a.difficulty)  a.difficulty  = base.difficulty || '중';
+        if (isExamTitle(a.title) || a.importance === '상' || a.difficulty === '상') {
+          a.isRepeating = a.isRepeating ?? true;
+        }
+      }
+
+      // 4) duration 보강 (fixOverlaps가 참고)
+      if (!a.duration && a.start && a.end) {
+        a.duration = hhmmToMin(a.end) - hhmmToMin(a.start);
+      }
+    }
+  }
+  return schedule;
 };
 
 // 스케줄 세션 저장(형식 통일) — 프롬프트는 미리보기로 제한 저장
@@ -127,24 +486,20 @@ function CalendarPage() {
   const calendarRef = useRef(null);
   const sessionIdRef = useRef(null);
   const today = resetToStartOfDay(new Date());
+  const navigate = useNavigate();
   
   // 인증 및 Firebase 훅
   const { user } = useAuth();
-  const { userInsights, generatePersonalizedSchedule } = usePersonalizedAI();
   
   // 새로운 분리된 훅들
   const { 
     allEvents, 
     setAllEvents, 
-    loading, 
     lastSchedule, 
-    setLastSchedule,
-    loadUserData,
-    updateSchedule 
+    setLastSchedule
   } = useScheduleData();
   const { 
     lifestyleList, 
-    setLifestyleList, 
     lifestyleInput, 
     setLifestyleInput,
     isClearing,
@@ -154,7 +509,7 @@ function CalendarPage() {
     handleSaveAndGenerateSchedule
   } = useLifestyleManagement();
   const { taskForm, setTaskForm, handleTaskFormSubmit } = useTaskManagement();
-  const { feedbackInput, setFeedbackInput, handleSubmitFeedbackMessage } = useFeedbackManagement();
+  const { handleSubmitFeedbackMessage } = useFeedbackManagement();
 
   // sessionIdRef 설정
   useEffect(() => {
@@ -193,6 +548,7 @@ function CalendarPage() {
   const [chatbotMode, setChatbotMode] = useState(UI_CONSTANTS.CHATBOT_MODES.TASK);
   const [taskInputMode, setTaskInputMode] = useState(UI_CONSTANTS.TASK_INPUT_MODES.CHATBOT);
   const [editingTaskId, setEditingTaskId] = useState(null); // 수정 중인 할 일 ID
+  const [showLifestyleInMonth, setShowLifestyleInMonth] = useState(true); // 월간 뷰에서 lifestyle 표시 여부
 
   // 스케줄 생성 콜백 - 서버 시그니처에 맞게 수정
   const handleScheduleGeneration = useCallback(async (prompt, message) => {
@@ -208,50 +564,88 @@ function CalendarPage() {
       const { existingTasksForAI, taskText } = await buildTasksForAI(user.uid);
 
       // 서버 시그니처에 맞게 호출: generateSchedule(messages, lifestylePatterns, existingTasks, opts)
-      const messages = [
+      const enforced = enforceScheduleRules(prompt);
+      const scheduleMessages = [
         ...conversationContext.slice(-8),  // 12개 → 8개로 축소
         { 
           role: 'user', 
-          content: `${prompt}\n\n[현재 할 일 목록]\n${taskText || '할 일 없음'}`  // ✅ taskText 포함
+          content: `${enforced}\n\n[현재 할 일 목록]\n${taskText || '할 일 없음'}`  // ✅ taskText 포함
         }
       ].filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
       
       // 디버깅을 위한 로그 추가
-      console.log('[handleScheduleGeneration] 전달 프롬프트 미리보기:\n', messages[messages.length - 1].content.slice(0, 500));
+      console.log('[handleScheduleGeneration] 전달 프롬프트 미리보기:\n', scheduleMessages[scheduleMessages.length - 1].content.slice(0, 500));
       
       const sessionId = getOrCreateSessionId(user.uid);
       const result = await generateSchedule(
-        messages,
+        scheduleMessages,
         patternsForAI, // ✅ 객체 패턴 보장
         existingTasksForAI,                    // ✅ 할 일 테이블 반영
         { userId: user.uid, sessionId } // opts
       );
       
-      // 방탄 로직: task가 비어 있을 때 보정
+      // 방탄 로직: task가 비어 있을 때 보정 (강화된 체크)
       let finalSchedule = result.schedule;
-      const hasTask = Array.isArray(result.schedule) &&
-        result.schedule.some(d =>
-          d.activities?.some(a => a.type && a.type.toLowerCase() !== 'lifestyle')
-        );
+      
+      // ▼▼ 추가: 메타 보강
+      finalSchedule = enrichTaskMeta(finalSchedule, existingTasksForAI);
+      
+      // 스케줄이 비어있거나 유효하지 않은 경우도 포함
+      const hasValidSchedule = Array.isArray(finalSchedule) && finalSchedule.length > 0;
+      const hasTask = hasValidSchedule && finalSchedule.some(d =>
+        d.activities?.some(a => a.type && a.type.toLowerCase() !== 'lifestyle')
+      );
 
-      if (!hasTask && /오픽|시험/.test(message)) {
-        const backupTask = {
-          title: '오픽 시험 준비',
-          start: '19:00',
-          end: '21:00',
-          type: 'task'
-        };
-        (finalSchedule[0].activities ||= []).push(backupTask);
-        console.warn('[handleScheduleGeneration Fallback] 오픽 task 자동 추가');
+      // ✅ 자동 태스크 감지 - 유연한 키워드 기반 (빈 스케줄에도 작동)
+      if (!hasTask) {
+        console.warn('[AI Schedule] task가 없거나 스케줄이 비어있음, fallback 감지 시작');
+        
+        const fallback = detectComprehensiveFallback({
+          text: enforced,
+          aiResponse: result,
+          existingTasks: existingTasksForAI
+        });
+        
+        if (fallback) {
+          console.warn('[AI Schedule] 자동 감지 fallback 추가:', fallback.title, `(${fallback.detectedType || fallback.source})`);
+          
+          // 시험/프로젝트 계열이면 isRepeating 기본 true 보강
+          const mustRepeat = /시험|테스트|평가|자격증|면접|프로젝트/i.test(fallback.title || '');
+          if (fallback.type?.toLowerCase?.() !== 'lifestyle' && fallback.isRepeating == null && mustRepeat) {
+            fallback.isRepeating = true;
+          }
+          
+          // 빈 스케줄일 때 안전 가드 (더 강화)
+          if (!hasValidSchedule) {
+            const todayDay = today.getDay() === 0 ? 7 : today.getDay();
+            finalSchedule = [{ 
+              day: todayDay, 
+              weekday: getKoreanWeekday(todayDay), 
+              activities: [] 
+            }];
+          }
+          (finalSchedule[0].activities ||= []).push(fallback);
+          // fallback 추가 후 시간순 정렬
+          finalSchedule[0].activities.sort((a,b)=>hhmmToMin(a.start||'00:00')-hhmmToMin(b.start||'00:00'));
+        } else {
+          console.warn('[AI Schedule] fallback 감지 실패 - 키워드나 기존 할 일이 없음');
+        }
       }
 
-      setLastSchedule(finalSchedule);
+      // day 정규화 (랩핑 금지: 연속 증가)
+      const baseDay = today.getDay() === 0 ? 7 : today.getDay();
+      const normalized = normalizeRelativeDays(finalSchedule, baseDay);
+      let fixed = fixOverlaps(normalized);
+      const deadlineMap = buildDeadlineDayMap(existingTasksForAI, today);
+      fixed = capTasksByDeadline(fixed, deadlineMap);
+      fixed = stripWeekendWork(fixed); // (선택) 주말에 업무류 제거
+      setLastSchedule(fixed);
       
       const scheduleSessionId = await saveScheduleSessionUnified({
         uid: user.uid,
-        schedule: finalSchedule,
+        schedule: fixed,
         lifestyleList: patternsForAI,
-        aiPrompt: prompt,                      // ✅ 프롬프트 DB 저장
+        aiPrompt: enforced,                     // ✅ 강화된 프롬프트 DB 저장
         conversationContext
       });
       setCurrentScheduleSessionId(scheduleSessionId);
@@ -308,29 +702,36 @@ function CalendarPage() {
       
       
       // 5. 스케줄 생성 (직접 호출로 변경)
-      const prompt = lastSchedule 
+      const promptBase = lastSchedule 
         ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule)
         : buildShedAIPrompt(lifestyleText, taskText, today);
+      const prompt = enforceScheduleRules(promptBase);
       
-      const messages = [
+      const scheduleMessages = [
         ...conversationContext.slice(-8),  // 12개 → 8개로 축소
         { role: 'user', content: prompt }
       ].filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
       
       const sessionId = getOrCreateSessionId(user.uid);
       const result = await generateSchedule(
-        messages,
+        scheduleMessages,
         savedLifestylePatterns, // ✅ DB 객체 패턴 사용
         existingTasksForAI,
         { userId: user.uid, sessionId }
       );
       
-      setLastSchedule(result.schedule);
+      const baseDay = today.getDay() === 0 ? 7 : today.getDay();
+      const normalized = normalizeRelativeDays(result.schedule, baseDay);
+      let fixed = fixOverlaps(normalized);
+      const deadlineMap = buildDeadlineDayMap(existingTasksForAI, today);
+      fixed = capTasksByDeadline(fixed, deadlineMap);
+      fixed = stripWeekendWork(fixed); // (선택) 주말에 업무류 제거
+      setLastSchedule(fixed);
       addAIMessage("스케줄이 생성되었습니다!");
 
       const scheduleSessionId = await saveScheduleSessionUnified({
         uid: user.uid,
-        schedule: result.schedule,
+        schedule: fixed,
         lifestyleList: savedLifestylePatterns,
         aiPrompt: prompt,
         conversationContext
@@ -345,7 +746,7 @@ function CalendarPage() {
       // 스피너 종료
       setIsLoading(false);
     }
-  }, [lifestyleList, lastSchedule, today, handleScheduleGeneration, handleSaveAndGenerateSchedule, setIsLoading, user]);
+  }, [lifestyleList, lastSchedule, today, handleSaveAndGenerateSchedule, setIsLoading, user?.uid, generateSchedule, addAIMessage]);
 
   // 할 일 관리창 저장 함수 (DB에서 모든 데이터 가져와서 스케줄 재생성)
   const handleTaskManagementSave = useCallback(async () => {
@@ -402,21 +803,22 @@ function CalendarPage() {
       // 4. 스케줄 생성 (직접 API 호출)
       // 스케줄 재생성 시작
       
-      const prompt = lastSchedule 
+      const promptBase = lastSchedule 
         ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule)
         : buildShedAIPrompt(lifestyleText, taskText, today);
+      const prompt = enforceScheduleRules(promptBase);
       
       addAIMessage("DB 데이터를 기반으로 스케줄을 재생성합니다...");
       
       try {
         // 서버 시그니처에 맞게 호출: generateSchedule(messages, lifestylePatterns, existingTasks, opts)
-        const messages = [
+        const scheduleMessages = [
           ...conversationContext.slice(-8),  // 12개 → 8개로 축소
           { role: 'user', content: prompt }
         ].filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
         
         const result = await generateSchedule(
-          messages,
+          scheduleMessages,
           savedLifestylePatterns, // DB에서 가져온 생활패턴 배열
           existingTasksForAI,                       // ✅ 반영
           {
@@ -425,12 +827,18 @@ function CalendarPage() {
           }
         );
         
-        setLastSchedule(result.schedule);
+        const baseDay = today.getDay() === 0 ? 7 : today.getDay();
+        const normalized = normalizeRelativeDays(result.schedule, baseDay);
+        let fixed = fixOverlaps(normalized);
+        const deadlineMap = buildDeadlineDayMap(existingTasksForAI, today);
+        fixed = capTasksByDeadline(fixed, deadlineMap);
+        fixed = stripWeekendWork(fixed); // (선택) 주말에 업무류 제거
+        setLastSchedule(fixed);
         
         // 통일된 저장 사용
         const scheduleSessionId = await saveScheduleSessionUnified({
           uid: user.uid,
-          schedule: result.schedule,
+          schedule: fixed,
           lifestyleList: savedLifestylePatterns,
           aiPrompt: prompt,                          // ✅ 프롬프트 저장
           conversationContext
@@ -452,7 +860,7 @@ function CalendarPage() {
       // 스피너 종료
       setIsLoading(false);
     }
-  }, [lastSchedule, today, handleScheduleGeneration, setIsLoading, user]);
+  }, [lastSchedule, today, setIsLoading, user?.uid, generateSchedule, addAIMessage]);
 
   // 폼 입력값 변경 핸들러
   const handleTaskFormChange = (e) => {
@@ -642,44 +1050,33 @@ function CalendarPage() {
     
     // 생활패턴을 객체로 가져와서 텍스트로 변환
     let lifestyleText = '';
-    let lifestylePatternsForAI = [];
     
     if (Array.isArray(lifestyleList) && typeof lifestyleList[0] === 'string') {
       // 문자열 배열이면 그대로 사용 (aiService.js에서 파싱)
-      lifestylePatternsForAI = lifestyleList;
       lifestyleText = lifestyleList.join('\n');
     } else {
       // 객체 배열이면 Firestore에서 다시 로드
-      lifestylePatternsForAI = await firestoreService.getLifestylePatterns(user.uid);
+      const lifestylePatternsForAI = await firestoreService.getLifestylePatterns(user.uid);
       lifestyleText = lifestylePatternsForAI.map(p => 
         typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
       ).join('\n');
     }
     
-    const prompt = lastSchedule 
+    const promptBase = lastSchedule 
       ? buildFeedbackPrompt(lifestyleText, processedMessage, lastSchedule)
       : buildShedAIPrompt(lifestyleText, processedMessage, today);
+    const prompt = enforceScheduleRules(promptBase);
 
-    // 프롬프트 강화 - 할 일을 반드시 일정에 포함하도록 명령
-    const enforcedPrompt = `${prompt}
-
-[반드시 지켜야 할 규칙]
-- 위 [현재 할 일 목록]에 있는 모든 할 일은 반드시 'type': 'task' 형태로 스케줄 JSON에 포함할 것.
-- 'lifestyle'에 포함된 항목으로 대체하거나 병합하지 말 것.
-- 각 task의 시간대(start~end)는 lifestyle과 겹치지 않게 배치할 것.
-- task에는 title, start, end, type='task' 필드가 반드시 있어야 함.
-- 예시:
-  { "title": "오픽 시험 준비", "start": "19:00", "end": "21:00", "type": "task" }
-`;
-
+    let timeoutId;
+    let controller;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), 60000);
       
       // 서버 시그니처에 맞게 호출: generateSchedule(messages, lifestylePatterns, existingTasks, opts)
       const messagesForAPI = [
         ...conversationContext.slice(-8),  // 12개 → 8개로 축소
-        { role: 'user', content: enforcedPrompt }
+        { role: 'user', content: prompt }
       ].filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
       
       const patternsForAI = (Array.isArray(lifestyleList) && typeof lifestyleList[0] === 'string')
@@ -695,13 +1092,27 @@ function CalendarPage() {
         { 
           userId: user.uid, 
           sessionId,
-          promptContext: prompt  // 4) 사용자 자연어 입력을 promptContext로 전달
+          promptContext: prompt,  // 4) 강화된 프롬프트를 promptContext로 전달
+          signal: controller.signal  // 5) AbortController signal 전달
         }
       );
       const newSchedule = apiResp?.schedule ? apiResp : { schedule: apiResp };
       
       clearTimeout(timeoutId);
 
+      // ▼▼ 추가: 메타 보강
+      newSchedule.schedule = enrichTaskMeta(newSchedule.schedule, existingTasksForAI);
+
+      // day 정규화 (랩핑 금지: 연속 증가)
+      const baseDay = today.getDay() === 0 ? 7 : today.getDay();
+      const normalized = normalizeRelativeDays(newSchedule.schedule, baseDay);
+      
+      // 🔒 AI가 겹치게 줘도 여기서 전부 무충돌로 보정
+      let fixed = fixOverlaps(normalized);
+      const deadlineMap = buildDeadlineDayMap(existingTasksForAI, today);
+      fixed = capTasksByDeadline(fixed, deadlineMap);
+      fixed = stripWeekendWork(fixed); // (선택) 주말에 업무류 제거
+      newSchedule.schedule = fixed;
 
       setLastSchedule(newSchedule.schedule);
 
@@ -717,75 +1128,89 @@ function CalendarPage() {
 
       const events = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
         ...event,
+        id: `${event.title}__${new Date(event.start).getTime()}__${new Date(event.end).getTime()}`,
         extendedProps: {
           ...event.extendedProps,
+          type: (event.extendedProps?.type || 'task'), // 기본 task
           isDone: false,
         }
       }));
 
-      // 방탄 로직: task가 비어 있을 때 보정
-      const hasTask = Array.isArray(newSchedule.schedule) &&
-        newSchedule.schedule.some(d =>
-          d.activities?.some(a => a.type && a.type.toLowerCase() !== 'lifestyle')
-        );
+      // 방탄 로직: task가 비어 있을 때 보정 (강화된 체크)
+      const hasValidSchedule = Array.isArray(newSchedule.schedule) && newSchedule.schedule.length > 0;
+      const hasTask = hasValidSchedule && newSchedule.schedule.some(d =>
+        d.activities?.some(a => a.type && a.type.toLowerCase() !== 'lifestyle')
+      );
 
-      if (!hasTask && /오픽|시험/.test(processedMessage)) {
-        const backupTask = {
-          title: '오픽 시험 준비',
-          start: '19:00',
-          end: '21:00',
-          type: 'task'
-        };
-        (newSchedule.schedule[0].activities ||= []).push(backupTask);
-        console.warn('[Fallback] 오픽 task 자동 추가');
+      // ✅ 자동 태스크 감지 - 유연한 키워드 기반 (빈 스케줄에도 작동)
+      if (!hasTask) {
+        console.warn('[AI Schedule] task가 없거나 스케줄이 비어있음, fallback 감지 시작');
+        
+        const fallback = detectComprehensiveFallback({
+          text: prompt,
+          aiResponse: newSchedule,
+          existingTasks: existingTasksForAI
+        });
+        
+        if (fallback) {
+          console.warn('[AI Schedule] 자동 감지 fallback 추가:', fallback.title, `(${fallback.detectedType || fallback.source})`);
+          
+          // 시험/프로젝트 계열이면 isRepeating 기본 true 보강
+          const mustRepeat = /시험|테스트|평가|자격증|면접|프로젝트/i.test(fallback.title || '');
+          if (fallback.type?.toLowerCase?.() !== 'lifestyle' && fallback.isRepeating == null && mustRepeat) {
+            fallback.isRepeating = true;
+          }
+          
+          // 빈 스케줄일 때 안전 가드 (더 강화)
+          if (!hasValidSchedule) {
+            const todayDay = today.getDay() === 0 ? 7 : today.getDay();
+            newSchedule.schedule = [{ 
+              day: todayDay, 
+              weekday: getKoreanWeekday(todayDay), 
+              activities: [] 
+            }];
+          }
+          (newSchedule.schedule[0].activities ||= []).push(fallback);
+          // fallback 추가 후 시간순 정렬
+          newSchedule.schedule[0].activities.sort((a,b)=>hhmmToMin(a.start||'00:00')-hhmmToMin(b.start||'00:00'));
+        } else {
+          console.warn('[AI Schedule] fallback 감지 실패 - 키워드나 기존 할 일이 없음');
+        }
+          
+        // 활동 유효성 필터 (start/end 없는 task 제거)
+        const safeSchedule = (newSchedule.schedule || []).map(d => ({
+          ...d,
+          activities: (d.activities || []).filter(a => {
+            const t = (a.type||'task').toLowerCase();
+            if (t === 'lifestyle') return a.start && a.end;
+            return a.title && a.start && a.end; // task는 필수 3종
+          })
+        }));
         
         // fallback task를 포함한 이벤트 재생성
-        const updatedEvents = convertScheduleToEvents(newSchedule.schedule, today).map(event => ({
-          ...event,
-          extendedProps: {
-            ...event.extendedProps,
-            isDone: false,
-          }
-        }));
+        const updatedEvents = convertScheduleToEvents(safeSchedule, today).map(event => ({
+            ...event,
+            id: `${event.title}__${new Date(event.start).getTime()}__${new Date(event.end).getTime()}`,
+            extendedProps: {
+              ...event.extendedProps,
+              type: (event.extendedProps?.type || 'task'), // 기본 task
+              isDone: false,
+            }
+          }));
         setAllEvents(updatedEvents);
       } else {
         setAllEvents(events);
       }
       // 이벤트는 Calendar 컴포넌트에서 자동으로 처리됨
 
-      // 오픽 시험 키워드 매칭으로 즉시 할 일 생성
-      try {
-        if (/오픽/.test(processedMessage) || /시험/.test(processedMessage)) {
-          const today = new Date();
-          const nextThu = new Date(today);
-          const daysUntilThu = (4 - today.getDay() + 7) % 7; // 목요일까지의 일수
-          nextThu.setDate(today.getDate() + daysUntilThu + 7); // 다음주 목요일
-          
-          const opicTask = {
-            title: '오픽 시험 준비',
-            deadline: toISODateLocal(nextThu),
-            importance: '상',
-            difficulty: '상',
-            description: '오픽 시험을 위한 체계적인 공부 계획',
-            relativeDay: daysUntilThu + 7,
-            isActive: true,
-            createdAt: serverTimestamp()
-          };
-          
-          console.log('[CalendarPage] 오픽 시험 키워드 감지 - 즉시 할 일 생성:', opicTask);
-          await firestoreService.saveTask(user.uid, opicTask);
-        }
-      } catch (error) {
-        console.error('[CalendarPage] 오픽 시험 할 일 생성 실패:', error);
-      }
+      // ✅ 기존 하드코딩된 키워드 매칭 제거 - 이제 detectComprehensiveFallback에서 처리
 
       // 스케줄에서 할 일 추출하여 Firestore에 저장 (중복 방지)
       try {
         // 필터 완화: lifestyle만 제외하고, 날짜가 있는 모든 AI 이벤트를 저장 대상으로 간주
         const taskEvents = events.filter(event => {
-          const t = event.extendedProps?.type;
-          // type이 없거나 lifestyle이 아닌 이벤트는 모두 저장
-          return event.start && (!t || t.toLowerCase() !== 'lifestyle');
+          const t = (event.extendedProps?.type || '').toLowerCase();
+          return event.start && t !== 'lifestyle'; // lifestyle만 제외, 나머지는 저장
         });
         
         // 디버깅을 위한 로그 추가
@@ -809,21 +1234,30 @@ function CalendarPage() {
         // 기존 할 일 목록 가져오기
         const existingTasks = await firestoreService.getAllTasks(user.uid);
         
-        // 새 할 일들을 일괄 저장 (제목+날짜 조합으로 중복 방지)
+        // 새 할 일들을 일괄 저장 (로컬 날짜+시간 조합으로 중복 방지)
         const newTasks = taskEvents
           .filter(event => {
             const startIso = toISODateLocal(event.start);
             if (!startIso) return false;
-            const key = `${event.title}__${startIso}`;
+            
+            // 로컬 날짜/시간 기반 키 생성 (타임존 흔들림 방지)
+            const start = new Date(event.start);
+            const localDate = `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,'0')}-${String(start.getDate()).padStart(2,'0')}`;
+            const localTime = `${String(start.getHours()).padStart(2,'0')}:${String(start.getMinutes()).padStart(2,'0')}`;
+            const key = `${event.title}__${localDate}T${localTime}`;
+            
             return !existingTasks.some(t => {
               const existingDate = toISODateLocal(t.deadline);
-              const existingKey = `${t.title}__${existingDate}`;
+              const timePart = (t.deadlineTime ? t.deadlineTime.slice(0,5) : '00:00');
+              const existingTimeKey = `${existingDate}T${timePart}`;
+              const existingKey = `${t.title}__${existingTimeKey}`;
               return existingKey === key;
             });
           })
           .map(event => ({
             title: event.title,
             deadline: toISODateLocal(event.start),  // ✅ 통일
+            deadlineTime: new Date(event.start).toTimeString().slice(0,5), // HH:MM 형식
             importance: event.extendedProps?.importance ?? '중',
             difficulty: event.extendedProps?.difficulty ?? '중',
             description: event.extendedProps?.description ?? '',
@@ -864,9 +1298,11 @@ function CalendarPage() {
       
       addAIMessage(aiResponse);
     } catch (e) {
+      try { controller?.abort(); } catch {}
       console.error('스케줄 생성 요청 실패:', e);
       addAIMessage("요청 실패: 다시 시도해주세요.");
     } finally {
+      clearTimeout?.(timeoutId);
       setIsLoading(false);
     }
   };
@@ -895,6 +1331,7 @@ function CalendarPage() {
 
   // AI 조언 조회
   const fetchAIAdvice = async () => {
+    if (!user?.uid) { addAIMessage("로그인이 필요합니다."); return; }
     try {
       const result = await apiService.getAdvice({
         userId: user.uid,
@@ -984,19 +1421,30 @@ function CalendarPage() {
 
   // 캘린더 이벤트 핸들러들
   const handleEventMount = (info) => {
-    if (info.event.extendedProps?.type === "lifestyle") {
-      const viewType = calendarRef.current?.getApi().view.type;
-      
-      if (viewType === "dayGridMonth") {
-        // 월간 뷰에서 lifestyle 이벤트 숨김
-        info.el.style.display = "none";
-      } else {
-        // 주간/일간 뷰에서 lifestyle 이벤트 스타일링
-        info.el.style.backgroundColor = "#CFCFCF";
-        info.el.style.borderColor = "#AAAAAA";
-        info.el.style.color = "#333333";
-        info.el.style.fontWeight = "normal";
-      }
+    const viewType = calendarRef.current?.getApi().view.type;
+
+    // 월간 뷰에서 lifestyle 토글로 제어 (기본값: 보임)
+    if (viewType === "dayGridMonth" && 
+        (info.event.extendedProps?.type === "lifestyle") && 
+        !showLifestyleInMonth) {
+      // 1) 공식 속성 우선
+      try {
+        info.event.setProp('display', 'none');
+        // 2) 폴백: CSS로 강제 숨김
+        const prev = info.event.getProp('classNames') || [];
+        if (!prev.includes('fc-hidden-lifestyle')) {
+          info.event.setProp('classNames', [...prev, 'fc-hidden-lifestyle']);
+        }
+      } catch {}
+      return;
+    }
+
+    // 주/일간 뷰 스타일링만 유지
+    if ((info.event.extendedProps?.type === "lifestyle") && viewType !== "dayGridMonth") {
+      info.el.style.backgroundColor = "#CFCFCF";
+      info.el.style.borderColor = "#AAAAAA";
+      info.el.style.color = "#333333";
+      info.el.style.fontWeight = "normal";
     }
   };
 
@@ -1025,28 +1473,8 @@ function CalendarPage() {
     span.title = titleText;
     if (isDone) span.style.textDecoration = "line-through";
 
+    // FullCalendar 기본 +more 기능 사용 (커스텀 로직 제거)
     if (viewType === "dayGridMonth") {
-      // 월간 뷰에서 일정 개수 제한 로직
-      if (arg.el && arg.el.closest) {
-        const dayElement = arg.el.closest('.fc-daygrid-day');
-        if (dayElement) {
-          const existingEvents = dayElement.querySelectorAll('.fc-event');
-          const currentEventIndex = Array.from(existingEvents).indexOf(arg.el);
-          
-          // 최대 3개까지만 표시, 나머지는 "more" 표시
-          const MAX = 3;
-          if (currentEventIndex >= MAX) {
-            const moreSpan = document.createElement("span");
-            const hidden = Math.max(0, existingEvents.length - MAX);
-            moreSpan.textContent = `+${hidden} more`;
-            moreSpan.style.color = "#666";
-            moreSpan.style.fontSize = "11px";
-            moreSpan.style.fontStyle = "italic";
-            return { domNodes: [moreSpan] };
-          }
-        }
-      }
-      
       return { domNodes: [span] };
     }
 
@@ -1055,13 +1483,11 @@ function CalendarPage() {
       checkbox.type = "checkbox";
       checkbox.checked = isDone ?? false;
       checkbox.style.marginRight = "5px";
-      checkbox.addEventListener("change", () => {
+      const onChange = () => {
         arg.event.setExtendedProp("isDone", checkbox.checked);    
         setAllEvents(prevEvents => {
           return prevEvents.map(event => {
-            if (event.title === arg.event.title && 
-                new Date(event.start).getTime() === new Date(arg.event.start).getTime() &&
-                new Date(event.end).getTime() === new Date(arg.event.end).getTime()) {
+            if (event.id === arg.event.id) {
               return {
                 ...event,
                 extendedProps: {
@@ -1073,7 +1499,8 @@ function CalendarPage() {
             return event;
           });
         });
-      });
+      };
+      checkbox.onchange = onChange;
 
       const container = document.createElement("div");
       container.appendChild(checkbox);
@@ -1111,8 +1538,10 @@ function CalendarPage() {
           setShowLifestyleModal(true);
         }}
         onAdviceClick={fetchAIAdvice}
-        onReportClick={() => window.location.href = '/report'}
+        onReportClick={() => navigate('/report')}
         onResetClick={handleResetCalendar}
+        showLifestyleInMonth={showLifestyleInMonth}
+        onToggleLifestyle={() => setShowLifestyleInMonth(v => !v)}
       />
 
       <Modals

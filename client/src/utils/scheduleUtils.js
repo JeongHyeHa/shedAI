@@ -204,8 +204,10 @@ export function resetToStartOfDay(date, isEnd = false) {
 
 4. 스케줄 생성 시 다음을 반드시 지켜야 합니다:
    - 활동 간 시간대 **절대 중복 금지**
-   - 하루에 **몰입 활동은 2시간 이상 연속 배치**를 원칙으로 함
-   - 단, 하루 3~4시간 이상 연속 몰아치는 작업은 피하고 분산
+   - **AI 일정 자동 설계는 2가지 모드로 제공됨**:
+     * ①집중 우선 배치형: 사용자의 집중 시간대에 난이도 '상' 업무 우선 배정 (2.5시간 연속)
+     * ②유동형: 작업 난이도에 따라 분할 학습(ex.50분 업무 후 20분 휴식)과 고난이도 후 휴식, 산책 시간을 제안
+   - **시험/중요 작업(중요도 상, 난이도 상)은 매일 반복 배치** 필수
    - 하루 일과가 과밀하지 않도록 적절한 간격 확보
 
 5. 요일 계산 규칙
@@ -367,8 +369,10 @@ export function resetToStartOfDay(date, isEnd = false) {
 
 4. 스케줄 생성 시 다음을 반드시 지켜야 합니다:
    - 활동 간 시간대 **절대 중복 금지**
-   - 하루에 **몰입 활동은 2시간 이상 연속 배치**를 원칙으로 함
-   - 단, 하루 3~4시간 이상 연속 몰아치는 작업은 피하고 분산
+   - **AI 일정 자동 설계는 2가지 모드로 제공됨**:
+     * ①집중 우선 배치형: 사용자의 집중 시간대에 난이도 '상' 업무 우선 배정 (2.5시간 연속)
+     * ②유동형: 작업 난이도에 따라 분할 학습(ex.50분 업무 후 20분 휴식)과 고난이도 후 휴식, 산책 시간을 제안
+   - **시험/중요 작업(중요도 상, 난이도 상)은 매일 반복 배치** 필수
    - 하루 일과가 과밀하지 않도록 적절한 간격 확보
 
 5. 요일 계산 규칙
@@ -448,19 +452,40 @@ export function resetToStartOfDay(date, isEnd = false) {
       return [];
     }
 
-    // 서버에서 보내는 형식: [{day, weekday, activities}]
-    // 이미 올바른 형식이므로 그대로 반환
-    return gptResponse.schedule.map(daySchedule => ({
-      day: daySchedule.day,
-      weekday: daySchedule.weekday,
-      activities: daySchedule.activities || []
-    }));
+  // 서버에서 보내는 형식: [{day, weekday, activities}]
+  // 요일 정규화 적용 후 반환
+  return gptResponse.schedule.map(daySchedule => ({
+    day: daySchedule.day,
+    weekday: normalizeWeekday(daySchedule.day, daySchedule.weekday),
+    activities: daySchedule.activities || []
+  }));
   }
 
   // day 번호를 한국어 요일로 변환
   function getKoreanDayName(day) {
     const dayNames = ['', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'];
     return dayNames[day] || '알 수 없음';
+  }
+
+  // 요일 이상치 정규화 함수
+  function normalizeWeekday(day, raw) {
+    const KOREAN_WEEKDAYS = ['','월요일','화요일','수요일','목요일','금요일','토요일','일요일'];
+    
+    // day 번호가 유효하면 해당 요일 반환
+    if (KOREAN_WEEKDAYS[day]) return KOREAN_WEEKDAYS[day];
+    
+    // raw 값에서 요일 추출 (공백 제거 후)
+    const s = String(raw||'').replace(/\s+/g,'');
+    if (s.includes('목')) return '목요일';
+    if (s.includes('수')) return '수요일';
+    if (s.includes('화')) return '화요일';
+    if (s.includes('금')) return '금요일';
+    if (s.includes('토')) return '토요일';
+    if (s.includes('일')) return '일요일';
+    if (s.includes('월')) return '월요일';
+    
+    // 기본값
+    return KOREAN_WEEKDAYS[day] || '알 수 없음';
   }
 
   // GPT → FullCalendar 이벤트 변환기
@@ -517,13 +542,23 @@ export function resetToStartOfDay(date, isEnd = false) {
 
       dayBlock.activities.forEach(activity => {
         // activity가 유효하지 않으면 건너뛰기
-        if (!activity || !activity.start || !activity.end || !activity.title) {
+        if (!activity || !activity.start || !activity.title) {
           console.warn('convertScheduleToEvents: 유효하지 않은 activity', activity);
           return;
         }
         
         const start = new Date(`${dateStr}T${activity.start}`);
-        let end = new Date(`${dateStr}T${activity.end}`);
+        let end;
+        
+        // end가 없을 때만 fallback duration 적용 (task는 120분, lifestyle은 90분)
+        if (!activity.end) {
+          const isTask = (activity.type || '').toLowerCase() === 'task';
+          const fallbackDuration = isTask ? 120 : 90; // task는 120분, lifestyle은 90분
+          end = new Date(start.getTime() + fallbackDuration * 60 * 1000);
+        } else {
+          end = new Date(`${dateStr}T${activity.end}`);
+        }
+        
         const extendedProps = {
           type: activity.type || "task"
         };
@@ -564,6 +599,45 @@ export function resetToStartOfDay(date, isEnd = false) {
           end: formatLocalISO(end),
           extendedProps
         });
+
+        // 🔄 isRepeating 태스크 자동 확장 (7일 반복)
+        if (activity.isRepeating) {
+          for (let i = 1; i < 7; i++) { // 7일 반복
+            const cloneDate = new Date(targetDate);
+            cloneDate.setDate(targetDate.getDate() + i);
+            const dateStrRepeat = formatLocalISO(cloneDate).split('T')[0];
+            
+            const repeatStart = new Date(`${dateStrRepeat}T${activity.start}`);
+            let repeatEnd;
+            
+            // end가 없을 때만 fallback duration 적용
+            if (!activity.end) {
+              const isTask = (activity.type || '').toLowerCase() === 'task';
+              const fallbackDuration = isTask ? 120 : 90;
+              repeatEnd = new Date(repeatStart.getTime() + fallbackDuration * 60 * 1000);
+            } else {
+              repeatEnd = new Date(`${dateStrRepeat}T${activity.end}`);
+            }
+            
+            events.push({
+              title: activity.title,
+              start: formatLocalISO(repeatStart),
+              end: formatLocalISO(repeatEnd),
+              extendedProps: {
+                ...extendedProps,
+                isRepeating: true,
+                source: 'auto_repeat'
+              }
+            });
+          }
+          
+          console.info('[Auto Repeat] 반복 일정 생성:', {
+            title: activity.title,
+            days: 7,
+            timeSlot: `${activity.start}-${activity.end || 'auto'}`,
+            mode: activity.mode || 'default'
+          });
+        }
       });
     });
 
