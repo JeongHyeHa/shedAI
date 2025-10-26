@@ -194,44 +194,16 @@ button:disabled {
   color: #333;
 }
 
-/* 월간 뷰 lifestyle 숨김 폴백 */
-.fc-hidden-lifestyle { 
+/* ✅ daygrid(월간/종일) + 팝오버에서 lifestyle 숨김 (안전망) */
+.fc .fc-daygrid .is-lifestyle { 
+  display: none !important; 
+  visibility: hidden !important; 
+  height: 0 !important; 
+  overflow: hidden !important;
+}
+
+.fc .fc-popover .is-lifestyle { 
   display: none !important; 
 }
 
 /* 기본 버튼 스타일 */
-.level-button {
-  background: #22336b;
-  color: #fff;
-  border: 1px solid #22336b;
-  padding: 8px 20px;
-  font-size: 18px;
-  border-radius: 8px;
-  margin-right: -1px;
-  cursor: pointer;
-  transition: background 0.2s, color 0.2s, border-color 0.2s;
-  position: relative;
-  z-index: 1;
-}
-.level-button.middle {
-  border-radius: 0;
-  z-index: 2;
-}
-.level-button:first-child {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-.level-button:last-child {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  margin-right: 0;
-}
-.level-button:hover {
-  background: #3a4e8c;
-  color: #fff;
-}
-.level-button.active {
-  background: #D8DFF2 !important;
-  border: #D8DFF2 !important;
-  color: #1C2D5A !important;
-}

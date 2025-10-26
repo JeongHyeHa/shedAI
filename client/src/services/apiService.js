@@ -68,11 +68,30 @@ class ApiService {
       ...(opts?.userId ? { 'x-user-id': opts.userId } : {})
     };
 
-    return this.request(endpoint, {
+    const response = await this.request(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestData)
     });
+
+    // AI 응답 디버깅
+    console.log('=== AI 응답 디버깅 ===');
+    console.log('응답 타입:', typeof response);
+    console.log('응답 키들:', Object.keys(response || {}));
+    console.log('schedule 키 존재:', 'schedule' in (response || {}));
+    console.log('schedule 타입:', typeof response?.schedule);
+    console.log('schedule 길이:', Array.isArray(response?.schedule) ? response.schedule.length : 'N/A');
+    
+    if (Array.isArray(response?.schedule)) {
+      console.log('첫 번째 day 데이터:', response.schedule[0]);
+      console.log('activities 배열 길이:', response.schedule[0]?.activities?.length || 0);
+      console.log('activities 내용:', response.schedule[0]?.activities);
+    }
+    
+    console.log('전체 응답:', response);
+    console.log('=== AI 응답 디버깅 끝 ===');
+
+    return response;
   }
 
   // 피드백 저장

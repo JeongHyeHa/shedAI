@@ -39,6 +39,7 @@ export function useTaskManagement() {
         relativeDay: relativeDay,
         estimatedMinutes: 60,
         isActive: true,                 // ✅ 기본 활성
+        persistAsTask: true,            // ✅ 사용자가 직접 만든 할 일임을 표시
         createdAt: serverTimestamp()    // ✅ 정렬/쿼리용 타임스탬프
       };
 

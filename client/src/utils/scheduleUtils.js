@@ -1,5 +1,9 @@
 // 스케줄과 관련된 모든 처리 로직을 담당하는 유틸리티
-import { parseDateString } from './dateParser';
+
+// 디버깅 유틸리티
+const debug = (...args) => {
+  if (process.env.NODE_ENV !== 'production') console.log(...args);
+};
 
 // 클라이언트용 날짜 전처리 함수 (test_dates.js와 동일한 로직)
 export function preprocessMessage(message) {
@@ -32,9 +36,9 @@ export function preprocessMessage(message) {
   };
   
   for (const { word, days } of REL) {
-    wrap(new RegExp(`${KB.L}(${word})(?![^()]*\\))${KB.R}`, 'g'), (match, prefix, word) => {
-      return `${prefix}${word} (day:${toDay(days)})`;
-    });
+    wrap(new RegExp(`${KB.L}(${word})(?![^()]*\\))${KB.R}`, 'g'),
+      (match, prefix, captured, suffix) => `${prefix}${captured} (day:${toDay(days)})${suffix}`
+    );
   }
   
   // === 2) 주간 표현들 ===
@@ -56,8 +60,8 @@ export function preprocessMessage(message) {
   
   for (const { word: week, offset } of WEEK) {
     for (const { word: day, day: dayNum } of WEEKDAYS) {
-      const re = new RegExp(`${KB.L}${week}\\s*${day}(?![^()]*\\))${KB.R}`, 'g');
-      wrap(re, (match, prefix, week, day) => {
+      const re = new RegExp(`${KB.L}(${week})\\s*(${day})(?![^()]*\\))${KB.R}`, 'g');
+      wrap(re, (match, prefix, weekWord, dayWord, suffix) => {
         // 해당 주의 시작일(월요일)을 기준으로 계산
         const d = new Date(base);
         d.setDate(d.getDate() + offset);
@@ -72,22 +76,77 @@ export function preprocessMessage(message) {
         d.setDate(d.getDate() + targetDayOffset);
         
         const finalDay = getGptDayIndex(d);
-        return `${prefix}${week} ${day} (day:${finalDay})`;
+        return `${prefix}${weekWord} ${dayWord} (day:${finalDay})${suffix}`;
+      });
+    }
+  }
+  
+  // === 2-1) '이번/다음/다다음 주말' 처리 ===
+  for (const { word: week, offset } of WEEK) {
+    const reWeekend = new RegExp(`${KB.L}(${week})\\s*주말(?![^()]*\\))${KB.R}`, 'g');
+    wrap(reWeekend, (match, prefix, weekWord, suffix) => {
+      const d = new Date(base);
+      d.setDate(d.getDate() + offset);
+      const dow = d.getDay();                 // 0=일
+      const toMonday = dow === 0 ? 6 : dow - 1;
+      d.setDate(d.getDate() - toMonday);      // 그 주 월요일
+      const sat = new Date(d); sat.setDate(d.getDate() + 5);
+      const sun = new Date(d); sun.setDate(d.getDate() + 6);
+      const satDay = getGptDayIndex(sat);
+      const sunDay = getGptDayIndex(sun);
+      return `${prefix}${weekWord} 토요일 (day:${satDay}) 일요일 (day:${sunDay})${suffix}`;
+    });
+  }
+  
+  // === 2-2) '오는/다음/이번 + 요일' 단독 표현 ===
+  const RELWEEK = [
+    { key: '이번', add: 0 },
+    { key: '오는', add: 0 },
+    { key: '다음', add: 7 }
+  ];
+  for (const { key, add } of RELWEEK) {
+    for (const { word: day, day: dayNum } of WEEKDAYS) {
+      const re = new RegExp(`${KB.L}(${key})\\s*(${day})(?![^()]*\\))${KB.R}`, 'g');
+      wrap(re, (m, prefix, kw, dw, suffix) => {
+        const d = new Date(base);
+        d.setDate(d.getDate() + add);
+        // 다음 발생 요일로 스냅
+        const cur = d.getDay() === 0 ? 7 : d.getDay();
+        let delta = dayNum - cur;
+        if (delta <= 0) delta += 7; // 같은 요일이면 다음 주로
+        d.setDate(d.getDate() + delta);
+        return `${prefix}${kw} ${dw} (day:${getGptDayIndex(d)})${suffix}`;
       });
     }
   }
   
   // === 3) 특정 날짜들 ===
   const DATE_PATTERNS = [
-    { re: /(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, fn: (m, month, day) => {
-      const d = new Date(base.getFullYear(), parseInt(month, 10) - 1, parseInt(day, 10));
-      return `${m} (day:${getGptDayIndex(d)})`;
+    { re: /(\d{1,2})\s*월\s*(\d{1,2})\s*일(?![^()]*\))/g, fn: (m, month, day) => {
+      const yy = base.getFullYear();
+      const mm = parseInt(month, 10) - 1;
+      const dd = parseInt(day, 10);
+      let d = new Date(yy, mm, dd);
+      // 옵션: 이미 과거면 내년
+      if (d < resetToStartOfDay(base)) d = new Date(yy + 1, mm, dd);
+      // 유효성: 역직렬화해서 월/일 동일해야 함
+      if (d.getFullYear() === d.getFullYear() && d.getMonth() === mm && d.getDate() === dd) {
+        return `${m} (day:${getGptDayIndex(d)})`;
+      }
+      return m; // 무효하면 그대로 반환(태깅 생략)
     }},
-    { re: /(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/g, fn: (m, year, month, day) => {
-      const d = new Date(parseInt(year, 10), parseInt(month, 10) - 1, parseInt(day, 10));
-      return `${m} (day:${getGptDayIndex(d)})`;
+    { re: /(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일(?![^()]*\))/g, fn: (m, year, month, day) => {
+      const yy = parseInt(year, 10);
+      const mm = parseInt(month, 10) - 1;
+      const dd = parseInt(day, 10);
+      const d = new Date(yy, mm, dd);
+      // 유효성: 역직렬화해서 연/월/일 동일해야 함
+      if (d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
+        return `${m} (day:${getGptDayIndex(d)})`;
+      }
+      return m; // 무효하면 그대로 반환(태깅 생략)
     }},
-    { re: /(\d+)\s*(일|주)\s*(후|뒤)/g, fn: (m, num, unit, _) => {
+    { re: /(\d+)\s*(일|주)\s*(후|뒤)(?![^()]*\))/g, fn: (m, num, unit, _) => {
       const offset = unit === '주' ? parseInt(num, 10) * 7 : parseInt(num, 10);
       const d = new Date(base);
       d.setDate(d.getDate() + offset);
@@ -104,26 +163,73 @@ export function preprocessMessage(message) {
     foundTime = true;
     return `${body} (${hour.toString().padStart(2, '0')}:00)`;
   };
+
+  // 분/반 처리: 반드시 '시간만' 패턴보다 먼저!
+  wrap(new RegExp(`${KB.L}오전\\s*(\\d{1,2})시\\s*(\\d{1,2})분(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, h, mm, suffix) => {
+      const hh = (parseInt(h,10) % 12).toString().padStart(2,'0');
+      const m2 = parseInt(mm,10).toString().padStart(2,'0');
+      foundTime = true; return `${prefix}오전 ${h}시 (${hh}:${m2})${suffix}`;
+    });
+  wrap(new RegExp(`${KB.L}오후\\s*(\\d{1,2})시\\s*(\\d{1,2})분(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, h, mm, suffix) => {
+      const base = (parseInt(h,10)%12)+12;
+      const hh = base.toString().padStart(2,'0');
+      const m2 = parseInt(mm,10).toString().padStart(2,'0');
+      foundTime = true; return `${prefix}오후 ${h}시 (${hh}:${m2})${suffix}`;
+    });
+  wrap(new RegExp(`${KB.L}(\\d{1,2})시\\s*(\\d{1,2})분(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, h, mm, suffix) => {
+      const hh = (parseInt(h,10)===12?12:parseInt(h,10)).toString().padStart(2,'0');
+      const m2 = parseInt(mm,10).toString().padStart(2,'0');
+      foundTime = true; return `${prefix}${h}시 (${hh}:${m2})${suffix}`;
+    });
+  // '반' = 30분
+  wrap(new RegExp(`${KB.L}오전\\s*(\\d{1,2})시\\s*반(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, h, suffix) => `${injectTime(`${prefix}오전 ${h}시`, (parseInt(h,10)%12))}`.replace(':00', ':30') + suffix);
+  wrap(new RegExp(`${KB.L}오후\\s*(\\d{1,2})시\\s*반(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, h, suffix) => `${injectTime(`${prefix}오후 ${h}시`, (parseInt(h,10)%12)+12)}`.replace(':00', ':30') + suffix);
+  wrap(new RegExp(`${KB.L}(\\d{1,2})시\\s*반(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, h, suffix) => `${injectTime(`${prefix}${h}시`, (parseInt(h,10)===12?12:parseInt(h,10)))}`.replace(':00', ':30') + suffix);
   
-  wrap(new RegExp(`${KB.L}(자정)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 0));
-  wrap(new RegExp(`${KB.L}(정오)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 12));
-  wrap(new RegExp(`${KB.L}(오전\\s*12시)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 0));
-  wrap(new RegExp(`${KB.L}(오후\\s*12시)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 12));
-  wrap(new RegExp(`${KB.L}(00시)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 0));
-  wrap(new RegExp(`${KB.L}(12시)${KB.R}`, 'g'), (match, prefix, word) => injectTime(`${prefix}${word}`, 12));
-  wrap(new RegExp(`${KB.L}오전\\s*(\\d{1,2})시${KB.R}`, 'g'), (match, prefix, word, h) => injectTime(`${prefix}${word}`, (parseInt(h, 10) % 12)));
-  wrap(new RegExp(`${KB.L}오후\\s*(\\d{1,2})시${KB.R}`, 'g'), (match, prefix, word, h) => injectTime(`${prefix}${word}`, (parseInt(h, 10) % 12) + 12));
-  wrap(new RegExp(`${KB.L}(\\d{1,2})시${KB.R}`, 'g'), (match, prefix, word, h) => {
-    const n = parseInt(h, 10);
-    return injectTime(`${prefix}${word}`, n === 12 ? 12 : n);
-  });
+  wrap(new RegExp(`${KB.L}(자정)(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, w, suffix) => `${injectTime(`${prefix}${w}`, 0)}${suffix}`);
+
+  wrap(new RegExp(`${KB.L}(정오)(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, w, suffix) => `${injectTime(`${prefix}${w}`, 12)}${suffix}`);
+
+  wrap(new RegExp(`${KB.L}(오전\\s*12시)(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, w, suffix) => `${injectTime(`${prefix}${w}`, 0)}${suffix}`);
+
+  wrap(new RegExp(`${KB.L}(오후\\s*12시)(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, w, suffix) => `${injectTime(`${prefix}${w}`, 12)}${suffix}`);
+
+  wrap(new RegExp(`${KB.L}(00시)(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, w, suffix) => `${injectTime(`${prefix}${w}`, 0)}${suffix}`);
+
+  wrap(new RegExp(`${KB.L}(12시)(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, w, suffix) => `${injectTime(`${prefix}${w}`, 12)}${suffix}`);
+
+  wrap(new RegExp(`${KB.L}오전\\s*(\\d{1,2})시(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, body, h, suffix) => `${injectTime(`${prefix}${body}`, (parseInt(h,10)%12))}${suffix}`);
+
+  wrap(new RegExp(`${KB.L}오후\\s*(\\d{1,2})시(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, body, h, suffix) => `${injectTime(`${prefix}${body}`, (parseInt(h,10)%12)+12)}${suffix}`);
+
+  wrap(new RegExp(`${KB.L}(\\d{1,2})시(?![^()]*\\))${KB.R}`, 'g'),
+    (m, prefix, body, h, suffix) => {
+      const n = parseInt(h, 10);
+      return `${injectTime(`${prefix}${body}`, n === 12 ? 12 : n)}${suffix}`;
+    });
   
   // === 5) '시간만 있고 날짜가 전혀 없는 경우'에만 day 보강 ===
   const hasDay = /\(day:\d+\)/.test(out);
   const hasExplicitDate = /((이번|다음|다다음)\s*주\s*[월화수목금토일]요일)|(오늘|금일|익일|내일|명일|모레|내일모레)|(\d{1,2}\s*월\s*\d{1,2}\s*일)|(\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일)|(\d+\s*(일|주)\s*(후|뒤))/.test(out);
   
   if (!hasDay && foundTime && !hasExplicitDate) {
-    out = `(day:${getGptDayIndex(base)}) ` + out;
+    const dayTag = ` (day:${getGptDayIndex(base)})`;
+    // 끝 공백/구두점 앞에 삽입
+    out = out.replace(/(\s*[.,!?)」』\]]*\s*)$/, `${dayTag}$1`);
   }
   
   return out;
@@ -147,7 +253,7 @@ export function resetToStartOfDay(date, isEnd = false) {
   
   // 날짜 → ISO 문자열 포맷
   export function formatLocalISO(date) {
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:00`;
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
   }
 
   
@@ -461,11 +567,6 @@ export function resetToStartOfDay(date, isEnd = false) {
   }));
   }
 
-  // day 번호를 한국어 요일로 변환
-  function getKoreanDayName(day) {
-    const dayNames = ['', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'];
-    return dayNames[day] || '알 수 없음';
-  }
 
   // 요일 이상치 정규화 함수
   function normalizeWeekday(day, raw) {
@@ -488,24 +589,27 @@ export function resetToStartOfDay(date, isEnd = false) {
     return KOREAN_WEEKDAYS[day] || '알 수 없음';
   }
 
-  // GPT → FullCalendar 이벤트 변환기
-  export function convertScheduleToEvents(gptSchedule, today = new Date()) {
+  // GPT → FullCalendar 이벤트 변환기 (배열만 받음)
+  export function convertScheduleToEvents(scheduleArray, today = new Date()) {
     const events = [];
     
-    // gptSchedule이 GPT 응답 구조인지 확인하고 변환
-    let scheduleData = gptSchedule;
-    if (gptSchedule && gptSchedule.schedule) {
-      // GPT 응답 객체 구조
-      scheduleData = flattenSchedule(gptSchedule);
-    } else if (Array.isArray(gptSchedule) && gptSchedule.length > 0 && Array.isArray(gptSchedule[0]?.days)) {
-      // 활동 블록 배열 구조 (활동별 days 포함) -> 자동 평탄화
-      scheduleData = flattenSchedule({ schedule: gptSchedule });
-    }
+    // 시간 형식 보강 함수 (초가 누락된 경우 기본값 부여)
+    const ensureHms = (tRaw) => {
+      const t = String(tRaw || '00:00');
+      const [h='0', m='0', s] = t.split(':');
+      const hh = String(parseInt(h,10)||0).padStart(2,'0');
+      const mm = String(parseInt(m,10)||0).padStart(2,'0');
+      const ss = s != null ? String(parseInt(s,10)||0).padStart(2,'0') : '00';
+      return `${hh}:${mm}:${ss}`;
+    };
+    
+    // scheduleArray는 이미 정규화된 배열이어야 함
+    const scheduleData = scheduleArray;
     
     // 방어 코드: scheduleData가 유효하지 않으면 빈 배열 반환
     if (!scheduleData || !Array.isArray(scheduleData) || scheduleData.length === 0) {
       // 빈 스케줄은 정상적인 경우이므로 경고 대신 디버그 로그만 출력
-      console.log('convertScheduleToEvents: 빈 스케줄 데이터', {
+      debug('convertScheduleToEvents: 빈 스케줄 데이터', {
         scheduleData,
         type: typeof scheduleData,
         isArray: Array.isArray(scheduleData),
@@ -514,12 +618,19 @@ export function resetToStartOfDay(date, isEnd = false) {
       return events;
     }
     
-    const gptDayToday = scheduleData[0]?.day;
+    // 오늘의 day 값 계산 (일요일=7, 월요일=1, ..., 토요일=6)
+    const todayDayOfWeek = today.getDay();
+    const gptDayToday = todayDayOfWeek === 0 ? 7 : todayDayOfWeek;
     
-    // 첫 번째 요소에 day 속성이 없으면 에러
-    if (typeof gptDayToday !== 'number') {
-      console.warn('convertScheduleToEvents: scheduleData[0].day가 유효하지 않음', scheduleData[0]);
-      return events;
+    // 디버깅: day 계산 로직 확인
+    if (process.env.NODE_ENV !== 'production') {
+      debug('[convertScheduleToEvents] 디버깅 정보:', {
+        gptDayToday,
+        today: today.toISOString().split('T')[0],
+        todayDayOfWeek, // 0=일요일, 1=월요일, ...
+        scheduleDataLength: scheduleData.length,
+        firstDayBlock: scheduleData[0]
+      });
     }
 
     scheduleData.forEach(dayBlock => {
@@ -547,7 +658,7 @@ export function resetToStartOfDay(date, isEnd = false) {
           return;
         }
         
-        const start = new Date(`${dateStr}T${activity.start}`);
+        const start = new Date(`${dateStr}T${ensureHms(activity.start)}`);
         let end;
         
         // end가 없을 때만 fallback duration 적용 (task는 120분, lifestyle은 90분)
@@ -556,15 +667,19 @@ export function resetToStartOfDay(date, isEnd = false) {
           const fallbackDuration = isTask ? 120 : 90; // task는 120분, lifestyle은 90분
           end = new Date(start.getTime() + fallbackDuration * 60 * 1000);
         } else {
-          end = new Date(`${dateStr}T${activity.end}`);
+          end = new Date(`${dateStr}T${ensureHms(activity.end)}`);
         }
         
         const extendedProps = {
-          type: activity.type || "task"
+          type: activity.type || "task",
+          importance: activity.importance,
+          difficulty: activity.difficulty,
+          isRepeating: !!activity.isRepeating,
+          description: activity.description
         };
         
         // 디버깅을 위한 로그 추가
-        if (activity.type === 'task') {
+        if (process.env.NODE_ENV !== 'production' && activity.type === 'task') {
           console.log('[convertScheduleToEvents] task 타입 이벤트 생성:', {
             title: activity.title,
             type: activity.type,
@@ -574,20 +689,26 @@ export function resetToStartOfDay(date, isEnd = false) {
         }
 
         if (end < start) {
-          const startOfToday = resetToStartOfDay(start);
-          const endOfToday = resetToStartOfDay(start, true);
+          const endOfToday = resetToStartOfDay(start, true); // 당일 23:59:59
+          const nextDay = new Date(start);
+          nextDay.setDate(nextDay.getDate() + 1);
+          const startOfNextDay = resetToStartOfDay(nextDay);
 
-          events.push({
-            title: activity.title,
-            start: formatLocalISO(startOfToday),
-            end: formatLocalISO(end),
-            extendedProps
-          });
-
+          // 당일 뒷부분
           events.push({
             title: activity.title,
             start: formatLocalISO(start),
             end: formatLocalISO(endOfToday),
+            extendedProps
+          });
+          
+          // 다음날 앞부분
+          const endNext = new Date(startOfNextDay);
+          endNext.setHours(end.getHours(), end.getMinutes(), end.getSeconds?.() ?? 0, 0); // 원래 end 시각 복제
+          events.push({
+            title: activity.title,
+            start: formatLocalISO(startOfNextDay),
+            end: formatLocalISO(endNext),
             extendedProps
           });
           return;
@@ -607,7 +728,7 @@ export function resetToStartOfDay(date, isEnd = false) {
             cloneDate.setDate(targetDate.getDate() + i);
             const dateStrRepeat = formatLocalISO(cloneDate).split('T')[0];
             
-            const repeatStart = new Date(`${dateStrRepeat}T${activity.start}`);
+            const repeatStart = new Date(`${dateStrRepeat}T${ensureHms(activity.start)}`);
             let repeatEnd;
             
             // end가 없을 때만 fallback duration 적용
@@ -616,7 +737,7 @@ export function resetToStartOfDay(date, isEnd = false) {
               const fallbackDuration = isTask ? 120 : 90;
               repeatEnd = new Date(repeatStart.getTime() + fallbackDuration * 60 * 1000);
             } else {
-              repeatEnd = new Date(`${dateStrRepeat}T${activity.end}`);
+              repeatEnd = new Date(`${dateStrRepeat}T${ensureHms(activity.end)}`);
             }
             
             events.push({
