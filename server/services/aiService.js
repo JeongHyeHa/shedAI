@@ -575,23 +575,35 @@ JSON만 반환하세요.`
                 let activitiesOnly = [];
                 let meta = {};
 
+                console.log('=== AI 응답 파싱 디버깅 ===');
+                console.log('parsed 키들:', Object.keys(parsed));
+                console.log('parsed.schedule 존재:', !!parsed.schedule);
+                console.log('parsed.activities 존재:', !!parsed.activities);
+                
                 if (Array.isArray(parsed.activities)) {
                     // 구(舊) activities-only 모드
+                    console.log('activities-only 모드 사용');
                     activitiesOnly = parsed.activities;
                     meta.explanation = parsed.explanation ?? '';
+                    console.log('activities 개수:', activitiesOnly.length);
                 } else if (Array.isArray(parsed.schedule)) {
                     // 신(新) schedule 모드 → day-structured를 우선 보존
+                    console.log('schedule 모드 사용, schedule 길이:', parsed.schedule.length);
                     meta.parsedSchedule = parsed.schedule;
                     meta.explanation = parsed.explanation ?? '';
                     meta.activityAnalysis = parsed.activityAnalysis ?? null;
                     meta.notes = Array.isArray(parsed.notes) ? parsed.notes : [];
+                    
                     // also collect activities for validation below
                     for (const dayObj of parsed.schedule) {
                         if (dayObj && Array.isArray(dayObj.activities)) {
+                            console.log(`day ${dayObj.day} activities 개수:`, dayObj.activities.length);
                             activitiesOnly.push(...dayObj.activities);
                         }
                     }
+                    console.log('총 activities 개수:', activitiesOnly.length);
                 } else {
+                    console.error('AI 응답 구조 오류:', parsed);
                     throw new Error('AI 응답에 activities 또는 schedule이 없습니다.');
                 }
 
@@ -662,11 +674,17 @@ JSON만 반환하세요.`
                 }
 
                 // === 생활패턴 인덱스 생성 ===
+                console.log('=== 생활패턴 인덱스 생성 디버깅 ===');
+                console.log('입력된 lifestylePatterns 개수:', (lifestylePatterns || []).length);
+                
                 const patternIndex = new Map();
                 for (const p of (lifestylePatterns || [])) {
+                    console.log('처리 중인 패턴:', p);
+                    
                     if (typeof p === 'string') {
                         // 문자열 패턴을 파싱해서 patternIndex에 추가
                         const parsed = this.parseLifestyleString(p);
+                        console.log('문자열 파싱 결과:', parsed);
                         if (parsed) {
                             const s = this.normalizeHHMM(parsed.start);
                             const e = this.normalizeHHMM(parsed.end);
@@ -675,7 +693,11 @@ JSON만 반환하세요.`
                             if (Array.isArray(parsed.days) && parsed.days.length) {
                                 patternIndex.set(key, parsed.days.slice());
                                 console.log(`패턴 인덱스 추가 (문자열): ${key} → ${parsed.days}`);
+                            } else {
+                                console.log(`패턴 인덱스 추가 실패 (문자열): ${key} - days가 없음`);
                             }
+                        } else {
+                            console.log('문자열 파싱 실패:', p);
                         }
                         continue;
                     }
@@ -688,12 +710,22 @@ JSON만 반환하세요.`
                     if (Array.isArray(p.days) && p.days.length) {
                         patternIndex.set(key, p.days.slice()); // 1..7
                         console.log(`패턴 인덱스 추가 (객체): ${key} → ${p.days}`);
+                    } else {
+                        console.log(`패턴 인덱스 추가 실패 (객체): ${key} - days가 없음`);
                     }
                 }
+                
+                console.log('최종 패턴 인덱스 크기:', patternIndex.size);
+                console.log('패턴 인덱스 내용:', Array.from(patternIndex.entries()));
 
                 // === AI 활동을 요일별로 분류 ===
+                console.log('=== 활동 분류 디버깅 ===');
                 const tasks = activitiesOnly.filter(a => a.type === 'task');
                 const lifestylesRaw = activitiesOnly.filter(a => a.type === 'lifestyle');
+                
+                console.log('tasks 개수:', tasks.length);
+                console.log('lifestylesRaw 개수:', lifestylesRaw.length);
+                console.log('lifestylesRaw 내용:', lifestylesRaw);
 
                 // lifestyle 활동에 적용 요일을 매핑 (제목+시간으로 패턴 찾기)
                 const lifestyles = lifestylesRaw.map(a => {
@@ -703,24 +735,42 @@ JSON만 반환하세요.`
                     const key = `${title}|${s}|${e}`;
                     const days = patternIndex.get(key);
                     console.log(`활동 매칭 시도: ${key} → ${days || '매칭 없음'}`);
-                    return days ? { ...a, start: s, end: e, __days: days } : { ...a, start: s, end: e, __days: [] };
+                    
+                    // 매칭이 없으면 모든 요일에 적용 (fallback)
+                    const fallbackDays = days || [1, 2, 3, 4, 5, 6, 7];
+                    console.log(`활동 매칭 결과: ${key} → ${fallbackDays}`);
+                    
+                    return { ...a, start: s, end: e, __days: fallbackDays };
                 });
+                
+                console.log('최종 lifestyles 개수:', lifestyles.length);
+                console.log('최종 lifestyles 내용:', lifestyles);
 
                 // === 서버가 day를 결정하고 스케줄 조립 ===
+                console.log('=== 최종 스케줄 생성 디버깅 ===');
                 let finalSchedule = [];
+                
                 // 0) AI가 day-structured 스케줄을 준 경우 그대로 사용하되,
                 //    lifestyle의 요일 일관성만 적용하여 필터링
                 if (Array.isArray(meta.parsedSchedule) && meta.parsedSchedule.length > 0) {
+                    console.log('AI day-structured 스케줄 사용');
                     const normalized = [];
                     for (const dayObj of meta.parsedSchedule) {
-                        if (!dayObj || !Array.isArray(dayObj.activities)) continue;
+                        if (!dayObj || !Array.isArray(dayObj.activities)) {
+                            console.log(`day ${dayObj?.day} 건너뜀: activities 없음`);
+                            continue;
+                        }
+                        
                         const dayVal = typeof dayObj.day === 'number' ? dayObj.day : anchorDay;
                         const weekdayNum = this.relDayToWeekdayNumber(dayVal, now);
+                        console.log(`day ${dayVal} (요일 ${weekdayNum}) 처리 중, activities 개수: ${dayObj.activities.length}`);
+                        
                         const normActs = dayObj.activities.map(a => ({
                             ...a,
                             start: this.normalizeHHMM(a.start),
                             end: this.normalizeHHMM(a.end)
                         }));
+                        
                         // lifestyle는 해당 요일만, task는 그대로 유지
                         const filtered = normActs.filter(a => {
                             if (a.type === 'lifestyle') {
@@ -728,22 +778,33 @@ JSON만 반환하세요.`
                                 const e = this.normalizeHHMM(a.end);
                                 const key = `${(a.title || '').trim()}|${s}|${e}`;
                                 const days = patternIndex.get(key);
-                                return Array.isArray(days) && days.includes(weekdayNum);
+                                const isMatch = Array.isArray(days) && days.includes(weekdayNum);
+                                console.log(`lifestyle 필터링: ${key} → ${isMatch ? '매칭' : '제거'}`);
+                                return isMatch;
                             }
                             return true;
                         });
+                        
+                        console.log(`day ${dayVal} 필터링 후 activities 개수: ${filtered.length}`);
+                        
                         normalized.push({
                             day: dayVal,
                             weekday: this.mapDayToWeekday(dayVal, now),
                             activities: filtered
                         });
                     }
+                    
                     // 14일 라이프스타일 베이스로 확장: 누락된 day는 lifestyle-only로 채우기
                     const haveDays = new Set(normalized.map(d => d.day));
+                    console.log('기존 day들:', Array.from(haveDays));
+                    console.log('lifestyleDays:', lifestyleDays);
+                    
                     for (const day of lifestyleDays) {
                         if (!haveDays.has(day)) {
                             const weekdayNum = this.relDayToWeekdayNumber(day, now);
                             const dayLifestyles = lifestyles.filter(l => Array.isArray(l.__days) && l.__days.includes(weekdayNum));
+                            console.log(`day ${day} (요일 ${weekdayNum}) lifestyle 추가: ${dayLifestyles.length}개`);
+                            
                             if (dayLifestyles.length) {
                                 normalized.push({
                                     day,
@@ -753,7 +814,9 @@ JSON만 반환하세요.`
                             }
                         }
                     }
+                    
                     normalized.sort((a,b)=>a.day-b.day);
+                    console.log('정규화된 스케줄 길이:', normalized.length);
                     if (normalized.length > 0) {
                         finalSchedule = normalized;
                     }
@@ -964,11 +1027,24 @@ JSON만 반환하세요.`
                 finalSchedule.sort((a,b)=>a.day-b.day);
 
                 console.log('[AISVC_V2] FINAL schedule days =', finalSchedule.map(d=>d.day));
+                console.log('최종 스케줄 길이:', finalSchedule.length);
+                
+                // 각 day별 activities 개수 확인
+                for (const dayObj of finalSchedule) {
+                    console.log(`day ${dayObj.day} (${dayObj.weekday}): activities ${dayObj.activities?.length || 0}개`);
+                    if (dayObj.activities && dayObj.activities.length > 0) {
+                        console.log(`  - ${dayObj.activities.map(a => `${a.title} (${a.start}-${a.end}, ${a.type})`).join(', ')}`);
+                    }
+                }
+                
                 const pretty = JSON.stringify(finalSchedule).slice(0, 4000);
                 console.log('최종 스케줄(미리보기 4KB):', pretty, '...');
                 
                 // 안전망: 최소 분산 배치 (라운드로빈 + 여러 슬롯)
                 const hasAnyTask = finalSchedule.some(d => Array.isArray(d.activities) && d.activities.some(a => a.type === 'task'));
+                console.log('hasAnyTask:', hasAnyTask);
+                console.log('existingTasks.length:', existingTasks?.length || 0);
+                
                 if (!hasAnyTask && Array.isArray(existingTasks) && existingTasks.length) {
                     // 우선순위 점수(대략): 중요 상=3/중=2/하=1, 난이도 상=+1/중=+0/하=-0.5, 긴급(남은일수 적을수록 가산)
                     const importanceMap = { '상': 3, '중': 2, '하': 1 };
