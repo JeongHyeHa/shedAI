@@ -7,6 +7,8 @@ export const resetToStartOfDay = (date) => {
 };
 
 export const parseDateString = (text, today) => {
+  console.log('[parseDateString] 입력:', text, 'today:', today);
+  
   const patterns = [
     { regex: /이번\s*주\s*(월|화|수|목|금|토|일)요일/g, type: 'thisWeek' },
     { regex: /다음\s*주\s*(월|화|수|목|금|토|일)요일/g, type: 'nextWeek' },
@@ -21,11 +23,15 @@ export const parseDateString = (text, today) => {
 
   for (const pattern of patterns) {
     const match = text.match(pattern.regex);
+    console.log('[parseDateString] 패턴 테스트:', pattern.type, '매치:', match);
     if (match) {
-      return parseDateByType(match, pattern.type, today);
+      const result = parseDateByType(match, pattern.type, today);
+      console.log('[parseDateString] parseDateByType 결과:', result);
+      return result;
     }
   }
   
+  console.log('[parseDateString] 매칭 실패, null 반환');
   return null;
 };
 
@@ -53,7 +59,9 @@ const parseDateByType = (match, type, today) => {
     case 'monthDay':
       const month = parseInt(match[1]);
       const day = parseInt(match[2]);
+      console.log('[parseDateByType] monthDay:', { month, day, matchArray: match });
       const monthDayDate = new Date(today.getFullYear(), month - 1, day);
+      console.log('[parseDateByType] monthDayDate 생성:', monthDayDate);
       return monthDayDate;
       
     case 'daysAfter':

@@ -206,4 +206,28 @@ button:disabled {
   display: none !important; 
 }
 
+/* 오늘 날짜 표시 (세이지그린 계열 - 부드러운 안정형) - 강력한 선택자 */
+.fc .fc-daygrid-day.fc-day-today {
+  background-color: #E3EAE3 !important; /* 세이지그린 배경 */
+  border: 2px solid #B8C9B8 !important; /* 세이지그린 테두리 */
+}
+
+.fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
+  color: #2D5A2D !important; /* 진한 세이지그린 */
+  font-weight: bold !important;
+}
+
+/* 주말 배경 색상 조정 (오늘과 명확히 구분) */
+.fc .fc-daygrid-day.fc-day-sat, 
+.fc .fc-daygrid-day.fc-day-sun {
+  background-color: #FFF9C4 !important; /* 연한 노란색 */
+}
+
+/* 오늘이 주말인 경우 오늘 색상 우선 - 더 구체적인 선택자 */
+.fc .fc-daygrid-day.fc-day-today.fc-day-sat, 
+.fc .fc-daygrid-day.fc-day-today.fc-day-sun {
+  background-color: #E3EAE3 !important; /* 세이지그린 우선 */
+  border: 2px solid #B8C9B8 !important;
+}
+
 /* 기본 버튼 스타일 */

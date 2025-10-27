@@ -35,11 +35,6 @@ class ApiService {
 
   // 스케줄 생성(gpt-4o) - 서버 시그니처와 일치하도록 수정
   async generateSchedule(messages, lifestylePatterns = [], existingTasks = [], opts = {}) {
-    console.log('=== API Service generateSchedule 호출 ===');
-    console.log('messages:', messages);
-    console.log('lifestylePatterns:', lifestylePatterns);
-    console.log('existingTasks:', existingTasks);
-    console.log('opts:', opts);
 
     const lastContent = messages?.[messages.length - 1]?.content || '';
 
@@ -54,7 +49,6 @@ class ApiService {
       ...opts
     };
 
-    console.log('[API] generateSchedule payload bytes:', new Blob([JSON.stringify(requestData)]).size);
     
     // userId/sessionId가 있으면 쿼리와 헤더에도 함께 넣어 서버에서 안전하게 읽도록
     const qs = (opts?.userId && opts?.sessionId)
@@ -74,22 +68,6 @@ class ApiService {
       body: JSON.stringify(requestData)
     });
 
-    // AI 응답 디버깅
-    console.log('=== AI 응답 디버깅 ===');
-    console.log('응답 타입:', typeof response);
-    console.log('응답 키들:', Object.keys(response || {}));
-    console.log('schedule 키 존재:', 'schedule' in (response || {}));
-    console.log('schedule 타입:', typeof response?.schedule);
-    console.log('schedule 길이:', Array.isArray(response?.schedule) ? response.schedule.length : 'N/A');
-    
-    if (Array.isArray(response?.schedule)) {
-      console.log('첫 번째 day 데이터:', response.schedule[0]);
-      console.log('activities 배열 길이:', response.schedule[0]?.activities?.length || 0);
-      console.log('activities 내용:', response.schedule[0]?.activities);
-    }
-    
-    console.log('전체 응답:', response);
-    console.log('=== AI 응답 디버깅 끝 ===');
 
     return response;
   }
@@ -107,8 +85,9 @@ class ApiService {
   }
 
   // AI 조언 조회
-  async getAdvice(sessionId) {
-    return this.request(API_ENDPOINTS.FEEDBACK.ADVICE(sessionId));
+  async getAdvice(params) {
+    const queryParams = new URLSearchParams(params).toString();
+    return this.request(`${API_ENDPOINTS.FEEDBACK.ADVICE()}?${queryParams}`);
   }
 
   // 생활 패턴 저장

@@ -7,6 +7,9 @@
  * @description 유연한 키워드 기반 fallback task 자동 생성 시스템
  */
 
+// 버전 확인용 (런타임에서 로드된 파일 확인)
+export const __FALLBACK_VERSION__ = '2.0.0';
+
 // 상수 정의
 // 다중 그룹 키워드 우선순위 (exam > project > study > interview > preparation)
 const GROUP_PRIORITY = ['exam','project','study','interview','preparation'];
@@ -266,7 +269,7 @@ export const detectComprehensiveFallback = ({ text, aiResponse, existingTasks })
   };
 
   // 📊 상세한 fallback 생성 로그 (개발 환경에서만)
-  if (process?.env?.NODE_ENV !== 'production') {
+  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
     // eslint-disable-next-line no-console
     console.info('[Fallback Generated]', {
       title: fallbackTask.title,

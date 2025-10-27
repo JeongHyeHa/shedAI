@@ -57,6 +57,9 @@ router.post('/feedback', aiController.saveFeedback);
 // AI 조언 생성 엔드포인트
 router.post('/advice/generate', aiController.generateAdvice);
 
+// AI 조언 조회 엔드포인트
+router.get('/advice', aiController.getAdvice);
+
 // OpenAI 연결 진단
 router.get('/debug/openai', aiController.debugOpenAI);
 

@@ -1,3 +1,4 @@
+// firestoreService.js
 import { 
   collection, 
   doc, 
@@ -17,6 +18,9 @@ import { db } from '../config/firebase';
 
 class FirestoreService {
   constructor() {
+    if (!db) {
+      throw new Error('Firebase가 초기화되지 않았습니다. .env 환경변수를 확인하세요.');
+    }
     this.db = db;
   }
 
@@ -76,7 +80,10 @@ class FirestoreService {
       .replace(/\d{1,2}(:\d{2})?\s*[~\-]\s*\d{1,2}(:\d{2})?/,'')
       .trim() || '제목없음';
 
-    return { days, start, end, title, patternText: text, isActive: true };
+    // 야간 구간(자정 넘김) 감지
+    const overnight = end <= start; // 예: '23:00' > '02:00' → true
+
+    return { days, start, end, title, patternText: text, isActive: true, overnight };
   }
 
   // 사용자 데이터 조회 (AI 분석용) - 보안 검증 포함
@@ -169,7 +176,18 @@ class FirestoreService {
   // 할 일 저장
   async saveTask(userId, taskData) {
     try {
-      console.log('FirestoreService.saveTask 호출:', { userId, taskData });
+      // 입력 검증
+      if (!userId) {
+        console.error('[FirestoreService.saveTask] userId가 없습니다.');
+        throw new Error('userId가 없습니다.');
+      }
+      if (!taskData?.title) {
+        console.error('[FirestoreService.saveTask] taskData.title이 없습니다.');
+        throw new Error('taskData.title이 없습니다.');
+      }
+
+      console.log('[FirestoreService.saveTask] userId:', userId, 'title:', taskData.title);
+      
       const tasksRef = collection(this.db, 'users', userId, 'tasks');
       
       const docRef = await addDoc(tasksRef, {
@@ -178,10 +196,10 @@ class FirestoreService {
         isActive: true
       });
       
-      console.log('Firestore 할 일 저장 성공, ID:', docRef.id);
+      console.log('[FirestoreService.saveTask] 저장 성공, docId:', docRef.id);
       return docRef.id;
     } catch (error) {
-      console.error('할 일 저장 실패:', error);
+      console.error('[FirestoreService.saveTask] 저장 실패:', error);
       throw error;
     }
   }
@@ -206,7 +224,6 @@ class FirestoreService {
   // 모든 할 일 조회 (활성화/비활성화 포함)
   async getAllTasks(userId) {
     try {
-      console.log('FirestoreService.getAllTasks 호출:', userId);
       const tasksRef = collection(this.db, 'users', userId, 'tasks');
       const q = query(tasksRef, orderBy('createdAt', 'desc'));
       const querySnapshot = await getDocs(q);
@@ -216,7 +233,6 @@ class FirestoreService {
         ...doc.data()
       }));
       
-      console.log('Firestore 할 일 조회 성공, 개수:', tasks.length);
       return tasks;
     } catch (error) {
       console.error('모든 할 일 조회 실패:', error);
@@ -304,8 +320,21 @@ class FirestoreService {
     try {
       const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
       
-      // 실제 스케줄이 있는 세션만 활성화 대상으로 간주
-      const willActivate = Array.isArray(sessionData?.scheduleData) && sessionData.scheduleData.length > 0;
+      // 실제 스케줄 존재 여부 판단 (배열/객체 모든 형태 지원)
+      const hasRealSchedule = (sd) => {
+        if (!sd) return false;
+        // 형태1: 배열(이벤트 리스트 등)
+        if (Array.isArray(sd)) return sd.length > 0;
+        // 형태2: 객체.days[...activities...]
+        if (Array.isArray(sd.days)) {
+          return sd.days.some(d => Array.isArray(d.activities) && d.activities.length > 0);
+        }
+        // 형태3: 객체.events[...]
+        if (Array.isArray(sd.events)) return sd.events.length > 0;
+        return false;
+      };
+      const willActivate = hasRealSchedule(sessionData?.scheduleData);
+      
       if (willActivate) {
         await this.deactivateScheduleSessions(userId);
       }
@@ -316,6 +345,7 @@ class FirestoreService {
         hasSchedule: willActivate,   // 강제 일치
         isActive: willActivate,      // 강제 일치
         createdAt: serverTimestamp(),
+        createdAtMs: Date.now(),    // 클라이언트 타임스탬프 (빠른 정렬용)
         updatedAt: serverTimestamp()
       });
       
@@ -330,22 +360,30 @@ class FirestoreService {
   async getLastSchedule(userId) {
     try {
       const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
-      const q = query(sessionsRef, orderBy('createdAt', 'desc'), limit(1));
+      
+      // 실제 스케줄 존재 여부 판단 헬퍼
+      const hasRealSchedule = (sd) => {
+        if (!sd) return false;
+        if (Array.isArray(sd)) return sd.length > 0;
+        if (Array.isArray(sd?.days)) {
+          return sd.days.some(d => Array.isArray(d.activities) && d.activities.length > 0);
+        }
+        if (Array.isArray(sd?.events)) return sd.events.length > 0;
+        return false;
+      };
+      
+      // 최신 N개를 훑어서 유효한 스케줄 찾기 (인덱스 필요 없음)
+      // createdAtMs를 우선 사용 (서버 타임스탬프 지연 방지)
+      const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(10));
       const qs = await getDocs(q);
-      if (qs.empty) return null;
-      
-      const latest = qs.docs[0].data();
-      
-      // scheduleData가 배열이고 길이가 > 0 이면 스케줄 있다고 간주
-      if (Array.isArray(latest?.scheduleData) && latest.scheduleData.length > 0) {
-        return latest;
+      for (const doc of qs.docs) {
+        const data = doc.data();
+        if (hasRealSchedule(data?.scheduleData)) {
+          return data;
+        }
       }
       
-      // 빈 스케줄이면 null 반환 (hasSchedule 무시)
-      console.log('[FirestoreService] 빈 스케줄 감지 - null 반환:', {
-        hasSchedule: latest?.hasSchedule,
-        scheduleDataLength: latest?.scheduleData?.length || 0
-      });
+      // 유효한 스케줄이 없으면 null 반환
       return null;
     } catch (error) {
       console.error('최근 스케줄 조회 실패:', error);
@@ -624,17 +662,25 @@ class FirestoreService {
   async getHabitLogsForMonth(userId, habitId, year, month) {
     try {
       // month: 1-12
-      const first = new Date(Date.UTC(year, month - 1, 1));
-      const last = new Date(Date.UTC(year, month, 0));
       const logsRef = collection(this.db, 'users', userId, 'habits', habitId, 'logs');
-      const qs = await getDocs(logsRef);
-      const all = qs.docs.map(d => d.data());
+      const startISO = `${year}-${String(month).padStart(2,'0')}-01`;
+      const endDate = new Date(Date.UTC(year, month, 0)).getUTCDate(); // 말일
+      const endISO = `${year}-${String(month).padStart(2,'0')}-${String(endDate).padStart(2,'0')}`;
+      
+      // 서버 쿼리로 필터링하여 성능 개선
+      const qy = query(
+        logsRef,
+        where('date', '>=', startISO),
+        where('date', '<=', endISO),
+        orderBy('date', 'asc')
+      );
+      const qs = await getDocs(qy);
+      
       const inMonth = {};
-      for (const log of all) {
-        if (!log?.date) continue;
-        const d = new Date(log.date + 'T00:00:00Z');
-        if (d >= first && d <= last) {
-          inMonth[log.date] = !!log.done;
+      for (const doc of qs.docs) {
+        const data = doc.data();
+        if (data?.date) {
+          inMonth[data.date] = !!data.done;
         }
       }
       return inMonth; // map { 'YYYY-MM-DD': true }
@@ -652,7 +698,10 @@ class FirestoreService {
       const querySnapshot = await getDocs(q);
       
       const updatePromises = querySnapshot.docs.map(doc => 
-        updateDoc(doc.ref, { isActive: false })
+        updateDoc(doc.ref, { 
+          isActive: false,
+          updatedAt: serverTimestamp()
+        })
       );
       
       await Promise.all(updatePromises);
@@ -669,7 +718,10 @@ class FirestoreService {
       const querySnapshot = await getDocs(q);
       
       const updatePromises = querySnapshot.docs.map(doc => 
-        updateDoc(doc.ref, { isActive: false })
+        updateDoc(doc.ref, { 
+          isActive: false,
+          updatedAt: serverTimestamp()
+        })
       );
       
       await Promise.all(updatePromises);
@@ -679,4 +731,15 @@ class FirestoreService {
   }
 }
 
-export default new FirestoreService();
+// Lazy singleton pattern - Firebase 초기화 순서 문제 방지
+let _firestoreServiceInstance = null;
+
+export function getFirestoreService() {
+  if (!_firestoreServiceInstance) {
+    _firestoreServiceInstance = new FirestoreService();
+  }
+  return _firestoreServiceInstance;
+}
+
+// 기본 export는 인스턴스로 (일관성 유지)
+export default getFirestoreService();

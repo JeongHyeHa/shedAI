@@ -69,27 +69,27 @@
   font-size: 13px;
 }
 
-/* 주말과 평일 구분 스타일 */
+/* 주말과 평일 구분 스타일 (연한 노란색 파스텔) */
 .fc .fc-daygrid-day.fc-day-sun,
 .fc .fc-daygrid-day.fc-day-sat {
-  background-color: #FFF8DC !important; /* 연한 노란색 */
+  background-color: #FFF9C4 !important; /* 연한 노란색 파스텔 */
 }
 
 .fc .fc-timegrid-day.fc-day-sun,
 .fc .fc-timegrid-day.fc-day-sat {
-  background-color: #FFF8DC !important; /* 연한 노란색 */
+  background-color: #FFF9C4 !important; /* 연한 노란색 파스텔 */
 }
 
-/* 주말 요일 헤더 스타일 */
+/* 주말 요일 헤더 스타일 (파스텔 톤) */
 .fc .fc-col-header-cell.fc-day-sun,
 .fc .fc-col-header-cell.fc-day-sat {
-  background-color: #FFF8DC !important;
+  background-color: #FFF9C4 !important; /* 연한 노란색 파스텔 */
   color: #1C2D5A !important;
   font-weight: bold;
 }
 
-/* 주간 뷰에서 주말 컬럼 스타일 */
+/* 주간 뷰에서 주말 컬럼 스타일 (파스텔 톤) */
 .fc .fc-timegrid-slot.fc-day-sun,
 .fc .fc-timegrid-slot.fc-day-sat {
-  background-color: #FFF8DC !important;
+  background-color: #FFF9C4 !important; /* 연한 노란색 파스텔 */
 } 

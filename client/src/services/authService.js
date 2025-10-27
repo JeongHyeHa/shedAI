@@ -1,21 +1,51 @@
-import { 
-  getAuth, 
-  createUserWithEmailAndPassword, 
+// authService.js
+import {
+  createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  signOut,
+  signOut as fbSignOut,
   onAuthStateChanged,
   GoogleAuthProvider,
   signInWithPopup,
   updateProfile
 } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { db } from '../config/firebase';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from '../config/firebase';
 import { STORAGE_KEYS } from '../constants/ui';
 
 class AuthService {
   constructor() {
-    this.auth = getAuth();
+    if (!auth || !db) {
+      throw new Error('Firebase가 초기화되지 않았습니다. .env 환경변수를 확인하세요.');
+    }
+    this.auth = auth;
     this.googleProvider = new GoogleAuthProvider();
+  }
+
+  // 🔧 새 사용자일 때 로컬 스토리지 정리
+  clearLocalStorage() {
+    try {
+      // 프로젝트에서 관리하는 키들을 정리
+      // 'shedAI:' 접두사로 시작하는 모든 키 제거
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('shedAI:')) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      
+      // STORAGE_KEYS에 명시된 키도 제거
+      if (STORAGE_KEYS && typeof STORAGE_KEYS === 'object') {
+        Object.values(STORAGE_KEYS).forEach((k) => {
+          if (typeof k === 'string') localStorage.removeItem(k);
+        });
+      }
+      
+      console.log('[AuthService] 로컬 스토리지 정리 완료');
+    } catch (e) {
+      console.warn('[AuthService] clearLocalStorage 실패:', e);
+    }
   }
 
   // 회원가입
@@ -36,8 +66,8 @@ class AuthService {
       await this.createUserProfile(userCredential.user.uid, {
         email,
         displayName,
-        createdAt: new Date(),
-        lastLoginAt: new Date()
+        createdAt: serverTimestamp(),
+        lastLoginAt: serverTimestamp()
       });
       
       // 새 사용자이므로 로컬스토리지 초기화
@@ -45,7 +75,7 @@ class AuthService {
       
       return userCredential.user;
     } catch (error) {
-      throw new Error(this.getErrorMessage(error.code));
+      throw new Error(this.getErrorMessage(error?.code));
     }
   }
 
@@ -63,7 +93,7 @@ class AuthService {
       
       return userCredential.user;
     } catch (error) {
-      throw new Error(this.getErrorMessage(error.code));
+      throw new Error(this.getErrorMessage(error?.code));
     }
   }
 
@@ -76,8 +106,8 @@ class AuthService {
       const isNewUser = await this.createUserProfileIfNotExists(result.user.uid, {
         email: result.user.email,
         displayName: result.user.displayName,
-        createdAt: new Date(),
-        lastLoginAt: new Date()
+        createdAt: serverTimestamp(),
+        lastLoginAt: serverTimestamp()
       });
       
       // 새 사용자이면 로컬스토리지 초기화
@@ -87,14 +117,14 @@ class AuthService {
       
       return result.user;
     } catch (error) {
-      throw new Error(this.getErrorMessage(error.code));
+      throw new Error(this.getErrorMessage(error?.code));
     }
   }
 
   // 로그아웃
-  async signOut() {
+  async signOutUser() {
     try {
-      await signOut(this.auth);
+      await fbSignOut(this.auth);
     } catch (error) {
       throw new Error('로그아웃 실패');
     }
@@ -134,7 +164,7 @@ class AuthService {
   // 마지막 로그인 시간 업데이트
   async updateLastLogin(userId) {
     const userRef = doc(db, 'users', userId);
-    await setDoc(userRef, { lastLoginAt: new Date() }, { merge: true });
+    await setDoc(userRef, { lastLoginAt: serverTimestamp() }, { merge: true });
   }
 
   // 에러 메시지 변환

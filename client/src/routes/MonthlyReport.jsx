@@ -373,13 +373,21 @@ export default function MonthlyReport() {
           </div>
           <div style={{ color: '#555', fontSize: '12px', marginBottom: 8, opacity: 0.7 }}>
             {aiAdviceTimestamp ? (
-              `마지막 생성: ${aiAdviceTimestamp.toLocaleString('ko-KR', { 
-                year: 'numeric', 
-                month: '2-digit', 
-                day: '2-digit', 
-                hour: '2-digit', 
-                minute: '2-digit' 
-              })}`
+              `마지막 생성: ${(() => {
+                try {
+                  const date = aiAdviceTimestamp.toDate ? aiAdviceTimestamp.toDate() : new Date(aiAdviceTimestamp);
+                  return date.toLocaleString('ko-KR', { 
+                    year: 'numeric', 
+                    month: '2-digit', 
+                    day: '2-digit', 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                  });
+                } catch (error) {
+                  console.error('타임스탬프 변환 오류:', error);
+                  return '날짜 정보 없음';
+                }
+              })()}`
             ) : (
               '(하루가 끝나가는 22시에 AI 조언이 생성됩니다.)'
             )}

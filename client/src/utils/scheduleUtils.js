@@ -1,8 +1,12 @@
 // 스케줄과 관련된 모든 처리 로직을 담당하는 유틸리티
 
-// 디버깅 유틸리티
+// 디버깅 유틸리티 (환경 독립형)
+const isDev =
+  (typeof import.meta !== 'undefined' && import.meta.env?.MODE !== 'production') ||
+  (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production');
+
 const debug = (...args) => {
-  if (process.env.NODE_ENV !== 'production') console.log(...args);
+  if (isDev) console.log(...args);
 };
 
 // 클라이언트용 날짜 전처리 함수 (test_dates.js와 동일한 로직)
@@ -129,8 +133,8 @@ export function preprocessMessage(message) {
       let d = new Date(yy, mm, dd);
       // 옵션: 이미 과거면 내년
       if (d < resetToStartOfDay(base)) d = new Date(yy + 1, mm, dd);
-      // 유효성: 역직렬화해서 월/일 동일해야 함
-      if (d.getFullYear() === d.getFullYear() && d.getMonth() === mm && d.getDate() === dd) {
+      // 유효성: 역직렬화해서 연/월/일 동일해야 함
+      if (d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
         return `${m} (day:${getGptDayIndex(d)})`;
       }
       return m; // 무효하면 그대로 반환(태깅 생략)
@@ -186,11 +190,25 @@ export function preprocessMessage(message) {
     });
   // '반' = 30분
   wrap(new RegExp(`${KB.L}오전\\s*(\\d{1,2})시\\s*반(?![^()]*\\))${KB.R}`, 'g'),
-    (m, prefix, h, suffix) => `${injectTime(`${prefix}오전 ${h}시`, (parseInt(h,10)%12))}`.replace(':00', ':30') + suffix);
+    (m, prefix, h, suffix) => {
+      const hh = (parseInt(h,10)%12).toString().padStart(2,'0');
+      foundTime = true;
+      return `${prefix}오전 ${h}시 (${hh}:30)${suffix}`;
+    });
   wrap(new RegExp(`${KB.L}오후\\s*(\\d{1,2})시\\s*반(?![^()]*\\))${KB.R}`, 'g'),
-    (m, prefix, h, suffix) => `${injectTime(`${prefix}오후 ${h}시`, (parseInt(h,10)%12)+12)}`.replace(':00', ':30') + suffix);
+    (m, prefix, h, suffix) => {
+      const base = (parseInt(h,10)%12)+12;
+      const hh = base.toString().padStart(2,'0');
+      foundTime = true;
+      return `${prefix}오후 ${h}시 (${hh}:30)${suffix}`;
+    });
   wrap(new RegExp(`${KB.L}(\\d{1,2})시\\s*반(?![^()]*\\))${KB.R}`, 'g'),
-    (m, prefix, h, suffix) => `${injectTime(`${prefix}${h}시`, (parseInt(h,10)===12?12:parseInt(h,10)))}`.replace(':00', ':30') + suffix);
+    (m, prefix, h, suffix) => {
+      const base = (parseInt(h,10)===12?12:parseInt(h,10));
+      const hh = base.toString().padStart(2,'0');
+      foundTime = true;
+      return `${prefix}${h}시 (${hh}:30)${suffix}`;
+    });
   
   wrap(new RegExp(`${KB.L}(자정)(?![^()]*\\))${KB.R}`, 'g'),
     (m, prefix, w, suffix) => `${injectTime(`${prefix}${w}`, 0)}${suffix}`);
@@ -211,15 +229,15 @@ export function preprocessMessage(message) {
     (m, prefix, w, suffix) => `${injectTime(`${prefix}${w}`, 12)}${suffix}`);
 
   wrap(new RegExp(`${KB.L}오전\\s*(\\d{1,2})시(?![^()]*\\))${KB.R}`, 'g'),
-    (m, prefix, body, h, suffix) => `${injectTime(`${prefix}${body}`, (parseInt(h,10)%12))}${suffix}`);
+    (m, prefix, h, suffix) => `${injectTime(`${prefix}오전 ${h}시`, (parseInt(h,10)%12))}${suffix}`);
 
   wrap(new RegExp(`${KB.L}오후\\s*(\\d{1,2})시(?![^()]*\\))${KB.R}`, 'g'),
-    (m, prefix, body, h, suffix) => `${injectTime(`${prefix}${body}`, (parseInt(h,10)%12)+12)}${suffix}`);
+    (m, prefix, h, suffix) => `${injectTime(`${prefix}오후 ${h}시`, (parseInt(h,10)%12)+12)}${suffix}`);
 
   wrap(new RegExp(`${KB.L}(\\d{1,2})시(?![^()]*\\))${KB.R}`, 'g'),
-    (m, prefix, body, h, suffix) => {
+    (m, prefix, h, suffix) => {
       const n = parseInt(h, 10);
-      return `${injectTime(`${prefix}${body}`, n === 12 ? 12 : n)}${suffix}`;
+      return `${injectTime(`${prefix}${h}시`, n === 12 ? 12 : n)}${suffix}`;
     });
   
   // === 5) '시간만 있고 날짜가 전혀 없는 경우'에만 day 보강 ===
@@ -622,16 +640,16 @@ export function resetToStartOfDay(date, isEnd = false) {
     const todayDayOfWeek = today.getDay();
     const gptDayToday = todayDayOfWeek === 0 ? 7 : todayDayOfWeek;
     
-    // 디버깅: day 계산 로직 확인
-    if (process.env.NODE_ENV !== 'production') {
-      debug('[convertScheduleToEvents] 디버깅 정보:', {
-        gptDayToday,
-        today: today.toISOString().split('T')[0],
-        todayDayOfWeek, // 0=일요일, 1=월요일, ...
-        scheduleDataLength: scheduleData.length,
-        firstDayBlock: scheduleData[0]
-      });
-    }
+    // 디버깅 로그 제거 (필요시 주석 해제)
+    // if (isDev) {
+    //   debug('[convertScheduleToEvents] 디버깅 정보:', {
+    //     gptDayToday,
+    //     today: today.toISOString().split('T')[0],
+    //     todayDayOfWeek,
+    //     scheduleDataLength: scheduleData.length,
+    //     firstDayBlock: scheduleData[0]
+    //   });
+    // }
 
     scheduleData.forEach(dayBlock => {
       // dayBlock이 유효하지 않으면 건너뛰기
@@ -678,15 +696,15 @@ export function resetToStartOfDay(date, isEnd = false) {
           description: activity.description
         };
         
-        // 디버깅을 위한 로그 추가
-        if (process.env.NODE_ENV !== 'production' && activity.type === 'task') {
-          console.log('[convertScheduleToEvents] task 타입 이벤트 생성:', {
-            title: activity.title,
-            type: activity.type,
-            start: activity.start,
-            end: activity.end
-          });
-        }
+        // 디버깅 로그 제거 (필요시 주석 해제)
+        // if (isDev && activity.type === 'task') {
+        //   console.log('[convertScheduleToEvents] task 타입 이벤트 생성:', {
+        //     title: activity.title,
+        //     type: activity.type,
+        //     start: activity.start,
+        //     end: activity.end
+        //   });
+        // }
 
         if (end < start) {
           const endOfToday = resetToStartOfDay(start, true); // 당일 23:59:59

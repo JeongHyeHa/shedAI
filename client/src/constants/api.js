@@ -8,7 +8,7 @@ export const API_ENDPOINTS = {
   },
   FEEDBACK: { // 피드백 생성
     BASE: '/api/feedback',
-    ADVICE: (sessionId) => `/api/feedback/advice/${sessionId}`
+    ADVICE: () => '/api/advice'
   },
   LIFESTYLE: { // 생활패턴 저장
     BASE: '/api/lifestyle-patterns'

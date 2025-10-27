@@ -488,6 +488,49 @@ class AIController {
         }
     }
 
+    // AI 조언 조회
+    async getAdvice(req, res) {
+        try {
+            const { userId, sessionId } = req.query;
+            
+            if (!userId) {
+                return res.status(400).json({ 
+                    ok: false, 
+                    message: '사용자 ID가 필요합니다.' 
+                });
+            }
+
+            // Firestore에서 최근 AI 조언 조회
+            const firestoreService = require('../services/firestoreService');
+            const feedbacks = await firestoreService.getFeedbacks(userId);
+            
+            const latestAdvice = feedbacks
+                .filter(f => f.type === 'ai_advice')
+                .sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt))[0];
+            
+            if (latestAdvice) {
+                res.json({ 
+                    ok: true, 
+                    advice: latestAdvice.advice,
+                    generatedAt: latestAdvice.generatedAt,
+                    timestamp: latestAdvice.generatedAt
+                });
+            } else {
+                res.json({ 
+                    ok: true, 
+                    advice: [],
+                    message: 'AI 조언이 없습니다.'
+                });
+            }
+        } catch (error) {
+            console.error('AI 조언 조회 컨트롤러 에러:', error);
+            res.status(500).json({ 
+                ok: false, 
+                message: 'AI 조언 조회에 실패했습니다.' 
+            });
+        }
+    }
+
     // AI 조언 생성
     async generateAdvice(req, res) {
         try {

@@ -79,6 +79,22 @@
   margin-bottom: 0 !important;
 }
 
+/* 임시저장 할 일 스타일 */
+.local-task {
+  border-left: 4px solid #ff9800;
+  background-color: #fff8e1;
+}
+
+.local-badge {
+  background: #ff9800;
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-left: 8px;
+  font-weight: 500;
+}
+
 .close-btn {
   background: none;
   border: none;

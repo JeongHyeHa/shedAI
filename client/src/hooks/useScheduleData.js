@@ -26,12 +26,8 @@ export function useScheduleData() {
         // 정규화된 스케줄 배열 추출
         const scheduleArr = normalizeSchedule(userData.lastSchedule);
         
-        console.log('[ScheduleData] userData.lastSchedule:', userData.lastSchedule);
-        console.log('[ScheduleData] scheduleArr:', scheduleArr);
-        
         // 빈 스케줄 데이터 처리
         if (scheduleArr.length === 0) {
-          console.log('[ScheduleData] 빈 스케줄 데이터 - 이벤트 없음');
           setAllEvents([]);
           return;
         }
@@ -39,14 +35,8 @@ export function useScheduleData() {
         // activities 상태 확인
         const hasActivities = hasAnyActivities(scheduleArr);
         
-        console.log('[ScheduleData] 스케줄에 활동이 있는지 확인:', hasActivities);
-        
         if (!hasActivities) {
-          console.warn('[ScheduleData] activities가 전부 비어 있음. 원본 보존.');
-          console.warn('[ScheduleData] 빈 activities 상세:', scheduleArr.map((day, i) => `day ${i}: ${day.activities?.length || 0}개`));
           setAllEvents([]);
-          // setLastSchedule(null); // 디버깅을 위해 원본 보존
-          // localStorage.removeItem(...); // 당장 지우지 않기
           return;
         }
 
@@ -58,8 +48,6 @@ export function useScheduleData() {
             isDone: false,
           }
         }));
-        
-        console.log('[ScheduleData] 변환된 이벤트 수:', events.length);
         setAllEvents(events);
         
         // 로컬 백업 저장 (정규화된 형태로)
@@ -118,7 +106,6 @@ export function useScheduleData() {
     const scheduleArr = normalizeSchedule(newSchedule);
     
     if (scheduleArr.length === 0) {
-      console.log('[ScheduleData] updateSchedule: 빈 스케줄');
       setAllEvents([]);
       return;
     }
@@ -127,7 +114,6 @@ export function useScheduleData() {
     const hasActivities = hasAnyActivities(scheduleArr);
     
     if (!hasActivities) {
-      console.warn('[ScheduleData] updateSchedule: activities가 비어 있음');
       setAllEvents([]);
       return;
     }
@@ -139,8 +125,6 @@ export function useScheduleData() {
         isDone: false,
       }
     }));
-    
-    console.log('[ScheduleData] updateSchedule: 변환된 이벤트 수:', events.length);
     setAllEvents(events);
   }, [today]);
 

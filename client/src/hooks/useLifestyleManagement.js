@@ -18,13 +18,11 @@ export function useLifestyleManagement() {
         if (userData?.lifestylePatterns && userData.lifestylePatterns.length > 0) {
           // DB에 데이터가 있고, 현재 UI가 비어있을 때만 로드
           if (lifestyleList.length === 0) {
-            console.log('DB에서 생활패턴 로드:', userData.lifestylePatterns);
             setLifestyleList(userData.lifestylePatterns);
           }
         } else {
           // DB에 데이터가 없으면 UI도 비우기
           if (lifestyleList.length > 0) {
-            console.log('DB에 데이터 없음, UI 비우기');
             setLifestyleList([]);
           }
         }

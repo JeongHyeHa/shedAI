@@ -10,7 +10,7 @@ import "./components/Auth/Auth.css";
 
 // 인증이 필요한 컴포넌트
 function ProtectedRoute({ children }) {
-  const { user, loading } = useAuth();
+  const { user, loading, authError } = useAuth();
 
   if (loading) {
     return (
@@ -22,6 +22,29 @@ function ProtectedRoute({ children }) {
         fontSize: '18px'
       }}>
         로딩 중...
+      </div>
+    );
+  }
+
+  // Firebase 초기화 에러 표시
+  if (authError) {
+    return (
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column',
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        height: '100vh',
+        padding: '20px',
+        textAlign: 'center'
+      }}>
+        <h2 style={{ color: '#d32f2f' }}>Firebase 초기화 실패</h2>
+        <p style={{ marginTop: '10px', fontSize: '16px' }}>
+          {authError.message || 'Firebase 환경변수를 확인해주세요.'}
+        </p>
+        <p style={{ marginTop: '20px', fontSize: '14px', color: '#666' }}>
+          클라이언트 폴더에 .env 파일을 생성하고 Firebase 환경변수를 설정하세요.
+        </p>
       </div>
     );
   }
