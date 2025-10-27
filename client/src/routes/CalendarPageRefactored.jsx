@@ -77,7 +77,7 @@ const buildScheduleMessages = ({ basePrompt, conversationContext, existingTasksF
 
 // --- 정책 플래그 ---
 const ALLOW_AUTO_FALLBACK = false; // ⛔︎ 임시/추측 태스크 생성 금지
-const ALLOW_AUTO_REPEAT   = true;  // ✅ 반복 배치 허용(단, 사용자 제공 태스크만)
+const ALLOW_AUTO_REPEAT   = false; // ⛔︎ 클라 자동반복 전면 OFF (서버/후처리에서만 처리)
 
 // 화이트리스트 필터링 유틸
 const filterTasksByWhitelist = (schedule, allowedTitleSet) => {
@@ -87,7 +87,7 @@ const filterTasksByWhitelist = (schedule, allowedTitleSet) => {
     activities: (day.activities || []).filter(a => {
       const t = (a.type || 'task').toLowerCase();
       if (t !== 'task') return true;               // lifestyle 등은 그대로
-      const title = (a.title || '').trim();
+      const title = normTitle(a.title || '');
       return allowedTitleSet.has(title);           // 제목이 화이트리스트에 있을 때만 유지
     })
   }));
@@ -105,7 +105,7 @@ const postprocessSchedule = ({
 
   // 🛡️ 사용자 제공 제목 화이트리스트 생성
   const allowedTitles = new Set(
-    (existingTasksForAI || []).map(t => (t.title || '').trim()).filter(Boolean)
+    (existingTasksForAI || []).map(t => normTitle(t.title || '')).filter(Boolean)
   );
 
   // 2) day 정규화 및 lifestyle 제목 정리
@@ -135,9 +135,10 @@ const postprocessSchedule = ({
   // 🔒 4.5) 화이트리스트 강제: 사용자 제공이 아닌 task 전부 제거
   schedule = filterTasksByWhitelist(schedule, allowedTitles);
 
-  // 5) 충돌/데드라인/주말 보정 (반복 배치도 화이트리스트 안에서만)
-  schedule = fixOverlaps(schedule, { allowedTitles, allowAutoRepeat: ALLOW_AUTO_REPEAT });
+  // 5) 데드라인 맵 먼저 계산하여 fixOverlaps에 전달
   const deadlineMap = buildDeadlineDayMap(existingTasksForAI, today);
+  schedule = fixOverlaps(schedule, { allowedTitles, allowAutoRepeat: ALLOW_AUTO_REPEAT, deadlineMap });
+  // 마지막 방어막 (혹시 남은 것 컷)
   schedule = capTasksByDeadline(schedule, deadlineMap);
   schedule = stripWeekendWork(schedule);
 
@@ -478,6 +479,7 @@ const cleanLifestyleTitle = (title, start, end) => {
 const fixOverlaps = (schedule, opts = {}) => {
   const allowed = opts.allowedTitles || new Set();
   const allowAutoRepeat = !!opts.allowAutoRepeat;
+  const deadlineMap = opts.deadlineMap || new Map();
   const copy = (schedule||[]).map(day => ({
     ...day,
     activities: (day.activities||[]).map(a=>({...a}))
@@ -487,6 +489,15 @@ const fixOverlaps = (schedule, opts = {}) => {
               const examTasks = [];
               for (const day of copy) {
                 for (const a of day.activities || []) {
+                  // ✅ 하루 단위 선제 컷: 마감 지난 task는 즉시 제거
+                  if ((a.type||'').toLowerCase() === 'task') {
+                    const dl = deadlineMap.get(normTitle(a.title||''));
+                    if (dl && day.day > dl) {
+                      console.info('[Deadline Cut] day>', dl, '→ drop:', a.title, '(day=', day.day, ')');
+                      a.__drop__ = true;
+                      continue;
+                    }
+                  }
                   if ((a.type||'').toLowerCase() === 'task' && 
                       (a.importance === '상' || a.difficulty === '상' || a.isRepeating || isExamTitle(a.title))) {
         // 🔒 사용자 제공 제목만 후보로 인정
@@ -500,6 +511,8 @@ const fixOverlaps = (schedule, opts = {}) => {
                     });
                   }
                 }
+                // 위에서 표시한 것 제거
+                day.activities = day.activities.filter(a => !a.__drop__);
               }
 
   // 🔧 성능 최적화: lifestyle 블록을 미리 계산하여 캐싱
@@ -590,45 +603,51 @@ const fixOverlaps = (schedule, opts = {}) => {
       const safeIdx = offset < 0 ? offset + examTasks.length : offset;
       const examTask = examTasks[safeIdx];
       
-      // 같은 제목의 task가 이미 있으면 skip
-      const hasSameTitle = day.activities.some(a =>
-        (a.type||'').toLowerCase() === 'task' && a.title === examTask.title
-      );
-      
-      if (!hasSameTitle) {
-        // 캐싱된 freeBlocks 재사용
-        const placed = placeIntoFree(freeBlocks, examTask.duration);
-        
-        if (placed) {
-          const repeatedTask = {
-            title: examTask.title,
-            start: minToHHMM(placed.start),
-            end: minToHHMM(placed.end),
-            type: 'task',
-            importance: examTask.importance,
-            difficulty: examTask.difficulty,
-            isRepeating: true,
-            source: 'auto_repeat'
-          };
-          
-          // 추가 시점에도 방어
-          if (!allowed.has((repeatedTask.title||'').trim())) continue;
-          
-          day.activities.push(repeatedTask);
-          
-          // 🔄 반복 힌트를 실제 배치에 반영 (3일 연속 배치)
-          if (examTask.isRepeating) {
-            console.info('[Auto Repeat] 반복 배치 추가:', examTask.title, `(${minToHHMM(placed.start)}-${minToHHMM(placed.end)})`);
-          }
-        }
+      // ✅ 자동 반복도 데드라인 넘으면 아예 생성 금지
+      const dl = deadlineMap.get(normTitle(examTask.title||''));
+      if (dl && day.day > dl) {
+        console.info('[Auto Repeat] 데드라인 초과로 생성 스킵:', examTask.title, 'day=', day.day, 'deadlineDay=', dl);
       } else {
-        console.log('[Auto Repeat] 중복 제목으로 인해 스킵:', examTask.title);
+        // 같은 제목의 task가 이미 있으면 skip (정규화 비교)
+        const hasSameTitle = day.activities.some(a =>
+          (a.type||'').toLowerCase() === 'task' && normTitle(a.title||'') === normTitle(examTask.title||'')
+        );
+        
+        if (!hasSameTitle) {
+          // 캐싱된 freeBlocks 재사용
+          const placed = placeIntoFree(freeBlocks, examTask.duration);
+          
+          if (placed) {
+            const repeatedTask = {
+              title: examTask.title,
+              start: minToHHMM(placed.start),
+              end: minToHHMM(placed.end),
+              type: 'task',
+              importance: examTask.importance,
+              difficulty: examTask.difficulty,
+              isRepeating: true,
+              source: 'auto_repeat'
+            };
+            
+            // 추가 시점에도 방어
+            if (!allowed.has(normTitle(repeatedTask.title||''))) continue;
+            
+            day.activities.push(repeatedTask);
+            
+            // 🔄 반복 힌트를 실제 배치에 반영 (3일 연속 배치)
+            if (examTask.isRepeating) {
+              console.info('[Auto Repeat] 반복 배치 추가:', examTask.title, `(${minToHHMM(placed.start)}-${minToHHMM(placed.end)})`);
+            }
+          }
+        } else {
+          console.log('[Auto Repeat] 중복 제목으로 인해 스킵:', examTask.title);
+        }
       }
       }
     }
 
-    // 마지막으로 활동을 시작시간 기준 정렬(가독성)
-    day.activities.sort((x,y)=>hhmmToMin(x.start||'00:00')-hhmmToMin(y.start||'00:00'));
+    // 마지막으로 활동을 시작시간 기준 정렬(가독성), 제거 표시된 것 필터링
+    day.activities = day.activities.filter(a => !a.__drop__).sort((x,y)=>hhmmToMin(x.start||'00:00')-hhmmToMin(y.start||'00:00'));
   }
   return copy;
 };
@@ -744,6 +763,9 @@ const normalizeRelativeDays = (schedule, baseDay) => {
   });
 };
 
+// 타이틀 정규화 헬퍼 (공백/대소문자 일관화)
+const normTitle = (s='') => s.replace(/\s+/g, ' ').trim();
+
 // 도우미: 각 제목의 마감 day 계산
 const buildDeadlineDayMap = (existingTasks = [], todayDate) => {
   const map = new Map();
@@ -755,7 +777,7 @@ const buildDeadlineDayMap = (existingTasks = [], todayDate) => {
     const d = new Date(iso);
     const diffDays = Math.floor((toMid(d) - toMid(todayDate)) / (24*60*60*1000));
     const deadlineDay = base + Math.max(0, diffDays);
-    map.set((t.title || '').trim(), deadlineDay);
+    map.set(normTitle(t.title || ''), deadlineDay);
   }
   return map;
 };
@@ -766,7 +788,7 @@ const capTasksByDeadline = (schedule, deadlineMap) => {
     ...day,
     activities: (day.activities || []).filter(a => {
       if ((a.type || 'task').toLowerCase() !== 'task') return true;
-      const dl = deadlineMap.get((a.title || '').trim());
+      const dl = deadlineMap.get(normTitle(a.title || ''));
       return !dl || day.day <= dl;
     })
   }));
@@ -959,13 +981,13 @@ function CalendarPage() {
             const start = new Date(event.start);
             const localDate = `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,'0')}-${String(start.getDate()).padStart(2,'0')}`;
             const localTime = `${String(start.getHours()).padStart(2,'0')}:${String(start.getMinutes()).padStart(2,'0')}`;
-            const key = `${event.title}__${localDate}T${localTime}`;
+            const key = `${normTitle(event.title)}__${localDate}T${localTime}`;
             
             return !existingTasks.some(t => {
               const existingDate = toISODateLocal(t.deadline);
               const timePart = (t.deadlineTime ? t.deadlineTime.slice(0,5) : '00:00');
               const existingTimeKey = `${existingDate}T${timePart}`;
-              const existingKey = `${t.title}__${existingTimeKey}`;
+              const existingKey = `${normTitle(t.title)}__${existingTimeKey}`;
               return existingKey === key;
             });
           })
@@ -1105,6 +1127,10 @@ function CalendarPage() {
         today
       });
       
+      // 스케줄 갱신 전 기존 이벤트 완전 교체 (마감 초과 이벤트 제거)
+      const api = calendarRef.current?.getApi();
+      api?.removeAllEvents();
+      
       updateSchedule({ schedule: processedSchedule });
       
       const scheduleSessionId = await saveScheduleSessionUnified({
@@ -1213,6 +1239,10 @@ function CalendarPage() {
         existingTasksForAI,
         today
       });
+      
+      // 스케줄 갱신 전 기존 이벤트 완전 교체 (마감 초과 이벤트 제거)
+      const api = calendarRef.current?.getApi();
+      api?.removeAllEvents();
       
       updateSchedule({ schedule: processedSchedule });
       addAIMessage("스케줄이 생성되었습니다!");
@@ -1337,6 +1367,10 @@ function CalendarPage() {
           existingTasksForAI,
           today
         });
+        
+        // 스케줄 갱신 전 기존 이벤트 완전 교체 (마감 초과 이벤트 제거)
+        const api = calendarRef.current?.getApi();
+        api?.removeAllEvents();
         
         updateSchedule({ schedule: processedSchedule });
         
@@ -1683,6 +1717,10 @@ function CalendarPage() {
         today
       });
 
+      // 스케줄 갱신 전 기존 이벤트 완전 교체 (마감 초과 이벤트 제거)
+      const api = calendarRef.current?.getApi();
+      api?.removeAllEvents();
+
       // 최종 스케줄로 한 번만 업데이트
       updateSchedule({ schedule: next });
 
@@ -1873,7 +1911,7 @@ function CalendarPage() {
   const handleEventMount = (info) => {
     // 안전망: 월간 뷰에서 lifestyle이면 즉시 숨김 (FullCalendar v6.x 호환)
     const viewType = calendarRef.current?.getApi()?.view?.type;
-    const isMonthView = viewType && (viewType.startsWith('dayGrid') && viewType.includes('Month'));
+    const isMonthView = viewType === 'dayGridMonth';
     
     if (isMonthView && (info.event.extendedProps?.type || '').toLowerCase() === 'lifestyle') {
       info.el.style.display = 'none';

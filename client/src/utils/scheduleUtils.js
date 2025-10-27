@@ -1,4 +1,4 @@
-// 스케줄과 관련된 모든 처리 로직을 담당하는 유틸리티
+// scheduleUtils.js: 스케줄과 관련된 모든 처리 로직을 담당하는 유틸리티
 
 // 디버깅 유틸리티 (환경 독립형)
 const isDev =
@@ -712,8 +712,11 @@ export function resetToStartOfDay(date, isEnd = false) {
           nextDay.setDate(nextDay.getDate() + 1);
           const startOfNextDay = resetToStartOfDay(nextDay);
 
+          const eventIdPrefix = `${(activity.title||'').trim()}__${dateStr}`;
+          
           // 당일 뒷부분
           events.push({
+            id: `${eventIdPrefix}__${ensureHms(activity.start)}-${formatLocalISO(endOfToday).split('T')[1].slice(0,5)}`,
             title: activity.title,
             start: formatLocalISO(start),
             end: formatLocalISO(endOfToday),
@@ -723,7 +726,9 @@ export function resetToStartOfDay(date, isEnd = false) {
           // 다음날 앞부분
           const endNext = new Date(startOfNextDay);
           endNext.setHours(end.getHours(), end.getMinutes(), end.getSeconds?.() ?? 0, 0); // 원래 end 시각 복제
+          const nextDateStr = formatLocalISO(startOfNextDay).split('T')[0];
           events.push({
+            id: `${eventIdPrefix}__next-${formatLocalISO(startOfNextDay).split('T')[1].slice(0,5)}-${ensureHms(activity.end)}`,
             title: activity.title,
             start: formatLocalISO(startOfNextDay),
             end: formatLocalISO(endNext),
@@ -732,7 +737,11 @@ export function resetToStartOfDay(date, isEnd = false) {
           return;
         }
 
+        // 중복 방지를 위한 고유 ID 생성
+        const eventId = `${(activity.title||'').trim()}__${dateStr}__${ensureHms(activity.start)}-${ensureHms(activity.end || activity.start)}`;
+        
         events.push({
+          id: eventId,
           title: activity.title,
           start: formatLocalISO(start),
           end: formatLocalISO(end),
@@ -740,7 +749,9 @@ export function resetToStartOfDay(date, isEnd = false) {
         });
 
         // 🔄 isRepeating 태스크 자동 확장 (7일 반복)
-        if (activity.isRepeating) {
+        // ⚠️ CalendarPageRefactored.jsx의 postprocess에서 마감일 관리하므로 이 경로는 비활성화
+        const ALLOW_CLIENT_AUTOREPEAT = false;
+        if (ALLOW_CLIENT_AUTOREPEAT && activity.isRepeating) {
           for (let i = 1; i < 7; i++) { // 7일 반복
             const cloneDate = new Date(targetDate);
             cloneDate.setDate(targetDate.getDate() + i);
