@@ -6,10 +6,61 @@ export const resetToStartOfDay = (date) => {
   return newDate;
 };
 
+// 로컬 타임존 기준 YYYY-MM-DD 문자열로 변환
+export function toYMDLocal(value) {
+  if (!value) return '';
+  const d = (value instanceof Date) ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const off = d.getTimezoneOffset();
+  const local = new Date(d.getTime() - off * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
 export const parseDateString = (text, today) => {
   // 공백 정규화: NBSP( ) 등도 스페이스로 치환 후 압축
-  const norm = String(text).replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+  let norm = String(text).replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+  // (day:n) 주석이 있으면 날짜 해석에서 제외
+  if (/\(day:\d+\)/.test(norm)) {
+    norm = norm.replace(/\(day:\d+\)/g, '').replace(/\s{2,}/g, ' ').trim();
+  }
   console.log('[parseDateString] 입력(norm):', norm, 'today:', today);
+
+  // 한국어 "이번주/다음주/오는 + 요일" 우선 처리 (월요일=주 시작)
+  const KO_WD = { '월':1,'화':2,'수':3,'목':4,'금':5,'토':6,'일':7 };
+  const startOfIsoWeek = (d) => {
+    const dt = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const js = dt.getDay();              // 0=Sun..6=Sat
+    const iso = js === 0 ? 7 : js;       // 1=Mon..7=Sun
+    dt.setDate(dt.getDate() - (iso - 1)); // go to Monday
+    dt.setHours(0,0,0,0);
+    return dt;
+  };
+  const addDays = (d, n) => { const x = new Date(d.getTime()); x.setDate(x.getDate() + n); return x; };
+  const parseKoreanWeekPhrase = (s, base) => {
+    const m = s.match(/(이번주|다음주|오는)\s*(월|화|수|목|금|토|일)요일?/);
+    if (!m) return null;
+    const when = m[1];
+    const wd = m[2];
+    const target = KO_WD[wd];
+    const baseMon = startOfIsoWeek(base);
+    if (when === '이번주') {
+      return addDays(baseMon, target - 1);
+    }
+    if (when === '오는') {
+      const cand = addDays(baseMon, target - 1);
+      const todayMid = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+      if (cand >= todayMid) return cand;      // 이번 주에 남아있으면 이번 주
+      return addDays(baseMon, 7 + (target - 1)); // 아니면 다음 주
+    }
+    if (when === '다음주') {
+      return addDays(baseMon, 7 + (target - 1));
+    }
+    return null;
+  };
+  const weekPhraseDate = parseKoreanWeekPhrase(norm, today);
+  if (weekPhraseDate) {
+    return weekPhraseDate;
+  }
   
   const patterns = [
     { regex: /이번\s*주\s*(월|화|수|목|금|토|일)요일/, type: 'thisWeek' },

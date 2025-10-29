@@ -1,3 +1,4 @@
+// src/hooks/useLifestyleManagement.js
 import { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import firestoreService from '../services/firestoreService';
@@ -51,9 +52,6 @@ export function useLifestyleManagement() {
       return '';
     }).filter(Boolean)));
     
-    console.log('새 패턴들:', newPatterns);
-    console.log('전체 패턴들:', allPatterns);
-    console.log('고유 패턴들:', uniquePatterns);
     
     // 실제로 변경된 것이 있는지 확인
     if (uniquePatterns.length === lifestyleList.length) {
@@ -72,9 +70,6 @@ export function useLifestyleManagement() {
     console.log('handleDeleteLifestyle 호출됨, 인덱스:', index);
     
     const updatedPatterns = lifestyleList.filter((_, i) => i !== index);
-    console.log('삭제 후 패턴들:', updatedPatterns);
-    
-    // 즉시 UI 업데이트만 (DB 저장 안함)
     setLifestyleList(updatedPatterns);
   }, [lifestyleList]);
 
@@ -93,20 +88,13 @@ export function useLifestyleManagement() {
       setIsClearing(true); // 로딩 시작
       
       try {
-        // 1. DB에서 먼저 삭제
-        console.log('Firebase에서 전체 삭제 시작');
         await firestoreService.saveLifestylePatterns(user.uid, []);
-        console.log('Firebase 전체 삭제 성공');
-        
-        // 2. DB 삭제 성공 후 UI 업데이트
         setLifestyleList([]);
-        console.log('UI 업데이트 완료');
         
       } catch (error) {
-        console.error('생활패턴 전체 삭제 실패:', error);
         alert('생활패턴 전체 삭제에 실패했습니다: ' + error.message);
       } finally {
-        setIsClearing(false); // 로딩 종료
+        setIsClearing(false); 
       }
     } else {
       console.log('사용자가 취소함');
@@ -115,7 +103,6 @@ export function useLifestyleManagement() {
 
   // 생활패턴 저장 + 스케줄 생성
   const handleSaveAndGenerateSchedule = useCallback(async (onSuccess) => {
-    console.log('handleSaveAndGenerateSchedule 호출됨');
     if (!user?.uid) {
       console.log('user.uid가 없음');
       return;
@@ -127,10 +114,7 @@ export function useLifestyleManagement() {
     }
     
     try {
-      console.log('Firebase 저장 시작');
       await firestoreService.saveLifestylePatterns(user.uid, lifestyleList);
-      console.log('Firebase 저장 성공');
-      
       if (onSuccess) {
         onSuccess();
       }

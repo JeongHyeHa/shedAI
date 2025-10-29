@@ -1,10 +1,60 @@
+// src/controllers/aiController.js
 const aiService = require('../services/aiService');
 const utils = require('../utils/lifestyleParser');
+// --- helpers: deadline cap ---
+const toDateSafe = (v) => {
+    if (!v) return null;
+    if (v.toDate) return v.toDate();     // Firestore Timestamp
+    if (v instanceof Date) return v;
+    if (typeof v === 'string') {
+      const d = new Date(v);
+      return isNaN(d) ? null : d;
+    }
+    return null;
+  };
+  
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  
+  const normalizeTitleKey = (s='') => String(s)
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/준비|공부|하기/g, '');
+
+  function buildDeadlineDayMap(existingTasks = [], today = new Date()) {
+    const map = new Map();
+    const base = (() => {
+      const dow = today.getDay(); // Sun=0
+      return dow === 0 ? 7 : dow; // Mon=1 ... Sun=7
+    })();
+    for (const t of existingTasks) {
+      const dl = toDateSafe(t.deadline);
+      if (!dl) continue;
+      const diffDays = Math.floor((startOfDay(dl) - startOfDay(today)) / (24*60*60*1000));
+      const deadlineDay = base + Math.max(0, diffDays);
+      const key = normalizeTitleKey(t.title || '');
+      map.set(key, deadlineDay);
+    }
+    return map;
+  }
+  
+  function capScheduleByDeadlines(schedule = [], deadlineMap) {
+    if (!deadlineMap || !deadlineMap.size) return schedule;
+    return (schedule || []).map(day => {
+      const kept = (day.activities || []).filter(act => {
+        const isTask = String(act.type || 'task').toLowerCase() === 'task';
+        if (!isTask) return true;
+        const key = normalizeTitleKey(act.title || '');
+        const dlDay = deadlineMap.get(key);
+        if (!dlDay) return true;
+        return day.day <= dlDay; // day가 마감일(day index) 초과면 버림
+      });
+      return { ...day, activities: kept };
+    });
+  }
 
 class AIController {
     // 스케줄 생성
     async generateSchedule(req, res) {
-        // ✅ try 밖으로 '입력 값/중간 산출물' 전부 끌어올려 스코프 보존
         const {
             messages,
             prompt,
@@ -36,12 +86,10 @@ class AIController {
                 messageArray = [...messageArray, { role: 'user', content: prompt }];
             }
 
-            // 메시지 필터링 (빈/공백 메시지 제거)
             messageArray = (messageArray || []).filter(
                 m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0
             );
 
-            // 서버측 날짜 전처리: 한국어 상대 날짜를 (day:X)로 주입 (user 메시지만)
             try {
                 const { preprocessMessageForDays } = require('../utils/dateParser');
                 const baseNow = nowOverride ? new Date(nowOverride) : new Date();
@@ -95,10 +143,16 @@ class AIController {
             // 기존 할 일 준비
             console.log('[AI Controller] 클라이언트에서 전달된 할 일:', existingTasks.length, '개');
             const normFromClient = t => {
+                // 어떤 형식이 와도 YYYY-MM-DD로 보정
                 let dl = t?.deadline;
                 if (dl?.toDate) dl = dl.toDate();
-                if (dl instanceof Date) dl = dl.toISOString().split('T')[0];
-                if (typeof dl === 'string' && dl.includes('T')) dl = dl.split('T')[0];
+                const d = (dl instanceof Date) ? dl : (dl ? new Date(dl) : null);
+                if (d && !Number.isNaN(d.getTime())) {
+                  const off = d.getTimezoneOffset();
+                  dl = new Date(d.getTime() - off*60000).toISOString().slice(0,10);
+                } else {
+                  dl = null;
+                }
                 return {
                     title: t?.title || '제목없음',
                     deadline: dl || null,
@@ -155,75 +209,6 @@ class AIController {
                 }
             }
 
-            // 사용자 메시지에서 새 할 일 추출 및 저장
-            if (userId && sessionId) {
-                try {
-                    // 모든 user 메시지 + prompt + promptContext를 합쳐서 추출
-                    const allUserContent = [
-                        ...messageArray.filter(m => m.role === 'user').map(m => m.content),
-                        prompt || '',
-                        promptContext || ''
-                    ].filter(Boolean).join('\n');
-                    
-                    // 간단한 키워드 기반 추출 (시연용)
-                    const extractedTasks = [];
-                    
-                    if (allUserContent.includes('오픽') || allUserContent.includes('시험')) {
-                        const today = new Date();
-                        const nextWed = new Date(today);
-                        const daysUntilWed = (3 - today.getDay() + 7) % 7;
-                        nextWed.setDate(today.getDate() + daysUntilWed + 7);
-                        
-                        extractedTasks.push({
-                            title: '오픽 시험',
-                            date: nextWed.toISOString().split('T')[0],
-                            dayOffset: daysUntilWed + 7,
-                            importance: '상',
-                            difficulty: '상',
-                            description: '오픽 시험 준비'
-                        });
-                    }
-                    
-                    if (allUserContent.includes('클라이언트') || allUserContent.includes('시안')) {
-                        const today = new Date();
-                        const thisFri = new Date(today);
-                        const daysUntilFri = (5 - today.getDay() + 7) % 7;
-                        thisFri.setDate(today.getDate() + daysUntilFri);
-                        
-                        extractedTasks.push({
-                            title: '클라이언트 A 시안 제출',
-                            date: thisFri.toISOString().split('T')[0],
-                            dayOffset: daysUntilFri,
-                            importance: '상',
-                            difficulty: '중',
-                            description: '클라이언트 시안 제출'
-                        });
-                    }
-                    
-                    if (allUserContent.includes('포트폴리오')) {
-                        const today = new Date();
-                        const nextMon = new Date(today);
-                        const daysUntilMon = (1 - today.getDay() + 7) % 7;
-                        nextMon.setDate(today.getDate() + daysUntilMon + 7);
-                        
-                        extractedTasks.push({
-                            title: '포트폴리오 최종 수정',
-                            date: nextMon.toISOString().split('T')[0],
-                            dayOffset: daysUntilMon + 7,
-                            importance: '중',
-                            difficulty: '중',
-                            description: '포트폴리오 수정'
-                        });
-                    }
-                    
-                    // 할 일 추출 완료
-                    
-                    // 할 일은 클라이언트에서 처리하도록 변경
-                } catch (error) {
-                    console.warn('할 일 추출/저장 실패:', error.message);
-                }
-            }
-
             // AI 서비스 호출
             console.log('[AI Controller] AI 서비스로 전달할 할 일:', existingTasks.length, '개');
             console.log('[AI Controller] AI 서비스 호출 시작 - 메시지:', messageArray.length, '개, 생활패턴:', parsedLifestylePatterns.length, '개');
@@ -235,17 +220,17 @@ class AIController {
                 { nowOverride, anchorDay }
             );
             
-            console.log('[AI Controller] AI 서비스 응답 받음:', {
-                hasSchedule: !!result.schedule,
-                scheduleLength: result.schedule?.length || 0,
-                explanation: result.explanation?.substring(0, 100) + '...'
-            });
-            
-            // 서비스에서 반환한 모든 필드를 그대로 전달 (__debug 포함)
-            res.json({ 
-                ok: true, 
-                ...result
-            });
+             try {
+                   const today = nowOverride ? new Date(nowOverride) : new Date();
+                   const deadlineMap = buildDeadlineDayMap(existingTasks, today);
+                   if (Array.isArray(result?.schedule)) {
+                     result.schedule = capScheduleByDeadlines(result.schedule, deadlineMap);
+                   }
+                } catch (capErr) {
+                   console.warn('마감일 캡 적용 중 경고:', capErr?.message);
+                }
+                
+                return res.json({ ok: true, ...result });
         } catch (error) {
             console.error('=== 스케줄 생성 컨트롤러 에러 ===');
             console.error('에러 타입:', error.constructor.name);

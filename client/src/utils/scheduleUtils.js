@@ -1,5 +1,8 @@
 // scheduleUtils.js: 스케줄과 관련된 모든 처리 로직을 담당하는 유틸리티
 
+import { parseDateString } from './dateUtils';
+import { toISODateLocal, toKoreanDate, toLocalMidnightDate } from './dateNormalize';
+
 // 디버깅 유틸리티 (환경 독립형)
 const isDev =
   (typeof import.meta !== 'undefined' && import.meta.env?.MODE !== 'production') ||
@@ -117,7 +120,8 @@ export function preprocessMessage(message) {
         // 다음 발생 요일로 스냅
         const cur = d.getDay() === 0 ? 7 : d.getDay();
         let delta = dayNum - cur;
-        if (delta <= 0) delta += 7; // 같은 요일이면 다음 주로
+        if (delta < 0) delta += 7;
+        if (kw === '다음' && delta === 0) delta = 7;
         d.setDate(d.getDate() + delta);
         return `${prefix}${kw} ${dw} (day:${getGptDayIndex(d)})${suffix}`;
       });
@@ -590,8 +594,10 @@ export function resetToStartOfDay(date, isEnd = false) {
   function normalizeWeekday(day, raw) {
     const KOREAN_WEEKDAYS = ['','월요일','화요일','수요일','목요일','금요일','토요일','일요일'];
     
-    // day 번호가 유효하면 해당 요일 반환
-    if (KOREAN_WEEKDAYS[day]) return KOREAN_WEEKDAYS[day];
+    // ✅ day>7인 경우 모듈로 보정 (1~7로 래핑)
+    const dayNum = Number(day) || 0;
+    const wrappedDay = ((dayNum - 1) % 7 + 7) % 7 + 1; // 1~7로 래핑
+    if (KOREAN_WEEKDAYS[wrappedDay]) return KOREAN_WEEKDAYS[wrappedDay];
     
     // raw 값에서 요일 추출 (공백 제거 후)
     const s = String(raw||'').replace(/\s+/g,'');
@@ -604,16 +610,19 @@ export function resetToStartOfDay(date, isEnd = false) {
     if (s.includes('월')) return '월요일';
     
     // 기본값
-    return KOREAN_WEEKDAYS[day] || '알 수 없음';
+    return KOREAN_WEEKDAYS[wrappedDay] || '알 수 없음';
   }
 
   // GPT → FullCalendar 이벤트 변환기 (배열만 받음)
   export function convertScheduleToEvents(scheduleArray, today = new Date()) {
     const events = [];
     
-    // 시간 형식 보강 함수 (초가 누락된 경우 기본값 부여)
     const ensureHms = (tRaw) => {
       const t = String(tRaw || '00:00');
+      if (/^\d+$/.test(t.trim())) {
+        const h = parseInt(t, 10) || 0;
+        return `${String(h).padStart(2,'0')}:00:00`;
+      }
       const [h='0', m='0', s] = t.split(':');
       const hh = String(parseInt(h,10)||0).padStart(2,'0');
       const mm = String(parseInt(m,10)||0).padStart(2,'0');
@@ -638,27 +647,15 @@ export function resetToStartOfDay(date, isEnd = false) {
     
     // 오늘의 day 값 계산 (일요일=7, 월요일=1, ..., 토요일=6)
     const todayDayOfWeek = today.getDay();
-    const gptDayToday = todayDayOfWeek === 0 ? 7 : todayDayOfWeek;
-    
-    // 디버깅 로그 제거 (필요시 주석 해제)
-    // if (isDev) {
-    //   debug('[convertScheduleToEvents] 디버깅 정보:', {
-    //     gptDayToday,
-    //     today: today.toISOString().split('T')[0],
-    //     todayDayOfWeek,
-    //     scheduleDataLength: scheduleData.length,
-    //     firstDayBlock: scheduleData[0]
-    //   });
-    // }
+    const baseDay  = todayDayOfWeek === 0 ? 7 : todayDayOfWeek;
 
     scheduleData.forEach(dayBlock => {
-      // dayBlock이 유효하지 않으면 건너뛰기
       if (!dayBlock || typeof dayBlock.day !== 'number') {
         console.warn('convertScheduleToEvents: 유효하지 않은 dayBlock', dayBlock);
         return;
       }
       
-      const dateOffset = dayBlock.day - gptDayToday;
+      const dateOffset = dayBlock.day - baseDay;
       const targetDate = new Date(today);
       targetDate.setDate(today.getDate() + dateOffset);
       const dateStr = formatLocalISO(targetDate).split('T')[0];
@@ -707,16 +704,18 @@ export function resetToStartOfDay(date, isEnd = false) {
         // }
 
         if (end < start) {
-          const endOfToday = resetToStartOfDay(start, true); // 당일 23:59:59
+          const endOfToday = resetToStartOfDay(start, true); // 당일 23:59:59.999
           const nextDay = new Date(start);
           nextDay.setDate(nextDay.getDate() + 1);
           const startOfNextDay = resetToStartOfDay(nextDay);
 
           const eventIdPrefix = `${(activity.title||'').trim()}__${dateStr}`;
+          // ✅ 자정 넘는 일정 ID 일관성: 실제 end 시간과 일치
+          const endOfTodayTimeStr = formatLocalISO(endOfToday).split('T')[1].slice(0, 8); // HH:MM:SS
           
           // 당일 뒷부분
           events.push({
-            id: `${eventIdPrefix}__${ensureHms(activity.start)}-${formatLocalISO(endOfToday).split('T')[1].slice(0,5)}`,
+            id: `${eventIdPrefix}__${ensureHms(activity.start)}-${endOfTodayTimeStr}`,
             title: activity.title,
             start: formatLocalISO(start),
             end: formatLocalISO(endOfToday),
@@ -727,8 +726,9 @@ export function resetToStartOfDay(date, isEnd = false) {
           const endNext = new Date(startOfNextDay);
           endNext.setHours(end.getHours(), end.getMinutes(), end.getSeconds?.() ?? 0, 0); // 원래 end 시각 복제
           const nextDateStr = formatLocalISO(startOfNextDay).split('T')[0];
+          const endNextTimeStr = formatLocalISO(endNext).split('T')[1].slice(0, 8); // HH:MM:SS
           events.push({
-            id: `${eventIdPrefix}__next-${formatLocalISO(startOfNextDay).split('T')[1].slice(0,5)}-${ensureHms(activity.end)}`,
+            id: `${eventIdPrefix}__next-${formatLocalISO(startOfNextDay).split('T')[1].slice(0,8)}-${endNextTimeStr}`,
             title: activity.title,
             start: formatLocalISO(startOfNextDay),
             end: formatLocalISO(endNext),
@@ -737,8 +737,9 @@ export function resetToStartOfDay(date, isEnd = false) {
           return;
         }
 
-        // 중복 방지를 위한 고유 ID 생성
-        const eventId = `${(activity.title||'').trim()}__${dateStr}__${ensureHms(activity.start)}-${ensureHms(activity.end || activity.start)}`;
+        // 중복 방지를 위한 고유 ID 생성 (✅ 계산된 end 사용)
+        const endTimeStr = formatLocalISO(end).split('T')[1].slice(0, 8); // HH:MM:SS
+        const eventId = `${(activity.title||'').trim()}__${dateStr}__${ensureHms(activity.start)}-${endTimeStr}`;
         
         events.push({
           id: eventId,
@@ -797,18 +798,890 @@ export function resetToStartOfDay(date, isEnd = false) {
 // 날짜를 day 인덱스로 변환하는 함수 (오늘부터 상대적인 일수)
 export function convertToRelativeDay(targetDate, baseDate = new Date()) {
   if (!targetDate) return null;
-  
   const startOfBaseDate = resetToStartOfDay(baseDate);
   const startOfTargetDate = resetToStartOfDay(targetDate);
-  
-  // 날짜 차이를 밀리초로 계산 후 일수로 변환
   const diffTime = startOfTargetDate.getTime() - startOfBaseDate.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  
-  // 오늘의 GPT day 인덱스
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
   const todayGptDay = getGptDayIndex(baseDate);
-  
-  // 상대적 day 값 반환
   return todayGptDay + diffDays;
 }
+
+// ============================================================
+// CalendarPageRefactored에서 이동된 함수들
+// ============================================================
+
+// 타이틀 정규화 헬퍼
+const normTitle = (s='') => s.replace(/\s+/g, ' ').trim();
+// 의미 기준 표준 타이틀(동의/접미 제거)
+const canonTitle = (s='') => {
+  const base = String(s).toLowerCase();
+  const stripped = base
+    // 괄호/구분자/기호 제거
+    .replace(/[()\[\]{}<>_\-*–—:.,\/\\|+~!@#$%^&=]/g, '')
+    // 공백 제거
+    .replace(/\s+/g, '')
+    // 흔한 접미사 제거(어말)
+    .replace(/(준비|공부|하기)$/g, '')
+    // 세션 꼬리표, 진행표기 제거
+    .replace(/(집중세션|세션|몰입|분할|라운드)\d*/g, '')
+    .replace(/\d+\/\d+/g, '')
+    .trim();
+  return stripped || base.replace(/\s+/g,'');
+};
+
+// YYYY-MM-DD 문자열을 로컬 자정 Date로 파싱
+const parseYYYYMMDDLocal = (s) => {
+  if (typeof s !== 'string') return null;
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = +m[1], mm = +m[2], dd = +m[3];
+  return new Date(y, mm - 1, dd, 0, 0, 0, 0);
+};
+
+// 유사 매칭 기반 데드라인 day 찾기
+function findDeadlineDayForTitle(actTitle, deadlineMap) {
+  if (!deadlineMap || !deadlineMap.size) return null;
+  const actKey = canonTitle(actTitle || '');
+  if (!actKey) return null;
+
+  // 1) 정확 일치
+  if (deadlineMap.has(actKey)) return deadlineMap.get(actKey);
+
+  // 2) 접두/부분 포함
+  for (const [taskKey, dlDay] of deadlineMap.entries()) {
+    if (!taskKey) continue;
+    if (actKey.startsWith(taskKey) || taskKey.startsWith(actKey)) return dlDay;
+    if (actKey.includes(taskKey) || taskKey.includes(actKey)) return dlDay;
+  }
+
+  // 3) 토큰 유사도(가벼운 근사)
+  const tokenize = (k) => String(k).replace(/[^가-힣a-z0-9]/g, ' ').split(/\s+/).filter(Boolean);
+  const aTok = tokenize(actKey);
+  let best = { score: 0, dlDay: null };
+  for (const [taskKey, dlDay] of deadlineMap.entries()) {
+    const tTok = tokenize(taskKey);
+    if (tTok.length === 0 || aTok.length === 0) continue;
+    const setA = new Set(aTok);
+    let hit = 0;
+    for (const t of tTok) if (setA.has(t)) hit++;
+    const score = hit / Math.max(tTok.length, aTok.length);
+    if (score > best.score) best = { score, dlDay };
+  }
+  return best.score >= 0.5 ? best.dlDay : null;
+}
+
+// 시간 유틸리티
+const hhmmToMin = (s) => {
+  const [h,m] = String(s||'').split(':').map(n=>parseInt(n||'0',10));
+  return (isNaN(h)?0:h)*60 + (isNaN(m)?0:m);
+};
+
+const minToHHMM = (min) => {
+  const h = Math.floor(min/60)%24;
+  const m = min%60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+};
+
+const overlap = (aStart, aEnd, bStart, bEnd) => Math.max(aStart,bStart) < Math.min(aEnd,bEnd);
+
+// 상수 정의
+const PREFERRED_MIN = 19 * 60;
+const MIN_SPLIT_CHUNK = 30;
+const FALLBACK_BLOCK = [21*60, 23*60];
+
+// 시험/평가류 제목 판별
+function isExamTitle(t='') {
+  return /시험|테스트|평가|자격증|오픽|토익|토플|텝스|면접/i.test(String(t));
+}
+
+// 날짜 파싱 헬퍼
+const pickNextDate = (y, m, d, today) => {
+  const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
+  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  if (dt < base) dt.setFullYear(dt.getFullYear() + 1);
+  return dt;
+};
+
+const tryParseLooseKoreanDate = (s, today) => {
+  let m = s.match(/(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (m) return new Date(+m[1], +m[2]-1, +m[3], 0, 0, 0, 0);
+  m = s.match(/(\d{4})\s*[.\-\/]\s*(\d{1,2})\s*[.\-\/]\s*(\d{1,2})/);
+  if (m) return new Date(+m[1], +m[2]-1, +m[3], 0, 0, 0, 0);
+  m = s.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (m) return pickNextDate(today.getFullYear(), +m[1], +m[2], today);
+  m = s.match(/(\d{1,2})\s*[\.\/\-]\s*(\d{1,2})(?!\d)/);
+  if (m) return pickNextDate(today.getFullYear(), +m[1], +m[2], today);
+  return null;
+};
+
+const isExamLike = (t='') => /(오픽|토익|토플|텝스|토스|면접|자격증|시험|테스트|평가)/i.test(t);
+
+const safeParseDateString = (text, today) => {
+  try { return parseDateString(text, today); } catch { return null; }
+};
+
+// 채팅 문장 → 태스크 파싱
+export const parseTaskFromFreeText = (text, today = new Date()) => {
+  if (!text || typeof text !== 'string') return null;
+  const s = text.replace(/\s+/g, ' ').trim();
+
+  // 날짜 감지
+  let deadlineDate = safeParseDateString(s, today);
+  if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) {
+    const rawCandidates = s.match(/(\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}[.\-\/]\d{1,2})/g) || [];
+    for (const cand of rawCandidates) {
+      const dt = tryParseLooseKoreanDate(cand, today);
+      if (dt instanceof Date && !isNaN(dt.getTime())) { deadlineDate = dt; break; }
+    }
+  }
+  if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) {
+    const rel = s.match(/(\d+)\s*(일|주)\s*(후|뒤)/);
+    if (rel) {
+      const n = +rel[1], unit = rel[2];
+      const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      base.setDate(base.getDate() + (unit === '주' ? n*7 : n));
+      deadlineDate = base;
+    }
+  }
+  if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) return null;
+
+  // 제목 생성
+  let title = '';
+  if (isExamLike(s)) {
+    const word = (s.match(/(오픽|토익|토플|텝스|토스|면접|자격증|시험|테스트|평가)/i)?.[1] || '').trim();
+    title = `${/시험$/i.test(word) ? word : `${word} 시험`}`.trim();
+    if (/(준비|공부|학습)/.test(s)) title += ' 준비';
+  } else {
+    const cut = s.split(/(?:마감일|마감|데드라인|까지|due|deadline)/i)[0]
+                 .split(/(\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}[.\-\/]\d{1,2})/)[0]
+                 .replace(/(있어|해야 ?해|할게|한다|해줘(요)?|합니다|해요)$/,'')
+                 .trim();
+    if (cut && cut.length >= 2) title = cut;
+    else {
+      const m = s.match(/([가-힣A-Za-z0-9]+)\s*(과제|보고서|프로젝트|발표|신청|접수|등록|업무|자료|문서)/);
+      title = m ? `${m[1]} ${m[2]}` : '할 일';
+    }
+  }
+
+  const levelMap = { 상:'상', 중:'중', 하:'하' };
+  const impRaw = (s.match(/중요도\s*(상|중|하)/)?.[1]);
+  const diffRaw = (s.match(/난이도\s*(상|중|하)/)?.[1]);
+  const isExam = isExamLike(s);
+  const importance = levelMap[impRaw] || (isExam ? '상' : '중');
+  const difficulty = levelMap[diffRaw] || (isExam ? '상' : '중');
+  const localMid = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
+
+  return {
+    title,
+    importance,
+    difficulty,
+    description: s.replace(title, '').trim(),
+    deadlineAtMidnight: localMid,
+    estimatedMinutes: isExam ? 150 : 120
+  };
+};
+
+// 할 일을 existingTasks와 사람이 읽는 taskText로 동시에 만들기
+export const buildTasksForAI = async (uid, firestoreService, opts = {}) => {
+  const fetchLocalTasks = opts.fetchLocalTasks; // async (uid) => [{ title, deadline, importance, difficulty, description, isActive }]
+  let all = [];
+
+  // Firestore
+  try {
+    if (firestoreService?.getAllTasks) {
+      all = await firestoreService.getAllTasks(uid);
+    } else {
+      if (isDev) console.debug('[buildTasksForAI] firestoreService 미주입: Firestore 스킵');
+      all = [];
+    }
+  } catch (error) {
+    if (isDev) console.debug('[buildTasksForAI] Firestore 조회 실패:', error?.message);
+    all = [];
+  }
+
+  // 로컬 DB
+  let localDbTasks = [];
+  try {
+    if (typeof fetchLocalTasks === 'function') {
+      localDbTasks = await fetchLocalTasks(uid);
+    }
+  } catch (e) {
+    console.warn('[buildTasksForAI] 로컬 DB 조회 실패:', e?.message);
+    localDbTasks = [];
+  }
+
+  // 로컬 스토리지
+  const readTempTasks = () => {
+    try {
+      const cands = ['shedAI:tempTasks', 'shedAI:tasks', 'tasks'];
+      for (const k of cands) {
+        const s = localStorage.getItem(k);
+        if (s) return JSON.parse(s);
+      }
+    } catch {}
+    return [];
+  };
+  const tempTasks = readTempTasks();
+
+  // 여러 형태의 마감일을 로컬 자정 Date로 정규화
+  const toDateAtLocalMidnight = (v) => {
+    try {
+      if (!v) return null;
+      if (v.toDate) v = v.toDate();
+      if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+      if (typeof v === 'string') {
+        const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) return new Date(+m[1], +m[2]-1, +m[3]);
+        const d = new Date(v);
+        if (!isNaN(d.getTime())) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      }
+      return null;
+    } catch { return null; }
+  };
+
+  const combinedTasksRaw = [...(all || []), ...(localDbTasks || []), ...(tempTasks || [])];
+  try {
+    console.log('[TASK-SOURCES]', {
+      fromFirestore: all?.length || 0,
+      fromLocalDB: localDbTasks?.length || 0,
+      fromLocalStorage: tempTasks?.length || 0,
+      combined: combinedTasksRaw.length
+    });
+  } catch {}
+
+  const active = (combinedTasksRaw || [])
+    .map(t => ({
+      ...t,
+      isActive: t.isActive === undefined ? true : !!t.isActive,
+      deadline: toDateAtLocalMidnight(
+        t?.deadline ?? t?.deadlineAtMidnight ?? t?.deadlineAt ?? t?.dueDate ?? t?.due
+      )
+    }))
+    .filter(t => t && t.isActive);
+
+  const existingTasksForAI = active.map(t => ({
+    title: normTitle(t.title || '제목없음'),
+    deadline: (() => {
+      if (t.deadline instanceof Date) {
+        return `${t.deadline.getFullYear()}-${String(t.deadline.getMonth()+1).padStart(2,'0')}-${String(t.deadline.getDate()).padStart(2,'0')}`;
+      }
+      if (typeof t.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t.deadline)) return t.deadline;
+      // ✅ 최후의 수단: 오늘 날짜를 사용해 캡 맵 비는 상황 방지
+      const today = new Date();
+      return `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    })(),
+    importance: t.importance || '중',
+    difficulty: t.difficulty || '중',
+    description: t.description || ''
+  }));
+
+  const taskText = active.map(t => {
+    const iso = t.deadline
+      ? `${t.deadline.getFullYear()}-${String(t.deadline.getMonth()+1).padStart(2,'0')}-${String(t.deadline.getDate()).padStart(2,'0')}`
+      : '';
+    const dd = toKoreanDate(iso);
+    return `${t.title || '제목없음'} (마감일: ${dd || '미설정'}, 중요도: ${t.importance || '중'}, 난이도: ${t.difficulty || '중'})`;
+  }).join('\n');
+
+  try { console.log('[ShedAI][TASKS] total for AI =', existingTasksForAI.length); } catch {}
+  return { existingTasksForAI, taskText };
+};
+
+// 프롬프트에 강제 규칙 주입
+const enforceScheduleRules = (basePrompt) => `${basePrompt}
+
+[반드시 지켜야 할 규칙]
+- [현재 할 일 목록]에 있는 모든 항목은 반드시 스케줄 JSON의 activities에 'type': 'task' 로 포함할 것.
+- lifestyle 항목과 병합/대체 금지. task는 task로 남길 것.
+- 모든 task는 start, end, title, type 필드를 포함해야 한다. (예: {"start":"19:00","end":"21:00","title":"오픽 시험 준비","type":"task"})
+- lifestyle과 task의 시간은 절대 겹치지 않도록 조정할 것. 겹친다면 task를 가장 가까운 빈 시간대로 이동하라.
+- 출력은 day별 객체 배열(JSON 하나)만 반환하라. 불필요한 텍스트 금지.
+`;
+
+// 공통 메시지 빌더
+export const buildScheduleMessages = ({ basePrompt, conversationContext, existingTasksForAI, taskText }) => {
+  const enforced = enforceScheduleRules(basePrompt);
+  const messages = [
+    ...conversationContext.slice(-8),
+    {
+      role: 'user',
+      content: `${enforced}\n\n[현재 할 일 목록]\n${taskText || '할 일 없음'}`
+    }
+  ].filter(m => m && m.role && typeof m.content === 'string' && m.content.trim());
+
+  return messages;
+};
+
+// 생활패턴 제목 정리 함수
+const cleanLifestyleTitle = (title, start, end) => {
+  if (!title) return '';
+  
+  const strip = (s='') => s
+    .replace(/^[~\-–—|·•,:;\s]+/, '')
+    .replace(/[~\-–—|·•,:;\s]+$/, '')
+    .replace(/\s{2,}/g,' ')
+    .trim();
+  let cleaned = strip(title);
+
+  cleaned = cleaned
+    .replace(/(?:^|[\s,·•])(매일|평일|주말)(?=$|[\s,·•])/gi,' ')
+    .replace(/(?:^|[\s,·•])(매|평)(?=$|[\s,·•])/g,' ')
+    .replace(/\bevery\s*day\b/gi,' ');
+  cleaned = strip(cleaned);
+
+  if (/^([0-9]{2})$/.test(cleaned)) {
+    const n = parseInt(cleaned, 10);
+    if (n === 40) cleaned = '점심식사';
+    else if (n < 10) cleaned = '아침식사';
+    else cleaned = '활동';
+  }
+  
+  if (!cleaned || /^[0-9]+$/.test(cleaned)) {
+    const startHour = parseInt(start?.split(':')[0] || '0', 10);
+    const endHour = parseInt(end?.split(':')[0] || '0', 10);
+    const wrapsMidnight = (end && start) ? (endHour < startHour) : false;
+
+    if (wrapsMidnight || startHour < 6) {
+      cleaned = '수면';
+    } else if (startHour >= 6 && startHour < 9) {
+      cleaned = '아침식사';
+    } else if (startHour >= 12 && startHour < 14) {
+      cleaned = '점심식사';
+    } else if (startHour >= 9 && startHour < 18) {
+      cleaned = '출근';
+    } else if (startHour >= 18 && startHour < 22) {
+      cleaned = '저녁식사';
+    } else if (startHour >= 20 && startHour < 22) {
+      cleaned = '헬스';
+    } else {
+      cleaned = '활동';
+    }
+  }
+  
+  return cleaned;
+};
+
+// day별 lifestyle 블록에서 빈 시간대 계산
+const buildFreeBlocks = (activities) => {
+  const dayStart = 0;
+  const dayEnd = 24*60;
+  
+  const rawLifestyle = (activities||[])
+    .filter(a => (a.type||'').toLowerCase()==='lifestyle' && a.start && a.end)
+    .map(a => [hhmmToMin(a.start), hhmmToMin(a.end)]);
+
+  const lifestyle = [];
+  for (const [s,e] of rawLifestyle) {
+    if (e >= s) {
+      lifestyle.push([s,e]);
+    } else {
+      lifestyle.push([0, e]);
+      lifestyle.push([s, dayEnd]);
+    }
+  }
+  lifestyle.sort((x,y)=>x[0]-y[0]);
+
+  const merged = [];
+  for (const [s,e] of lifestyle) {
+    if (!merged.length || s>merged[merged.length-1][1]) merged.push([s,e]);
+    else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], e);
+  }
+
+  const free = [];
+  let cursor = dayStart;
+  for (const [s,e] of merged) {
+    if (cursor < s) free.push([cursor, s]);
+    cursor = Math.max(cursor, e);
+  }
+  if (cursor < dayEnd) free.push([cursor, dayEnd]);
+  return free;
+};
+
+// 19:00 근접도 가중치 기반 배치
+const placeIntoFree = (freeBlocks, durationMin) => {
+  const preferred = PREFERRED_MIN;
+  let best = null;
+
+  for (const [fs, fe] of freeBlocks) {
+    if (fe - fs < durationMin) continue;
+    const earliest = fs;
+    const latest = fe - durationMin;
+    const target = preferred - durationMin / 2;
+    const start = Math.min(Math.max(target, earliest), latest);
+    const mid = start + durationMin / 2;
+    const distance = Math.abs(mid - preferred);
+    if (!best || distance < best.distance || (distance === best.distance && start < best.start)) {
+      best = { start, end: start + durationMin, distance };
+    }
+  }
+  if (best) return { start: best.start, end: best.end };
+
+  let longest = null, len = -1;
+  for (const [fs, fe] of freeBlocks) {
+    if (fe - fs > len) { len = fe - fs; longest = [fs, fe]; }
+  }
+  return longest ? { start: longest[0], end: longest[0] + Math.min(len, durationMin) } : null;
+};
+
+// 분할 배치 함수
+const splitPlaceIntoFree = (freeBlocks, durationMin) => {
+  const sorted = [...freeBlocks].sort((a,b)=> (b[1]-b[0]) - (a[1]-a[0]));
+  const segments = [];
+  let remain = durationMin;
+
+  for (const [fs, fe] of sorted) {
+    if (remain <= 0) break;
+    const len = fe - fs;
+    if (len <= MIN_SPLIT_CHUNK) continue;
+    const want = segments.length === 0 ? Math.max(MIN_SPLIT_CHUNK, remain) : remain;
+    const use = Math.min(len, want, remain);
+    segments.push({ start: fs, end: fs + use });
+    remain -= use;
+  }
+  return remain <= 0 ? segments : null;
+};
+
+// 스케줄 전역에서 lifestyle과 task 충돌 제거 + 누락 task에 시간 채움
+const fixOverlaps = (schedule, opts = {}) => {
+  const allowed = opts.allowedTitles || new Set();
+  const allowAutoRepeat = !!opts.allowAutoRepeat;
+  const deadlineMap = opts.deadlineMap || new Map();
+  const copy = (schedule||[]).map(day => ({
+    ...day,
+    activities: (day.activities||[]).map(a=>({...a}))
+  }));
+
+  const examTasks = [];
+  for (const day of copy) {
+    for (const a of day.activities || []) {
+      if ((a.type||'').toLowerCase() === 'task') {
+        const dl = findDeadlineDayForTitle(a.title || '', deadlineMap);
+        if (dl && day.day > dl) {
+          a.__drop__ = true;
+          continue;
+        }
+      }
+      if ((a.type||'').toLowerCase() === 'task' && 
+          (a.importance === '상' || a.difficulty === '상' || a.isRepeating || isExamTitle(a.title))) {
+        // ✅ 수집 단계에서는 화이트리스트 체크 없이 후보로 담기 (중요 태스크는 모두 후보)
+        examTasks.push({
+          title: a.title,
+          importance: a.importance || (isExamTitle(a.title) ? '상' : '중'),
+          difficulty: a.difficulty || (isExamTitle(a.title) ? '상' : '중'),
+          duration: a.duration || 150,
+          isRepeating: a.isRepeating ?? (isExamTitle(a.title) || false)
+        });
+      }
+    }
+    day.activities = day.activities.filter(a => !a.__drop__);
+  }
+
+  const lifestyleBlocksCache = new Map();
+
+  for (const day of copy) {
+    const dayKey = `${day.day}-${day.weekday}`;
+    let freeBlocks = lifestyleBlocksCache.get(dayKey);
+    
+    if (!freeBlocks) {
+      freeBlocks = buildFreeBlocks(day.activities);
+      lifestyleBlocksCache.set(dayKey, freeBlocks);
+    }
+
+    for (const a of day.activities) {
+      const isLifestyle = (a.type||'').toLowerCase()==='lifestyle';
+      
+      if (isLifestyle) {
+        a.title = cleanLifestyleTitle(a.title, a.start, a.end);
+      }
+      
+      if (isLifestyle) continue;
+
+      let dur = 120;
+      if (a.importance === '상' || a.difficulty === '상') {
+        dur = 150;
+      } else if (a.difficulty === '하') {
+        dur = 90;
+      }
+      
+      if (a.start && a.end) {
+        const s = hhmmToMin(a.start), e = hhmmToMin(a.end);
+        const ls = day.activities.filter(x => (x.type||'').toLowerCase()==='lifestyle' && x.start && x.end);
+        const hasOverlap = ls.some(x => overlap(s,e, hhmmToMin(x.start), hhmmToMin(x.end)));
+        if (!hasOverlap && e>s) {
+          dur = e - s;
+          continue;
+        }
+      }
+      
+      let placed = placeIntoFree(freeBlocks, dur);
+      if (placed) {
+        a.start = minToHHMM(placed.start);
+        a.end = minToHHMM(placed.end);
+      } else {
+        const parts = splitPlaceIntoFree(freeBlocks, dur);
+        if (parts && parts.length) {
+          a.start = minToHHMM(parts[0].start);
+          a.end = minToHHMM(parts[0].end);
+          for (let i=1;i<parts.length;i++) {
+            day.activities.push({
+              title: a.title,
+              start: minToHHMM(parts[i].start),
+              end: minToHHMM(parts[i].end),
+              type: a.type || 'task',
+              importance: a.importance,
+              difficulty: a.difficulty,
+              isRepeating: a.isRepeating
+            });
+          }
+        } else {
+          a.start = minToHHMM(FALLBACK_BLOCK[0]);
+          a.end = minToHHMM(Math.min(FALLBACK_BLOCK[0] + dur, FALLBACK_BLOCK[1]));
+        }
+      }
+      if (!a.type) a.type = 'task';
+    }
+
+    if (allowAutoRepeat && examTasks.length > 0) {
+      const hasExamTask = day.activities.some(a => 
+        (a.type||'').toLowerCase() === 'task' && 
+        (a.importance === '상' || a.difficulty === '상' || a.isRepeating)
+      );
+      if (!hasExamTask) {
+        const base = copy[0]?.day ?? day.day;
+        const offset = (day.day - base) % examTasks.length;
+        const safeIdx = offset < 0 ? offset + examTasks.length : offset;
+        const examTask = examTasks[safeIdx];
+        
+      const dl = findDeadlineDayForTitle(examTask.title||'', deadlineMap);
+        if (dl && day.day > dl) {
+          // skip
+        } else {
+          const hasSameTitle = day.activities.some(a =>
+            (a.type||'').toLowerCase() === 'task' && canonTitle(a.title||'') === canonTitle(examTask.title||'')
+          );
+          
+          if (!hasSameTitle) {
+            const placed = placeIntoFree(freeBlocks, examTask.duration);
+            
+            if (placed) {
+              const repeatedTask = {
+                title: examTask.title,
+                start: minToHHMM(placed.start),
+                end: minToHHMM(placed.end),
+                type: 'task',
+                importance: examTask.importance,
+                difficulty: examTask.difficulty,
+                isRepeating: true,
+                source: 'auto_repeat'
+              };
+              
+              // ✅ 중요/상난이도/시험 계열은 화이트리스트 우회 허용
+              const isImportant = repeatedTask.isRepeating || 
+                                  repeatedTask.importance === '상' || 
+                                  repeatedTask.difficulty === '상' || 
+                                  isExamTitle(repeatedTask.title);
+              if (!isImportant && !allowed.has(canonTitle(repeatedTask.title||''))) {
+                continue; // 중요 태스크가 아니고 화이트리스트에도 없으면 스킵
+              }
+              
+              day.activities.push(repeatedTask);
+            }
+          }
+        }
+      }
+    }
+
+    day.activities = day.activities.filter(a => !a.__drop__).sort((x,y)=>hhmmToMin(x.start||'00:00')-hhmmToMin(y.start||'00:00'));
+  }
+  return copy;
+};
+
+// 요일 정규화 함수
+const getKoreanWeekday = (day) => {
+  const weekdays = ['', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'];
+  return weekdays[day] || '알 수 없음';
+};
+
+const toWeekday1to7 = (dayNum) => ((dayNum - 1) % 7) + 1;
+
+// 시간 문자열 정규화
+const normHHMM = (t='00:00') => {
+  const [h,m] = String(t).split(':').map(n=>parseInt(n||'0',10));
+  const hh = isNaN(h)?0:h, mm = isNaN(m)?0:m;
+  return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+};
+
+// AI 응답에 '생활패턴 강제 투영'
+const applyLifestyleHardOverlay = (schedule, parsedPatterns) => {
+  if (!Array.isArray(schedule)) return schedule;
+  const patterns = Array.isArray(parsedPatterns) ? parsedPatterns : [];
+
+  const byDayNeed = (weekday) =>
+    patterns.filter(p => (p.days || [1,2,3,4,5,6,7]).includes(weekday));
+
+  return schedule.map(day => {
+    const weekday = toWeekday1to7(day.day || 1);
+    const need = byDayNeed(weekday);
+
+    const acts = Array.isArray(day.activities) ? [...day.activities] : [];
+
+    const filtered = acts.filter(a => {
+      if ((a.type || '').toLowerCase() !== 'lifestyle') return true;
+      const start = normHHMM(a.start || '00:00');
+      const end = normHHMM(a.end || '23:00');
+      const titleNorm = cleanLifestyleTitle(a.title, start, end);
+      const hasTodayPattern = need.some(p => {
+        const pStart = normHHMM(p.start || '00:00');
+        const pEnd = normHHMM(p.end || '23:00');
+        const pTitle = cleanLifestyleTitle(p.title, pStart, pEnd);
+        return pStart === start && pEnd === end && pTitle === titleNorm;
+      });
+      return hasTodayPattern;
+    });
+
+    const existingKey = new Set(
+      filtered
+        .filter(a => (a.type || '').toLowerCase() === 'lifestyle')
+        .map(a => `${normHHMM(a.start||'00:00')}-${normHHMM(a.end||'23:00')}::${cleanLifestyleTitle(a.title, a.start, a.end)}`)
+    );
+
+    for (const p of need) {
+      const s = normHHMM(p.start || '00:00');
+      const e = normHHMM(p.end || '23:00');
+      const t = cleanLifestyleTitle(p.title, s, e);
+      const key = `${s}-${e}::${t}`;
+      if (!existingKey.has(key)) {
+        filtered.push({
+          title: t,
+          start: s,
+          end: e,
+          type: 'lifestyle',
+          // ✅ __days를 extendedProps로 옮겨 유지 (후속 필터링/충돌조정 참고용)
+          extendedProps: { days: p.days || [1,2,3,4,5,6,7] }
+        });
+      }
+    }
+
+    filtered.sort((x,y) => hhmmToMin(x.start || '00:00') - hhmmToMin(y.start || '00:00'));
+
+    return { ...day, activities: filtered };
+  });
+};
+
+// 상대 day 정규화
+const normalizeRelativeDays = (schedule, baseDay) => {
+  const arr = Array.isArray(schedule) ? schedule : [];
+  let current = baseDay;
+  return arr.map((dayObj, idx) => {
+    let dayNum = Number.isInteger(dayObj?.day) ? dayObj.day : (baseDay + idx);
+    if (idx === 0 && dayNum !== baseDay) dayNum = baseDay;
+    if (dayNum < current) dayNum = current;
+    if (idx > 0 && dayNum <= current) dayNum = current + 1;
+    current = dayNum;
+    const weekdayNum = ((dayNum - 1) % 7) + 1;
+    return {
+      ...dayObj,
+      day: dayNum,
+      weekday: getKoreanWeekday(weekdayNum)
+    };
+  });
+};
+
+// 각 제목의 마감 day 계산
+const buildDeadlineDayMap = (existingTasks = [], todayDate) => {
+  const map = new Map();
+  const base = todayDate.getDay() === 0 ? 7 : todayDate.getDay();
+  const toMid = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  
+  // ✅ Timestamp/Date/문자열 모두 안전하게 처리 (YYYY-MM-DD는 로컬 자정으로)
+  const toDateSafe = (v) => {
+    if (!v) return null;
+    if (v.toDate) return v.toDate();           // Firestore Timestamp
+    if (v instanceof Date) return v;
+    if (typeof v === 'string') {
+      const ymd = parseYYYYMMDDLocal(v);
+      if (ymd) return ymd;
+      const parsed = new Date(v);
+      if (!isNaN(parsed.getTime())) return parsed;
+      const iso = toISODateLocal(v);
+      return iso ? new Date(iso) : null;
+    }
+    return null;
+  };
+  
+  for (const t of (existingTasks || [])) {
+    const d0 = toDateSafe(t.deadline);
+    if (!d0 || isNaN(d0.getTime())) continue;
+    const d = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate()); // 로컬 자정
+    const diffDays = Math.floor((toMid(d) - toMid(todayDate)) / (24*60*60*1000));
+    const deadlineDay = base + Math.max(0, diffDays);
+    map.set(canonTitle(t.title || ''), deadlineDay);
+  }
+  return map;
+};
+
+// 마감일 이후의 task 제거
+const capTasksByDeadline = (schedule, deadlineMap) => {
+  return (schedule || []).map(day => ({
+    ...day,
+    activities: (day.activities || []).filter(a => {
+      if ((a.type || 'task').toLowerCase() !== 'task') return true;
+      const dl = findDeadlineDayForTitle(a.title || '', deadlineMap);
+      return !dl || day.day <= dl;
+    })
+  }));
+};
+
+// 주말 업무 방지
+const stripWeekendWork = (schedule) => {
+  return (schedule || []).map(day => ({
+    ...day,
+    activities: (day.activities || []).filter(a => {
+      const isWeekend = (day.day % 7 === 6) || (day.day % 7 === 0);
+      const isWorkLike = /(회사|근무|업무|미팅|회의)(?!.*(스터디|공부|학습|개인|사이드))/.test(a.title || '');
+      return !(isWeekend && isWorkLike);
+    })
+  }));
+};
+
+  // task 메타 보강
+const enrichTaskMeta = (schedule, existingTasks=[]) => {
+  if (!Array.isArray(schedule)) return schedule;
+  const byTitle = new Map();
+  // ✅ 타이틀 정규화 일관성: canonTitle로 통일
+  (existingTasks||[]).forEach(t => {
+    const normalized = canonTitle(t.title || '');
+    if (normalized) byTitle.set(normalized, t);
+  });
+
+  for (const day of schedule) {
+    for (const a of (day.activities||[])) {
+      if ((a.type||'').toLowerCase() !== 'task') continue;
+
+      // ✅ 타이틀 정규화로 매칭 (canonTitle)
+      const base = byTitle.get(canonTitle(a.title || ''));
+
+      if (isExamTitle(a.title)) {
+        a.importance = a.importance || '상';
+        a.difficulty = a.difficulty || '상';
+        a.isRepeating = a.isRepeating ?? true;
+      }
+
+      if (base) {
+        if (!a.importance) a.importance = base.importance || '중';
+        if (!a.difficulty) a.difficulty = base.difficulty || '중';
+        if (isExamTitle(a.title) || a.importance === '상' || a.difficulty === '상') {
+          a.isRepeating = a.isRepeating ?? true;
+        }
+      }
+
+      if (!a.duration && a.start && a.end) {
+        a.duration = hhmmToMin(a.end) - hhmmToMin(a.start);
+      }
+    }
+  }
+  return schedule;
+};
+
+// 화이트리스트 필터링
+const filterTasksByWhitelist = (schedule, allowedTitleSet) => {
+  if (!Array.isArray(schedule) || !allowedTitleSet) return schedule;
+  return schedule.map(day => ({
+    ...day,
+    activities: (day.activities || []).filter(a => {
+      const t = (a.type || 'task').toLowerCase();
+      if (t !== 'task') return true;
+      const title = normTitle(a.title || '');
+      return allowedTitleSet.has(title);
+    })
+  }));
+};
+
+// 공통 후처리 파이프라인
+export const postprocessSchedule = ({
+  raw,
+  parsedPatterns,
+  existingTasksForAI,
+  today,
+  whitelistPolicy = 'off' // 'off' | 'strict' | 'exam-exempt' | 'smart'
+}) => {
+  let schedule = enrichTaskMeta(Array.isArray(raw) ? raw : (raw?.schedule || []), existingTasksForAI);
+
+  const allowedTitles = new Set(
+    (existingTasksForAI || []).map(t => canonTitle(t.title || '')).filter(Boolean)
+  );
+
+  const baseDay = today.getDay() === 0 ? 7 : today.getDay();
+  schedule = normalizeRelativeDays(schedule, baseDay).map(day => ({
+    ...day,
+    activities: (day.activities || []).map(a => {
+      if ((a.type || '').toLowerCase() === 'lifestyle') {
+        return { ...a, title: cleanLifestyleTitle(a.title, a.start, a.end) };
+      }
+      return a;
+    })
+  }));
+
+  schedule = applyLifestyleHardOverlay(schedule, parsedPatterns);
+
+  // ✅ 화이트리스트/자동반복 순서 개선: fixOverlaps 먼저 실행 후 필터링
+  // (자동 반복으로 추가된 태스크가 다시 필터링되지 않도록)
+  const deadlineMap = buildDeadlineDayMap(existingTasksForAI, today);
+  try {
+    console.log('[ShedAI][DEADLINE] size=', deadlineMap.size);
+    if (deadlineMap.size === 0) {
+      console.warn('[ShedAI][DEADLINE] 비어 있음 → 로컬 DB/Firestore에서 할 일 수집 실패 가능성 높음');
+    }
+  } catch {}
+  schedule = fixOverlaps(schedule, { allowedTitles, allowAutoRepeat: true, deadlineMap });
+
+  // 화이트리스트 강제 (정책에 따라) - fixOverlaps 이후 적용
+  if (whitelistPolicy === 'strict') {
+    schedule = schedule.map(d => ({
+      ...d,
+      activities: (d.activities || []).filter(a => {
+        const t = (a.type || 'task').toLowerCase();
+        if (t !== 'task') return true;
+        const titleNorm = canonTitle(a.title || '');
+        const isImportant =
+          a.isRepeating || a.importance === '상' || a.difficulty === '상' || /시험|오픽|토익|면접/i.test(titleNorm);
+        return isImportant || allowedTitles.has(titleNorm);
+      })
+    }));
+  } else if (whitelistPolicy === 'exam-exempt' || whitelistPolicy === 'smart') {
+    // 시험/상난이도/isRepeating은 화이트리스트 무시
+    // 'smart'는 'exam-exempt'와 동일하되, 향후 유사도 체크 등 확장 가능
+    schedule = schedule.map(d => ({
+      ...d,
+      activities: (d.activities || []).filter(a => {
+        const t = (a.type || 'task').toLowerCase();
+        if (t !== 'task') return true;
+        const titleNorm = canonTitle(a.title || '');
+        const isImportant = a.isRepeating || a.importance === '상' || a.difficulty === '상' || /시험|오픽|토익|면접/i.test(titleNorm);
+        return isImportant || allowedTitles.has(titleNorm);
+      })
+    }));
+  }
+  // 'off'면 그대로 유지
+  schedule = capTasksByDeadline(schedule, deadlineMap);
+  schedule = stripWeekendWork(schedule);
+
+  // 활동 유효성 필터 (기본 type 보강 후 검증)
+  schedule = schedule.map(d => {
+    const acts = (d.activities || []).map(a => {
+      if (!a.type) a.type = 'task';
+      return a;
+    });
+    return {
+      ...d,
+      activities: acts.filter(a => {
+        const t = (a.type || 'task').toLowerCase();
+        if (t === 'lifestyle') return a.start && a.end;
+        return a.title && a.start && a.end;
+      })
+    };
+  });
+
+  return schedule;
+};
   
