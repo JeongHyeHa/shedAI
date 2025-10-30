@@ -16,6 +16,46 @@ export function toYMDLocal(value) {
   return local.toISOString().slice(0, 10);
 }
 
+// === NEW: 상대일(내일/모레/글피/오늘) + (오전/오후) 시:분 파서 ===
+function parseKoreanRelativeDateTime(input, today = new Date()) {
+  if (!input) return null;
+  const text = String(input).trim();
+
+  // 상대일 단어
+  let dayOffset = 0;
+  if (/(내일)/.test(text)) dayOffset = 1;
+  else if (/(모레)/.test(text)) dayOffset = 2;
+  else if (/(글피)/.test(text)) dayOffset = 3;
+  else if (/(오늘)/.test(text)) dayOffset = 0;
+
+  // 시간/분 추출: (오전|오후)? HH(:mm)?  — “2시 30분”, “14:00”, “오후 2시”
+  const timeRe = /(?:(오전|오후)\s*)?(\d{1,2})(?:\s*시)?(?:\s*[:시]\s*(\d{1,2}))?(?:\s*분)?/;
+  const m = text.match(timeRe);
+
+  // 시간 정보가 없으면 여기선 처리하지 않음(기존 패턴에 맡김)
+  if (!m) return null;
+
+  const ampm = m[1];              // "오전" | "오후" | undefined
+  let hour   = parseInt(m[2], 10);
+  const minute = m[3] ? parseInt(m[3], 10) : 0;
+
+  // 12시간제 보정
+  if (ampm === '오후') {
+    if (hour !== 12) hour += 12;
+  } else if (ampm === '오전') {
+    if (hour === 12) hour = 0;
+  }
+
+  // 기준일 00:00 + dayOffset
+  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  base.setDate(base.getDate() + dayOffset);
+
+  // 결과 시각 적용
+  const result = new Date(base);
+  result.setHours(hour, minute, 0, 0);
+  return result; // Date 객체 반환
+}
+
 export const parseDateString = (text, today) => {
   // 공백 정규화: NBSP( ) 등도 스페이스로 치환 후 압축
   let norm = String(text).replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
@@ -24,6 +64,13 @@ export const parseDateString = (text, today) => {
     norm = norm.replace(/\(day:\d+\)/g, '').replace(/\s{2,}/g, ' ').trim();
   }
   console.log('[parseDateString] 입력(norm):', norm, 'today:', today);
+
+  // === NEW: 상대일+시각 우선 처리 ===
+  const relDT = parseKoreanRelativeDateTime(norm, today);
+  if (relDT) {
+    console.log('[parseDateString] 상대일+시각 매칭:', relDT);
+    return relDT; // Date 객체
+  }
 
   // 한국어 "이번주/다음주/오는 + 요일" 우선 처리 (월요일=주 시작)
   const KO_WD = { '월':1,'화':2,'수':3,'목':4,'금':5,'토':6,'일':7 };

@@ -1,6 +1,7 @@
 // 할 일 간단입력 창
-import React, { useState } from 'react';
+import React from 'react';
 import arrowBackIcon from '../../assets/arrow-small-left-light.svg';
+import { toYMDLocal } from '../../utils/dateUtils';
 import '../../styles/modal.css';
 
 const TaskFormModal = ({
@@ -13,15 +14,51 @@ const TaskFormModal = ({
   onSubmit,             // 할 일 폼 전송 함수
   isEditing,            // 수정 모드인지 여부
   overlayZIndex,
+  onResetTaskForm,      // 제출/닫기 후 폼 초기화 콜백
 }) => {
 
   if (!isOpen) return null;
 
+  // 제출 후 폼 초기화: onSubmit이 Promise면 await 처리
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const result = onSubmit?.();
+      if (result instanceof Promise) {
+        const ok = await result;
+        if (ok !== false) onResetTaskForm?.();
+      } else {
+        if (result !== false) onResetTaskForm?.();
+      }
+    } catch (err) {
+      // 실패 시 초기화하지 않음
+    }
+  };
+
+  // 바깥 클릭으로 닫을 때도 폼 초기화
+  const handleOverlayClick = () => {
+    onResetTaskForm?.();
+    onClose?.();
+  };
+
+  // 뒤로가기 버튼 클릭 시 폼 초기화 후 이동
+  const handleBackToChatbot = () => {
+    onResetTaskForm?.();
+    onBackToChatbot?.();
+  };
+
+  // 내일부터 선택 가능하도록 min 계산 (정책이 내일 이상일 때)
+  const todayPlus1YMD = () => {
+    const n = new Date();
+    n.setDate(n.getDate() + 1);
+    return toYMDLocal(n);
+  };
+
   return (
-    <div className="modal-overlay" onClick={onClose} style={overlayZIndex ? { zIndex: overlayZIndex } : undefined}>
+    <div className="modal-overlay" onClick={handleOverlayClick} style={overlayZIndex ? { zIndex: overlayZIndex } : undefined}>
       <div className="modal task-form-modal" onClick={(e) => e.stopPropagation()}>
         <div className="task-form-header">
-          <button className="back-to-chatbot-btn" onClick={onBackToChatbot}>
+          <button className="back-to-chatbot-btn" onClick={handleBackToChatbot}>
             <img src={arrowBackIcon} alt="뒤로가기" width="20" height="20" />
           </button>
           <h2 className="task-form-title">{isEditing ? '할 일 수정' : '할 일 입력'}</h2>
@@ -51,7 +88,8 @@ const TaskFormModal = ({
                       type="date" 
                       id="task-deadline" 
                       className="task-input task-date-input"
-                      value={taskForm.deadline}
+                      value={taskForm.deadline instanceof Date ? toYMDLocal(taskForm.deadline) : taskForm.deadline}
+                      min={todayPlus1YMD()}
                       onChange={onTaskFormChange}
                     />
                   </div>
@@ -150,10 +188,7 @@ const TaskFormModal = ({
                 <button 
                   type="button"
                   className="task-submit-button"
-                  onClick={(e) => {
-                    e.preventDefault(); 
-                    onSubmit();
-                  }}
+                  onClick={handleSubmit}
                 >
 {isEditing ? '수정' : '추가'}
                 </button>

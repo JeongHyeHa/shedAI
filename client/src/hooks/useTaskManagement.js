@@ -2,7 +2,7 @@ import { useRef, useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import firestoreService from '../services/firestoreService';
 import { serverTimestamp, Timestamp } from 'firebase/firestore';
-import { toLocalMidnightDate } from '../utils/dateNormalize';
+import { toLocalMidnightDate, isAfterTodayLocal } from '../utils/dateNormalize';
 
 function useTaskManagement() {
   const { user } = useAuth();
@@ -10,7 +10,7 @@ function useTaskManagement() {
 
   const [taskForm, setTaskForm] = useState({
     title: '',
-    deadline: new Date(),
+    deadline: '',
     importance: '중',
     difficulty: '중',
     description: ''
@@ -20,10 +20,11 @@ function useTaskManagement() {
     s.replace(/\s+/g, ' ').trim().slice(0, 120); // 길이 제한은 필요에 맞게 조정
 
   const isPastDate = (d) => {
-    if (!(d instanceof Date)) return true;
+    // 유지: 기존 호출부 호환용
+    const dd = toLocalMidnightDate(d);
+    if (!dd) return true;
     const nowMid = new Date();
     nowMid.setHours(0,0,0,0);
-    const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     return dd < nowMid;
   };
 
@@ -39,7 +40,8 @@ function useTaskManagement() {
         console.error('할 일 제목을 입력해주세요.');
         return;
       }
-      if (!taskForm.deadline || isPastDate(taskForm.deadline)) {
+      // 오늘 이후(내일 이상)만 허용
+      if (!taskForm.deadline || !isAfterTodayLocal(taskForm.deadline)) {
         console.error('마감일이 유효하지 않습니다. 오늘 이후 날짜를 선택해주세요.');
         return;
       }
@@ -70,7 +72,7 @@ function useTaskManagement() {
         // 폼 초기화
         setTaskForm({
           title: '',
-          deadline: new Date(),
+          deadline: '',
           importance: '중',
           difficulty: '중',
           description: ''
