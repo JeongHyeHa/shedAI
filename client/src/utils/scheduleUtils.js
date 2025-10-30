@@ -806,6 +806,11 @@ export function convertToRelativeDay(targetDate, baseDate = new Date()) {
   return todayGptDay + diffDays;
 }
 
+// 일정(회의/약속) 판별
+export function isAppointmentTitle(t='') {
+  return /(회의|미팅|약속|세미나|발표|인터뷰|면접|상담|콜|수업|강의|웨비나)/i.test(String(t));
+}
+
 // ============================================================
 // CalendarPageRefactored에서 이동된 함수들
 // ============================================================
@@ -844,17 +849,14 @@ function findDeadlineDayForTitle(actTitle, deadlineMap) {
   const actKey = canonTitle(actTitle || '');
   if (!actKey) return null;
 
-  // 1) 정확 일치
   if (deadlineMap.has(actKey)) return deadlineMap.get(actKey);
 
-  // 2) 접두/부분 포함
   for (const [taskKey, dlDay] of deadlineMap.entries()) {
     if (!taskKey) continue;
     if (actKey.startsWith(taskKey) || taskKey.startsWith(actKey)) return dlDay;
     if (actKey.includes(taskKey) || taskKey.includes(actKey)) return dlDay;
   }
 
-  // 3) 토큰 유사도(가벼운 근사)
   const tokenize = (k) => String(k).replace(/[^가-힣a-z0-9]/g, ' ').split(/\s+/).filter(Boolean);
   const aTok = tokenize(actKey);
   let best = { score: 0, dlDay: null };
@@ -925,8 +927,9 @@ export const parseTaskFromFreeText = (text, today = new Date()) => {
   if (!text || typeof text !== 'string') return null;
   const s = text.replace(/\s+/g, ' ').trim();
 
-  // 날짜 감지
-  let deadlineDate = safeParseDateString(s, today);
+  // 날짜(+시각) 1차 감지
+  const dtFull = safeParseDateString(s, today); // Date(시:분 포함 가능)
+  let deadlineDate = dtFull;
   if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) {
     const rawCandidates = s.match(/(\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}[.\-\/]\d{1,2})/g) || [];
     for (const cand of rawCandidates) {
@@ -944,6 +947,39 @@ export const parseTaskFromFreeText = (text, today = new Date()) => {
     }
   }
   if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) return null;
+
+  // --- 시각 감지: dtFull가 유효하고 시간이 자정이 아닌 경우 우선 사용
+  let deadlineTime = null;
+  if (dtFull instanceof Date && !isNaN(dtFull.getTime())) {
+    const hh0 = dtFull.getHours();
+    const mm0 = dtFull.getMinutes();
+    if (!(hh0 === 0 && mm0 === 0)) {
+      deadlineTime = `${String(hh0).padStart(2,'0')}:${String(mm0).padStart(2,'0')}`;
+    }
+  }
+  // 보강: 한국어 시각 패턴(오전/오후 HH(:mm)?시, HH(:mm)?시, '반')에서 시간 추출
+  if (!deadlineTime) {
+    const mAMPM = s.match(/(오전|오후)\s*(\d{1,2})(?::?(\d{1,2}))?\s*시?/);
+    const mHalf = s.match(/(오전|오후)?\s*(\d{1,2})\s*시\s*반/);
+    const mHHMM = s.match(/(?<!오전|오후)\b(\d{1,2})(?::(\d{1,2}))?\s*시\b/);
+    if (mAMPM) {
+      let h = parseInt(mAMPM[2], 10) || 0;
+      const min = parseInt(mAMPM[3] || '0', 10) || 0;
+      if (mAMPM[1] === '오후' && h < 12) h += 12;
+      if (mAMPM[1] === '오전' && h === 12) h = 0;
+      deadlineTime = `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
+    } else if (mHalf) {
+      let h = parseInt(mHalf[2], 10) || 0;
+      if (mHalf[1] === '오후' && h < 12) h += 12;
+      if (mHalf[1] === '오전' && h === 12) h = 0;
+      deadlineTime = `${String(h).padStart(2,'0')}:30`;
+    } else if (mHHMM) {
+      let h = parseInt(mHHMM[1], 10) || 0;
+      const min = parseInt(mHHMM[2] || '0', 10) || 0;
+      // 12시는 그대로 유지 (오전/오후 수식 없으면 그대로)
+      deadlineTime = `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
+    }
+  }
 
   // 제목 생성
   let title = '';
@@ -971,14 +1007,22 @@ export const parseTaskFromFreeText = (text, today = new Date()) => {
   const difficulty = levelMap[diffRaw] || (isExam ? '상' : '중');
   const localMid = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
 
-  return {
+  const result = {
     title,
     importance,
     difficulty,
     description: s.replace(title, '').trim(),
     deadlineAtMidnight: localMid,
+    deadlineTime,
     estimatedMinutes: isExam ? 150 : 120
   };
+
+  // 타입 지정: 회의/약속류는 appointment, 그 외 task
+  result.type = isAppointmentTitle(title) ? 'appointment' : 'task';
+  if (result.type === 'appointment') {
+    if (!result.estimatedMinutes) result.estimatedMinutes = 60;
+  }
+  return result;
 };
 
 // 할 일을 existingTasks와 사람이 읽는 taskText로 동시에 만들기
@@ -1072,7 +1116,10 @@ export const buildTasksForAI = async (uid, firestoreService, opts = {}) => {
     })(),
     importance: t.importance || '중',
     difficulty: t.difficulty || '중',
-    description: t.description || ''
+    description: t.description || '',
+    type: (t.type || (isAppointmentTitle(t.title||'') ? 'appointment' : 'task')),
+    deadlineTime: t.deadlineTime || null,
+    estimatedMinutes: t.estimatedMinutes || (isAppointmentTitle(t.title||'') ? 60 : 120)
   }));
 
   const taskText = active.map(t => {
@@ -1583,6 +1630,135 @@ const enrichTaskMeta = (schedule, existingTasks=[]) => {
   return schedule;
 };
 
+// ===== 3-pass 배치 유틸 =====
+const toMin = (s) => { const [h,m]=String(s||'0:0').split(':').map(n=>parseInt(n||'0',10)); return (isNaN(h)?0:h)*60+(isNaN(m)?0:m); };
+const toHHMM = (m) => `${String(Math.floor(m/60)%24).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+
+const mergeRanges = (ranges) => {
+  const a = [...ranges].sort((x,y)=>x[0]-y[0]);
+  const out = [];
+  for (const [s,e] of a) {
+    if (!out.length || s>out[out.length-1][1]) out.push([s,e]);
+    else out[out.length-1][1]=Math.max(out[out.length-1][1], e);
+  }
+  return out;
+};
+
+const freeFromOccupied = (occupied, dayStart=0, dayEnd=24*60) => {
+  const merged = mergeRanges(occupied);
+  const free=[]; let cur=dayStart;
+  for (const [s,e] of merged) { if (cur<s) free.push([cur,s]); cur=Math.max(cur,e); }
+  if (cur<dayEnd) free.push([cur,dayEnd]);
+  return free;
+};
+
+const buildOccupiedForAppointments = (acts=[]) => {
+  return mergeRanges(
+    (acts||[])
+      .filter(a => (a.type||'').toLowerCase()==='appointment' && a.start && a.end)
+      .map(a => [toMin(a.start), toMin(a.end)])
+  );
+};
+
+const buildOccupiedForTasks = (acts=[]) => {
+  return mergeRanges(
+    (acts||[])
+      .filter(a => ['lifestyle','appointment'].includes((a.type||'').toLowerCase()) && a.start && a.end)
+      .flatMap(a => {
+        const s = toMin(a.start), e = toMin(a.end);
+        return e>=s ? [[s,e]] : [[0,e],[s,24*60]];
+      })
+  );
+};
+
+const dayIndexFromISO = (iso, todayDate) => {
+  const base = (todayDate.getDay()===0?7:todayDate.getDay());
+  if (!iso) return base;
+  const t0 = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
+  const d  = new Date(iso);
+  const d0 = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return base + Math.max(0, Math.floor((d0 - t0)/86400000));
+};
+
+export const placeAppointmentsPass = (schedule=[], allItems=[], todayDate=new Date()) => {
+  const copy = (schedule||[]).map(d=>({...d, activities:[...(d.activities||[])]}));
+  const appts = (allItems||[]).filter(t => (t.type||'task').toLowerCase()==='appointment' && t.isActive!==false);
+  for (const t of appts) {
+    const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
+    const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
+    if (!dayObj) continue;
+    const occ = buildOccupiedForAppointments(dayObj.activities);
+    const want = String(t.deadlineTime||'').slice(0,5);
+    const target = /^\d{2}:\d{2}$/.test(want) ? toMin(want) : 9*60;
+    const dur = Math.max(30, Number(t.estimatedMinutes || 60));
+    const free = freeFromOccupied(occ);
+    let best=null;
+    for (const [fs,fe] of free) {
+      if (fe-fs < dur) continue;
+      const start = Math.min(Math.max(target, fs), fe - dur);
+      const mid = start + dur/2;
+      const dist = Math.abs(mid - target);
+      if (!best || dist<best.dist) best={start,end:start+dur,dist};
+    }
+    if (!best) continue;
+    dayObj.activities.push({
+      title: t.title,
+      start: toHHMM(best.start),
+      end: toHHMM(best.end),
+      type: 'appointment',
+      importance: t.importance || '중',
+      difficulty: t.difficulty || '중',
+      source: 'place_appointment'
+    });
+    dayObj.activities.sort((a,b)=>toMin(a.start||'00:00')-toMin(b.start||'00:00'));
+  }
+  return copy;
+};
+
+export const placeTasksPass = (schedule=[], allItems=[], todayDate=new Date()) => {
+  const copy = (schedule||[]).map(d=>({...d, activities:[...(d.activities||[])]}));
+  const hasTask = (acts, title) => (acts||[]).some(a => (a.type||'').toLowerCase()==='task' && (a.title||'').trim()===(title||'').trim());
+  const tasks = (allItems||[]).filter(t => (t.type||'task').toLowerCase()==='task' && t.isActive!==false);
+  for (const t of tasks) {
+    const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
+    const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
+    if (!dayObj) continue;
+    if (hasTask(dayObj.activities, t.title)) continue;
+    const occ = buildOccupiedForTasks(dayObj.activities);
+    const free = freeFromOccupied(occ);
+    const dur = Math.max(30, Number(t.estimatedMinutes || 120));
+    const preferred = 19*60;
+    let best=null;
+    for (const [fs,fe] of free) {
+      if (fe-fs < dur) continue;
+      const start = Math.min(Math.max(preferred, fs), fe - dur);
+      const mid = start + dur/2;
+      const dist = Math.abs(mid - preferred);
+      if (!best || dist<best.dist) best={start,end:start+dur,dist};
+    }
+    if (!best) {
+      let longest=[null,-1];
+      for (const [fs,fe] of free) {
+        const len = fe-fs;
+        if (len > longest[1] && len>=dur) longest=[[fs,fe],len];
+      }
+      if (longest[0]) best = { start:longest[0][0], end:longest[0][0]+dur, dist:9999 };
+    }
+    if (!best) continue;
+    dayObj.activities.push({
+      title: t.title,
+      start: toHHMM(best.start),
+      end: toHHMM(best.end),
+      type: 'task',
+      importance: t.importance || '중',
+      difficulty: t.difficulty || '중',
+      source: 'place_task'
+    });
+    dayObj.activities.sort((a,b)=>toMin(a.start||'00:00')-toMin(b.start||'00:00'));
+  }
+  return copy;
+};
+
 // 화이트리스트 필터링
 const filterTasksByWhitelist = (schedule, allowedTitleSet) => {
   if (!Array.isArray(schedule) || !allowedTitleSet) return schedule;
@@ -1684,4 +1860,30 @@ export const postprocessSchedule = ({
 
   return schedule;
 };
+
+// 고정 시각 태스크를 FullCalendar 이벤트로 변환
+export function tasksToFixedEvents(tasks = []) {
+  const safe = Array.isArray(tasks) ? tasks : [];
+  return safe
+    .filter(t => (t && (t.deadlineAtMidnight || t.deadline) && t.deadlineTime))
+    .map(t => {
+      const base = toLocalMidnightDate(t.deadlineAtMidnight || t.deadline);
+      const [H, M] = String(t.deadlineTime).split(':').map(Number);
+      const start = base ? new Date(base.getFullYear(), base.getMonth(), base.getDate(), H || 0, M || 0) : new Date();
+      const dur = Math.max(30, Number(t.estimatedMinutes || 60));
+      const end = new Date(start.getTime() + dur * 60000);
+      return {
+        id: `fixed_${t.id || `${start.getTime()}`}`,
+        title: t.title || '(제목 없음)',
+        start,
+        end,
+        allDay: false,
+        extendedProps: {
+          isDone: false,
+          source: 'fixed-task',
+          taskId: t.id || null,
+        },
+      };
+    });
+}
   

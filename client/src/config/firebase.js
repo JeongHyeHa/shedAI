@@ -49,11 +49,8 @@ try {
   if (typeof window !== "undefined" && firebaseConfig.measurementId) {
     analytics = getAnalytics(app);
   }
-  console.log("[Firebase] 초기화 성공");
 } catch (e) {
   console.error("[Firebase] 초기화 실패:", e);
-  // 초기화 실패 시, 아래 export들이 null이 되지 않도록 명확히 에러를 다시 던지면
-  // 상위에서 잡거나 앱이 즉시 실패하여 원인 파악이 쉬워짐.
   throw e;
 }
 

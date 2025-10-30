@@ -1,5 +1,5 @@
 // 할 일 간단입력 창
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import arrowBackIcon from '../../assets/arrow-small-left-light.svg';
 import { toYMDLocal } from '../../utils/dateUtils';
 import '../../styles/modal.css';
@@ -16,6 +16,16 @@ const TaskFormModal = ({
   overlayZIndex,
   onResetTaskForm,      // 제출/닫기 후 폼 초기화 콜백
 }) => {
+
+  const wasOpenRef = useRef(!!isOpen);
+
+  // 모달이 닫힐 때도 항상 폼 초기화 (외부에서 isOpen을 false로 바꾼 경우 포함)
+  useEffect(() => {
+    if (wasOpenRef.current && !isOpen) {
+      onResetTaskForm?.();
+    }
+    wasOpenRef.current = !!isOpen;
+  }, [isOpen, onResetTaskForm]);
 
   if (!isOpen) return null;
 

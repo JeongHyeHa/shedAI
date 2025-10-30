@@ -185,21 +185,15 @@ class FirestoreService {
         console.error('[FirestoreService.saveTask] taskData.title이 없습니다.');
         throw new Error('taskData.title이 없습니다.');
       }
-
-      console.log('[FirestoreService.saveTask] userId:', userId, 'title:', taskData.title);
       
       const tasksRef = collection(this.db, 'users', userId, 'tasks');
-      
       const docRef = await addDoc(tasksRef, {
         ...taskData,
         createdAt: serverTimestamp(),
         isActive: true
       });
-      
-      console.log('[FirestoreService.saveTask] 저장 성공, docId:', docRef.id);
       return docRef.id;
     } catch (error) {
-      console.error('[FirestoreService.saveTask] 저장 실패:', error);
       throw error;
     }
   }
@@ -323,13 +317,10 @@ class FirestoreService {
       // 실제 스케줄 존재 여부 판단 (배열/객체 모든 형태 지원)
       const hasRealSchedule = (sd) => {
         if (!sd) return false;
-        // 형태1: 배열(이벤트 리스트 등)
         if (Array.isArray(sd)) return sd.length > 0;
-        // 형태2: 객체.days[...activities...]
         if (Array.isArray(sd.days)) {
           return sd.days.some(d => Array.isArray(d.activities) && d.activities.length > 0);
         }
-        // 형태3: 객체.events[...]
         if (Array.isArray(sd.events)) return sd.events.length > 0;
         return false;
       };
@@ -342,10 +333,10 @@ class FirestoreService {
       // 새 세션 저장 (정합성 강화)
       const docRef = await addDoc(sessionsRef, {
         ...sessionData,
-        hasSchedule: willActivate,   // 강제 일치
-        isActive: willActivate,      // 강제 일치
+        hasSchedule: willActivate,   
+        isActive: willActivate,      
         createdAt: serverTimestamp(),
-        createdAtMs: Date.now(),    // 클라이언트 타임스탬프 (빠른 정렬용)
+        createdAtMs: Date.now(),    
         updatedAt: serverTimestamp()
       });
       
@@ -372,8 +363,6 @@ class FirestoreService {
         return false;
       };
       
-      // 최신 N개를 훑어서 유효한 스케줄 찾기 (인덱스 필요 없음)
-      // createdAtMs를 우선 사용 (서버 타임스탬프 지연 방지)
       const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(10));
       const qs = await getDocs(q);
       for (const doc of qs.docs) {
@@ -435,7 +424,6 @@ class FirestoreService {
         ...feedbackData,
         createdAt: serverTimestamp()
       });
-      
       return docRef.id;
     } catch (error) {
       console.error('피드백 저장 실패:', error);

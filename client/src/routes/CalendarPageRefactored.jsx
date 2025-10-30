@@ -29,7 +29,9 @@ import {
   buildScheduleMessages,
   buildTasksForAI,
   parseTaskFromFreeText,
-  postprocessSchedule
+  postprocessSchedule,
+  placeAppointmentsPass,
+  placeTasksPass
 } from '../utils/scheduleUtils';
 import { parseLifestyleLines } from '../utils/lifestyleParse';
 import { 
@@ -44,15 +46,6 @@ import { getAuth } from 'firebase/auth';
 import { serverTimestamp, Timestamp } from 'firebase/firestore';
 import '../styles/calendar.css';
 import '../styles/floating.css';
-
-// 디버깅 유틸리티 (환경 독립형)
-const isDev =
-  (typeof import.meta !== 'undefined' && import.meta.env?.MODE !== 'production') ||
-  (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production');
-
-const debug = (...args) => {
-  if (isDev) console.log(...args);
-};
 
 // 공용 알림 헬퍼 (중복 방지)
 const notify = (() => {
@@ -93,13 +86,16 @@ async function generateAndApplySchedule({
   );
   
   const normalized = apiResp?.schedule ? apiResp : { schedule: apiResp };
-  const schedule = postprocessSchedule({
+  const baseProcessed = postprocessSchedule({
     raw: normalized.schedule,
     parsedPatterns: parsedLifestylePatterns,
     existingTasksForAI: tasksForAI.existingTasksForAI,
     today,
     whitelistPolicy: whitelistMode,
   });
+
+  const withAppts = placeAppointmentsPass(baseProcessed, tasksForAI.existingTasksForAI, today);
+  const schedule = placeTasksPass(withAppts, tasksForAI.existingTasksForAI, today);
 
   calendarApi?.removeAllEvents();
   updateSchedule({ schedule });
@@ -996,9 +992,11 @@ function CalendarPage() {
       
       
       // 5. 스케줄 생성 (직접 호출로 변경)
-      const promptBase = lastSchedule 
-        ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule)
-        : buildShedAIPrompt(lifestyleText, taskText, today);
+      const promptBase = enforceScheduleRules(
+        lastSchedule 
+          ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule)
+          : buildShedAIPrompt(lifestyleText, taskText, today)
+      );
       
       // 공통 메시지 빌더 사용 (컨텍스트 초기화 모드)
       const scheduleMessages = buildScheduleMessages({
@@ -1026,17 +1024,19 @@ function CalendarPage() {
         today,
         whitelistPolicy: 'smart'
       });
+      const withAppts = placeAppointmentsPass(processedSchedule, existingTasksForAI, today);
+      const withTasks = placeTasksPass(withAppts, existingTasksForAI, today);
       
       // 스케줄 갱신 전 기존 이벤트 완전 교체 (마감 초과 이벤트 제거)
       const api = calendarRef.current?.getApi();
       api?.removeAllEvents();
       
-      updateSchedule({ schedule: processedSchedule });
+      updateSchedule({ schedule: withTasks });
       addAIMessage("스케줄이 생성되었습니다!");
 
       const scheduleSessionId = await saveScheduleSessionUnified({
         uid: user.uid,
-        schedule: processedSchedule,
+        schedule: withTasks,
         lifestyleList: parsedPatterns, // ✅ 파싱된 패턴 저장
         aiPrompt: promptBase,
         conversationContext
@@ -1319,7 +1319,7 @@ function CalendarPage() {
       addAIMessage("피드백을 반영하여 스케줄을 조정합니다...");
       
       const lifestyleText = lifestyleList.join("\n");
-      const feedbackPrompt = buildFeedbackPrompt(lifestyleText, messageText, lastSchedule);
+      const feedbackPrompt = enforceScheduleRules(buildFeedbackPrompt(lifestyleText, messageText, lastSchedule));
       handleScheduleGeneration(feedbackPrompt, "피드백을 반영하여 스케줄을 조정합니다...");
     });
   };
@@ -1365,31 +1365,52 @@ function CalendarPage() {
       if (parsed) {
         if (user?.uid) {
           console.log('[CalendarPage] 채팅에서 할 일 파싱 성공:', parsed);
+          // 제목 정리: 꼬리 제거 및 간단화
+          const cleanTitle = (() => {
+            let t = (parsed.title || messageText || '').trim();
+            t = t
+              .replace(/일정\s*(?:좀|좀만)?\s*추가해줘\.?$/i, '')
+              .replace(/일정\s*(?:좀|좀만)?\s*넣어줘\.?$/i, '')
+              .replace(/일정\s*잡아줘\.?$/i, '')
+              .replace(/추가해줘\.?$/i, '')
+              .replace(/해줘\.?$/i, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+            t = t.replace(/(일정)$/i, '').trim();
+            if (t.length > 30) {
+              const m = t.match(/([가-힣A-Za-z0-9]+)(?:\s|$)/);
+              if (m) t = m[1];
+            }
+            return t || '회의';
+          })();
           await firestoreService.saveTask(user.uid, {
-            title: parsed.title,
+            title: cleanTitle,
             deadline: toYMDLocal(toLocalMidnightDate(parsed.deadlineAtMidnight)),
             importance: parsed.importance,
             difficulty: parsed.difficulty,
             description: parsed.description,
             isActive: true,
             persistAsTask: true,            
-            estimatedMinutes: parsed.estimatedMinutes ?? 120,  // 파싱된 값 또는 기본 2시간
+            deadlineTime: parsed.deadlineTime || null,
+            type: parsed.type || (/(회의|미팅|약속)/.test(cleanTitle)?'appointment':'task'),
+            estimatedMinutes: parsed.estimatedMinutes ?? (/(회의|미팅|약속)/.test(cleanTitle)?60:120),
             createdAt: serverTimestamp()
           });
-          addAIMessage(`새 할 일을 저장했어요: ${parsed.title} (마감일: ${parsed.deadlineAtMidnight.toLocaleDateString('ko-KR')}, 중요도 ${parsed.importance}, 난이도 ${parsed.difficulty})`);
+          addAIMessage(`새 할 일을 저장했어요: ${cleanTitle} (마감일: ${parsed.deadlineAtMidnight.toLocaleDateString('ko-KR')}, 중요도 ${parsed.importance}, 난이도 ${parsed.difficulty})`);
         } else {
           const iso = toYMDLocal(parsed.deadlineAtMidnight);
           const temp = {
             id: 'temp_' + Date.now(),
-            title: parsed.title,
+            title: (parsed.title || '').replace(/일정$/i,'').trim(),
             deadline: iso,
-            // deadlineTime은 사용하지 않거나, 필요 시 '00:00'로 일관화
+            deadlineTime: parsed.deadlineTime || null,
+            type: parsed.type || (/(회의|미팅|약속)/.test(parsed.title||'')?'appointment':'task'),
             importance: parsed.importance,
             difficulty: parsed.difficulty,
             description: parsed.description,
             isActive: true,
             persistAsTask: true,            
-            estimatedMinutes: parsed.estimatedMinutes ?? 120,  
+            estimatedMinutes: parsed.estimatedMinutes ?? (/(회의|미팅|약속)/.test(parsed.title||'')?60:120),  
             createdAt: new Date().toISOString(),
             isLocal: true
           };
@@ -1427,9 +1448,11 @@ function CalendarPage() {
       ).join('\n');
     }
     
-    const promptBase = lastSchedule 
-      ? buildFeedbackPrompt(lifestyleText, processedMessage, lastSchedule)
-      : buildShedAIPrompt(lifestyleText, processedMessage, today);
+    const promptBase = enforceScheduleRules(
+      lastSchedule 
+        ? buildFeedbackPrompt(lifestyleText, processedMessage, lastSchedule)
+        : buildShedAIPrompt(lifestyleText, processedMessage, today)
+    );
     
     // 현재 할 일 목록을 프롬프트에 직접 주입
     const USE_FIRESTORE = String(process.env.REACT_APP_USE_FIRESTORE || 'true') === 'true';
@@ -1471,13 +1494,15 @@ function CalendarPage() {
 
       let finalSchedule = newSchedule.schedule;
 
-      const next = postprocessSchedule({
+      const nextBase = postprocessSchedule({
         raw: finalSchedule,
         parsedPatterns: patternsForAI,
         existingTasksForAI,
         today,
         whitelistPolicy: 'smart'
       });
+      const nextAppts = placeAppointmentsPass(nextBase, existingTasksForAI, today);
+      const next = placeTasksPass(nextAppts, existingTasksForAI, today);
 
       // 스케줄 갱신 전 기존 이벤트 완전 교체 (마감 초과 이벤트 제거)
       const api = calendarRef.current?.getApi();
