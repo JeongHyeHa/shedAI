@@ -8,6 +8,7 @@ import { convertScheduleToEvents, tasksToFixedEvents } from '../utils/scheduleUt
 import { useAuth } from '../contexts/AuthContext';
 import { toISODateLocal, toLocalMidnightDate } from '../utils/dateNormalize';
 import { serverTimestamp } from 'firebase/firestore';
+import { looksLikeSystemPrompt } from '../utils/promptGuards';
 
 export const useScheduleManagement = (setAllEvents) => {
   const { user } = useAuth();
@@ -181,7 +182,8 @@ export const useScheduleManagement = (setAllEvents) => {
         const lastUser = getLastUserText(messages);
         const looksTimed = /(오늘|내일|모레|\d{4}-\d{2}-\d{2}|[0-9]{1,2}\s*월\s*[0-9]{1,2}\s*일)/.test(lastUser)
                          || /(오전|오후|[0-9]{1,2}\s*시)/.test(lastUser);
-        if (!quickAddedEvent && !isSimpleScheduleTrigger(messages) && looksTimed) {
+        const isPromptLike = looksLikeSystemPrompt(lastUser);
+        if (!quickAddedEvent && !isSimpleScheduleTrigger(messages) && looksTimed && !isPromptLike) {
           const ev = extractEventFromMessage([{ role: 'user', content: lastUser }], baseDate);
 
           setAllEvents(prev => (Array.isArray(prev) ? [...prev, {

@@ -806,11 +806,6 @@ export function convertToRelativeDay(targetDate, baseDate = new Date()) {
   return todayGptDay + diffDays;
 }
 
-// 일정(회의/약속) 판별
-export function isAppointmentTitle(t='') {
-  return /(회의|미팅|약속|세미나|발표|인터뷰|면접|상담|콜|수업|강의|웨비나)/i.test(String(t));
-}
-
 // ============================================================
 // CalendarPageRefactored에서 이동된 함수들
 // ============================================================
@@ -1018,10 +1013,8 @@ export const parseTaskFromFreeText = (text, today = new Date()) => {
   };
 
   // 타입 지정: 회의/약속류는 appointment, 그 외 task
-  result.type = isAppointmentTitle(title) ? 'appointment' : 'task';
-  if (result.type === 'appointment') {
-    if (!result.estimatedMinutes) result.estimatedMinutes = 60;
-  }
+  // 기본은 task, 일정 분류는 상위 레이어에서 끝말 명령으로만 판단
+  result.type = 'task';
   return result;
 };
 
@@ -1117,9 +1110,9 @@ export const buildTasksForAI = async (uid, firestoreService, opts = {}) => {
     importance: t.importance || '중',
     difficulty: t.difficulty || '중',
     description: t.description || '',
-    type: (t.type || (isAppointmentTitle(t.title||'') ? 'appointment' : 'task')),
+    type: (t.type || 'task'),
     deadlineTime: t.deadlineTime || null,
-    estimatedMinutes: t.estimatedMinutes || (isAppointmentTitle(t.title||'') ? 60 : 120)
+    estimatedMinutes: t.estimatedMinutes || 120
   }));
 
   const taskText = active.map(t => {
@@ -1682,11 +1675,17 @@ const dayIndexFromISO = (iso, todayDate) => {
 
 export const placeAppointmentsPass = (schedule=[], allItems=[], todayDate=new Date()) => {
   const copy = (schedule||[]).map(d=>({...d, activities:[...(d.activities||[])]}));
+  const norm = (s='') => String(s).replace(/\s+/g,'').toLowerCase();
+  const hasSameTitleSameDay = (acts=[], title='') => {
+    const key = norm(title);
+    return (acts||[]).some(a => norm(a.title||'')===key);
+  };
   const appts = (allItems||[]).filter(t => (t.type||'task').toLowerCase()==='appointment' && t.isActive!==false);
   for (const t of appts) {
     const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
     const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
     if (!dayObj) continue;
+    if (hasSameTitleSameDay(dayObj.activities, t.title)) continue;
     const occ = buildOccupiedForAppointments(dayObj.activities);
     const want = String(t.deadlineTime||'').slice(0,5);
     const target = /^\d{2}:\d{2}$/.test(want) ? toMin(want) : 9*60;
@@ -1717,13 +1716,14 @@ export const placeAppointmentsPass = (schedule=[], allItems=[], todayDate=new Da
 
 export const placeTasksPass = (schedule=[], allItems=[], todayDate=new Date()) => {
   const copy = (schedule||[]).map(d=>({...d, activities:[...(d.activities||[])]}));
-  const hasTask = (acts, title) => (acts||[]).some(a => (a.type||'').toLowerCase()==='task' && (a.title||'').trim()===(title||'').trim());
-  const tasks = (allItems||[]).filter(t => (t.type||'task').toLowerCase()==='task' && t.isActive!==false);
+  const norm = (s='') => String(s).replace(/\s+/g,'').toLowerCase();
+  const hasSameTitleSameDay = (acts=[], title='') => (acts||[]).some(a => norm(a.title||'')===norm(title||''));
+  const tasks = (allItems||[]).filter(t => String(t.type).toLowerCase()==='task' && t.isActive!==false);
   for (const t of tasks) {
     const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
     const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
     if (!dayObj) continue;
-    if (hasTask(dayObj.activities, t.title)) continue;
+    if (hasSameTitleSameDay(dayObj.activities, t.title)) continue;
     const occ = buildOccupiedForTasks(dayObj.activities);
     const free = freeFromOccupied(occ);
     const dur = Math.max(30, Number(t.estimatedMinutes || 120));
@@ -1758,6 +1758,19 @@ export const placeTasksPass = (schedule=[], allItems=[], todayDate=new Date()) =
   }
   return copy;
 };
+
+export function dedupeActivitiesByTitleTime(dayActivities=[]) {
+  const norm = (s='') => String(s).replace(/\s+/g,'').toLowerCase();
+  const seen = new Set();
+  const out = [];
+  for (const a of (dayActivities||[])) {
+    const k = `${norm(a.title||'')}:${a.start||''}-${a.end||''}:${(a.type||'')}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(a);
+  }
+  return out;
+}
 
 // 화이트리스트 필터링
 const filterTasksByWhitelist = (schedule, allowedTitleSet) => {

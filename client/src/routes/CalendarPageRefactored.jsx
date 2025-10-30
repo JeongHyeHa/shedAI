@@ -31,8 +31,10 @@ import {
   parseTaskFromFreeText,
   postprocessSchedule,
   placeAppointmentsPass,
-  placeTasksPass
+  placeTasksPass,
+  dedupeActivitiesByTitleTime
 } from '../utils/scheduleUtils';
+import { endsWithAppointmentCommand, extractAppointmentTitle } from '../utils/appointmentRules';
 import { parseLifestyleLines } from '../utils/lifestyleParse';
 import { 
   resetToStartOfDay,
@@ -1025,7 +1027,16 @@ function CalendarPage() {
         whitelistPolicy: 'smart'
       });
       const withAppts = placeAppointmentsPass(processedSchedule, existingTasksForAI, today);
-      const withTasks = placeTasksPass(withAppts, existingTasksForAI, today);
+      let withTasks = placeTasksPass(withAppts, existingTasksForAI, today);
+      // 디듀프 안전망
+      withTasks = withTasks.map(day => ({
+        ...day,
+        activities: dedupeActivitiesByTitleTime(day.activities)
+          .sort((a,b)=>{
+            const toMin=(s)=>{ const [h,m]=String(s||'0:0').split(':').map(x=>parseInt(x||'0',10)); return (isNaN(h)?0:h)*60+(isNaN(m)?0:m); };
+            return toMin(a.start||'00:00')-toMin(b.start||'00:00');
+          })
+      }));
       
       // 스케줄 갱신 전 기존 이벤트 완전 교체 (마감 초과 이벤트 제거)
       const api = calendarRef.current?.getApi();
@@ -1383,6 +1394,14 @@ function CalendarPage() {
             }
             return t || '회의';
           })();
+          const isApptCmd = endsWithAppointmentCommand(messageText);
+          if (isApptCmd) {
+            parsed.type = 'appointment';
+            parsed.title = extractAppointmentTitle(messageText);
+            parsed.estimatedMinutes = parsed.estimatedMinutes ?? 60;
+          } else {
+            parsed.type = 'task';
+          }
           await firestoreService.saveTask(user.uid, {
             title: cleanTitle,
             deadline: toYMDLocal(toLocalMidnightDate(parsed.deadlineAtMidnight)),
@@ -1392,25 +1411,26 @@ function CalendarPage() {
             isActive: true,
             persistAsTask: true,            
             deadlineTime: parsed.deadlineTime || null,
-            type: parsed.type || (/(회의|미팅|약속)/.test(cleanTitle)?'appointment':'task'),
-            estimatedMinutes: parsed.estimatedMinutes ?? (/(회의|미팅|약속)/.test(cleanTitle)?60:120),
+            type: parsed.type,
+            estimatedMinutes: parsed.estimatedMinutes ?? 120,
             createdAt: serverTimestamp()
           });
           addAIMessage(`새 할 일을 저장했어요: ${cleanTitle} (마감일: ${parsed.deadlineAtMidnight.toLocaleDateString('ko-KR')}, 중요도 ${parsed.importance}, 난이도 ${parsed.difficulty})`);
         } else {
           const iso = toYMDLocal(parsed.deadlineAtMidnight);
+          const isApptLocal = endsWithAppointmentCommand(messageText);
           const temp = {
             id: 'temp_' + Date.now(),
             title: (parsed.title || '').replace(/일정$/i,'').trim(),
             deadline: iso,
             deadlineTime: parsed.deadlineTime || null,
-            type: parsed.type || (/(회의|미팅|약속)/.test(parsed.title||'')?'appointment':'task'),
+            type: isApptLocal ? 'appointment' : 'task',
             importance: parsed.importance,
             difficulty: parsed.difficulty,
             description: parsed.description,
             isActive: true,
             persistAsTask: true,            
-            estimatedMinutes: parsed.estimatedMinutes ?? (/(회의|미팅|약속)/.test(parsed.title||'')?60:120),  
+            estimatedMinutes: parsed.estimatedMinutes ?? (isApptLocal ? 60 : 120),  
             createdAt: new Date().toISOString(),
             isLocal: true
           };
@@ -1502,7 +1522,15 @@ function CalendarPage() {
         whitelistPolicy: 'smart'
       });
       const nextAppts = placeAppointmentsPass(nextBase, existingTasksForAI, today);
-      const next = placeTasksPass(nextAppts, existingTasksForAI, today);
+      let next = placeTasksPass(nextAppts, existingTasksForAI, today);
+      next = next.map(day => ({
+        ...day,
+        activities: dedupeActivitiesByTitleTime(day.activities)
+          .sort((a,b)=>{
+            const toMin=(s)=>{ const [h,m]=String(s||'0:0').split(':').map(x=>parseInt(x||'0',10)); return (isNaN(h)?0:h)*60+(isNaN(m)?0:m); };
+            return toMin(a.start||'00:00')-toMin(b.start||'00:00');
+          })
+      }));
 
       // 스케줄 갱신 전 기존 이벤트 완전 교체 (마감 초과 이벤트 제거)
       const api = calendarRef.current?.getApi();
