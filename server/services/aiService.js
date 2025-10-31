@@ -1,8 +1,35 @@
 const axios = require('axios');
+const https = require('https');
 
 class AIService {
     constructor() {
         this.openaiApiKey = process.env.OPENAI_API_KEY;
+        // HTTPS keepAlive 에이전트
+        this.httpsAgent = new https.Agent({ keepAlive: true });
+        // 공통 axios 옵션
+        this.axiosOpts = {
+            timeout: 180000,                      // 180초
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            httpsAgent: this.httpsAgent,
+            validateStatus: (status) => status >= 200 && status < 500
+        };
+    }
+
+    // 공통 재시도 유틸 (타임아웃/ECONNRESET/ENOTFOUND)
+    async callWithRetry(fn, tries = 2) {
+        let delay = 1000;
+        for (let i = 0; i <= tries; i++) {
+            try {
+                return await fn();
+            } catch (e) {
+                const retriable = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(e.code) ||
+                                  String(e.message || '').includes('timeout');
+                if (!retriable || i === tries) throw e;
+                await new Promise(r => setTimeout(r, delay));
+                delay *= 2;
+            }
+        }
     }
 
     // 허용 day 집합 추출 (사용자 메시지만 대상, 예시/가이드 텍스트 무시)
@@ -213,6 +240,10 @@ class AIService {
             
             // 현재 날짜 정보 생성 (오버라이드 지원)
             const now = opts.nowOverride ? new Date(opts.nowOverride) : new Date();
+            
+            // 시스템 프롬프트 간소화 (기존 긴 프롬프트 대신 핵심만)
+            const systemPromptShort = `너는 사용자의 생활패턴과 할 일로 day:1~n 스케줄을 만드는 도우미다. 
+- 과거시간 금지, 활동 겹침 금지, JSON만 출력, response_format=json_object.`;
             const year = now.getFullYear();
             const month = now.getMonth() + 1;
             const date = now.getDate();
@@ -293,6 +324,9 @@ class AIService {
             const anchorDay = opts.anchorDay ?? (allowedDays.length ? allowedDays[0] : (dayOfWeek===0?7:dayOfWeek));
             
             // 날짜 및 사용자 입력 분석 완료
+            
+            // 사용자 메시지만 최근 6개 유지
+            const userMessages = (messages || []).filter(m => m && m.role === 'user').slice(-6);
             
             // 스케줄 생성에 특화된 시스템 프롬프트 추가
             const systemPrompt = {
@@ -433,29 +467,33 @@ JSON만 반환하세요.`
             };
 
             // 시스템 프롬프트를 맨 앞에 추가
-            const enhancedMessages = [systemPrompt, ...messages]
+            const enhancedMessages = [systemPrompt, ...userMessages]
                 .filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
             
             console.log('API 키 존재:', !!this.openaiApiKey);
             console.log('API 키 길이:', this.openaiApiKey ? this.openaiApiKey.length : 0);
             console.log('요청 메시지 수:', enhancedMessages.length);
 
-            const response = await axios.post(
-                'https://api.openai.com/v1/chat/completions',
-                {
-                    model: 'gpt-4o-mini', // 더 빠른 모델로 변경
-                    messages: enhancedMessages,
-                    temperature: 0.7,
-                    max_tokens: 3000, // 토큰 수 증가
-                    response_format: { type: 'json_object' }
-                },
-                {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${this.openaiApiKey}`
-                    },
-                    timeout: 60000 // 60초 타임아웃으로 증가
-                }
+            const payload = {
+                model: 'gpt-4o-mini',
+                messages: enhancedMessages,
+                temperature: 0.2,
+                max_tokens: 2400, // 토큰 상한
+                response_format: { type: 'json_object' }
+            };
+
+            const response = await this.callWithRetry(() =>
+                axios.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    payload,
+                    {
+                        ...this.axiosOpts,
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${this.openaiApiKey}`
+                        }
+                    }
+                )
             );
 
             const content = response.data.choices?.[0]?.message?.content;

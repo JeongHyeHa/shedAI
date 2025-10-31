@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const timeout = require('connect-timeout');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
 // Firebase Admin SDK 초기화
@@ -35,6 +36,7 @@ const app = express();
 
 // 미들웨어 설정
 app.use(cors());
+app.use(timeout('210s')); // 응답 대기 허용 시간 (210초)
 app.use(express.json({ limit: '25mb' }));
 
 // 대화 세션 저장소 (메모리)

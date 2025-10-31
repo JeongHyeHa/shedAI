@@ -733,22 +733,6 @@ function CalendarPage() {
     }
   }, [user?.uid]);
 
-  // 환경/UID/Project 진단 로그
-  useEffect(() => {
-    try {
-      const auth = getAuth(app);
-      console.log('[DEBUG] currentUser.uid =', auth.currentUser?.uid);
-      console.log('[DEBUG] projectId =', app.options?.projectId);
-    } catch {}
-  }, []);
-
-  // fallback 버전 확인 (개발 환경에서만)
-  useEffect(() => {
-    if (typeof __FALLBACK_VERSION__ !== 'undefined') {
-      debug('[fallback version]', __FALLBACK_VERSION__);
-    }
-  }, []);
-
 
   // 할 일 자동 저장 (allEvents 변경 시) - 디바운스 적용
   useEffect(() => {
@@ -763,17 +747,6 @@ function CalendarPage() {
         });
         
         if (taskEvents.length === 0) return;
-        
-        // 디버깅을 위한 로그 추가
-        debug('[CalendarPage] 이벤트 타입 분포:', {
-          totalEvents: allEvents.length,
-          taskEvents: taskEvents.length,
-          lifestyleEvents: allEvents.filter(e => e.extendedProps?.type === 'lifestyle').length,
-          otherEvents: allEvents.filter(e => !e.extendedProps?.type).length,
-          taskEventTypes: taskEvents.map(e => e.extendedProps?.type)
-        });
-        
-        // 기존 할 일 목록 가져오기
         const existingTasks = await firestoreService.getAllTasks(user.uid);
         
         // 새 할 일들을 일괄 저장 (로컬 날짜+시간 조합으로 중복 방지)

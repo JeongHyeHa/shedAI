@@ -239,7 +239,11 @@ export function preprocessMessage(message, nowLike) {
     (m, prefix, h, suffix) => `${injectTime(`${prefix}오후 ${h}시`, (parseInt(h,10)%12)+12)}${suffix}`);
 
   wrap(new RegExp(`${KB.L}(\\d{1,2})시(?![^()]*\\))${KB.R}`, 'g'),
-    (m, prefix, h, suffix) => {
+    (m, prefix, h, suffix, ...rest) => {
+      const offset = rest[rest.length - 2];
+      const whole  = rest[rest.length - 1];
+      const pre = whole.slice(Math.max(0, offset - 2), offset);
+      if (/오전$|오후$/.test(pre)) return m; // 이미 AM/PM 규칙으로 처리됨
       const n = parseInt(h, 10);
       return `${injectTime(`${prefix}${h}시`, n === 12 ? 12 : n)}${suffix}`;
     });
@@ -727,17 +731,7 @@ export function convertScheduleToEvents(scheduleArray, nowLike = new Date()) {
         //   });
         // }
 
-        // ✅ 오늘 날짜면 '지금 이전'은 표시 금지 / 교차는 시작을 now로 절단
-        if (isToday) {
-          const sMinCurr = start.getHours()*60 + start.getMinutes();
-          const eMinCurr = end.getHours()*60 + end.getMinutes();
-          if (eMinCurr <= nowMin) {
-            return; // 완전 과거 → 스킵
-          }
-          if (sMinCurr < nowMin && eMinCurr > nowMin) {
-            start.setHours(Math.floor(nowMin/60), nowMin%60, 0, 0);
-          }
-        }
+        // 과거 클리핑은 postprocessSchedule(enforceFutureOnly)에서만 담당
 
         if (end < start) {
           const endOfToday = resetToStartOfDay(start, true); // 당일 23:59:59.999
@@ -760,7 +754,7 @@ export function convertScheduleToEvents(scheduleArray, nowLike = new Date()) {
           
           // 다음날 앞부분
           const endNext = new Date(startOfNextDay);
-          endNext.setHours(end.getHours(), end.getMinutes(), end.getSeconds?.() ?? 0, 0); // 원래 end 시각 복제
+          endNext.setHours(end.getHours(), end.getMinutes(), end.getSeconds(), 0); // 원래 end 시각 복제
           const nextDateStr = formatLocalISO(startOfNextDay).split('T')[0];
           const endNextTimeStr = formatLocalISO(endNext).split('T')[1].slice(0, 8); // HH:MM:SS
           events.push({
@@ -992,7 +986,17 @@ export const parseTaskFromFreeText = (text, today = new Date()) => {
   if (!deadlineTime) {
     const mAMPM = s.match(/(오전|오후)\s*(\d{1,2})(?::?(\d{1,2}))?\s*시?/);
     const mHalf = s.match(/(오전|오후)?\s*(\d{1,2})\s*시\s*반/);
-    const mHHMM = s.match(/(?<!오전|오후)\b(\d{1,2})(?::(\d{1,2}))?\s*시\b/);
+    // 역탐색 없이 문맥 검사로 대체: 일반 HH시 패턴은 앞이 '오전|오후'면 스킵
+    let mHHMM = null;
+    {
+      const reHH = /(\d{1,2})(?::(\d{1,2}))?\s*시\b/;
+      const m = s.match(reHH);
+      if (m) {
+        const idx = (m.index != null) ? m.index : s.indexOf(m[0]);
+        const pre = s.slice(Math.max(0, idx - 2), idx);
+        if (!/오전$|오후$/.test(pre)) mHHMM = m;
+      }
+    }
     if (mAMPM) {
       let h = parseInt(mAMPM[2], 10) || 0;
       const min = parseInt(mAMPM[3] || '0', 10) || 0;
@@ -1113,15 +1117,6 @@ export const buildTasksForAI = async (uid, firestoreService, opts = {}) => {
   };
 
   const combinedTasksRaw = [...(all || []), ...(localDbTasks || []), ...(tempTasks || [])];
-  try {
-    console.log('[TASK-SOURCES]', {
-      fromFirestore: all?.length || 0,
-      fromLocalDB: localDbTasks?.length || 0,
-      fromLocalStorage: tempTasks?.length || 0,
-      combined: combinedTasksRaw.length
-    });
-  } catch {}
-
   const active = (combinedTasksRaw || [])
     .map(t => ({
       ...t,
@@ -1159,7 +1154,6 @@ export const buildTasksForAI = async (uid, firestoreService, opts = {}) => {
     return `${t.title || '제목없음'} (마감일: ${dd || '미설정'}, 중요도: ${t.importance || '중'}, 난이도: ${t.difficulty || '중'})`;
   }).join('\n');
 
-  try { console.log('[ShedAI][TASKS] total for AI =', existingTasksForAI.length); } catch {}
   return { existingTasksForAI, taskText };
 };
 
@@ -2009,7 +2003,6 @@ export const postprocessSchedule = ({
   // (자동 반복으로 추가된 태스크가 다시 필터링되지 않도록)
   const deadlineMap = buildDeadlineDayMap(existingTasksForAI, now);
   try {
-    console.log('[ShedAI][DEADLINE] size=', deadlineMap.size);
     if (deadlineMap.size === 0) {
       console.warn('[ShedAI][DEADLINE] 비어 있음 → 로컬 DB/Firestore에서 할 일 수집 실패 가능성 높음');
     }
@@ -2089,4 +2082,126 @@ export function tasksToFixedEvents(tasks = []) {
         },
       };
     });
+}
+
+// ===== Lightweight post parser to preserve tasks and normalize activities =====
+const HM = {
+  toMin(hm){ const [h,m]=String(hm||'0:0').split(':').map(n=>parseInt(n||'0',10)); return (isNaN(h)?0:h)*60 + (isNaN(m)?0:m); },
+  toHM(min){ const h=Math.floor(min/60), m=min%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`; },
+  roundUp5(min){ return Math.ceil(min/5)*5; }
+};
+
+export function postProcessSchedule(modelOut, {
+  now = new Date(),          // 현재 시각
+  todayDay = 1,              // 프롬프트에서 계산된 '오늘 day'
+  latestDay = 14,            // 가장 늦은 마감일의 day
+  minRestMin = 30            // 태스크 사이 최소 휴식
+} = {}) {
+  const schedule = Array.isArray(modelOut?.schedule) ? modelOut.schedule : [];
+
+  // 1) day 범위 clip (오늘~latestDay)
+  const clipped = schedule.filter(d => Number.isInteger(d?.day) && d.day >= todayDay && d.day <= latestDay)
+    .map(d => ({ day: d.day, weekday: d.weekday, activities: Array.isArray(d.activities)? d.activities: [] }));
+
+  // 2) 활동 정화: 허용 필드만 유지
+  for (const d of clipped) {
+    d.activities = (d.activities || []).map(a => ({
+      start: a.start, end: a.end, title: a.title, type: a.type
+    })).filter(a => a.start && a.end && a.title && ((a.type||'').toLowerCase()==='lifestyle' || (a.type||'').toLowerCase()==='task'));
+  }
+
+  // 3) 중복 제거: day|type|title|start|end
+  for (const d of clipped) {
+    const seen = new Set();
+    d.activities = d.activities.filter(a => {
+      const key = `${d.day}|${(a.type||'').toLowerCase()}|${a.title}|${a.start}|${a.end}`;
+      if (seen.has(key)) return false; seen.add(key); return true;
+    });
+  }
+
+  // 4) 오늘(day==todayDay) '현재 시각 이전' 블록 정리
+  const nowMin = HM.toMin(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`);
+  for (const d of clipped) {
+    if (d.day !== todayDay) continue;
+    d.activities = d.activities.flatMap(a => {
+      const s = HM.toMin(a.start), e = HM.toMin(a.end);
+      if (e <= nowMin) return [];
+      if (s < nowMin && e > nowMin) {
+        const ns = HM.toHM(HM.roundUp5(nowMin));
+        return [{ ...a, start: ns }];
+      }
+      return [a];
+    });
+  }
+
+  // 5) 태스크↔태스크 최소 휴식 확보
+  for (const d of clipped) {
+    d.activities.sort((x,y)=>HM.toMin(x.start)-HM.toMin(y.start));
+    for (let i=0;i<d.activities.length-1;i++){
+      const cur=d.activities[i], nxt=d.activities[i+1];
+      if ((cur.type||'').toLowerCase()==='task' && (nxt.type||'').toLowerCase()==='task'){
+        const curEnd=HM.toMin(cur.end), nxtStart=HM.toMin(nxt.start);
+        const gap=nxtStart-curEnd;
+        if (gap < minRestMin){
+          const newStart = curEnd + (minRestMin-gap);
+          const dur = HM.toMin(nxt.end)-HM.toMin(nxt.start);
+          let ns = HM.roundUp5(newStart); let ne = ns + dur;
+          if (ne > 24*60){ d.activities.splice(i+1,1); i--; continue; }
+          nxt.start = HM.toHM(ns); nxt.end = HM.toHM(ne);
+        }
+      }
+    }
+  }
+
+  // 6) 겹침 제거(태스크 보존 우선)
+  for (const d of clipped) {
+    const out=[];
+    for (const a of d.activities.sort((x,y)=>HM.toMin(x.start)-HM.toMin(y.start))){
+      let s=HM.toMin(a.start), e=HM.toMin(a.end); let moved=false;
+      while(out.length){
+        const pe=HM.toMin(out[out.length-1].end);
+        if (s>=pe) break;
+        const shift=pe-s; if (shift>90){ moved=true; break; }
+        s=pe; e=s+(HM.toMin(a.end)-HM.toMin(a.start)); moved=true;
+      }
+      if (moved && e>24*60) continue;
+      out.push({ ...a, start: HM.toHM(s), end: HM.toHM(e) });
+    }
+    d.activities = out;
+  }
+
+  // 7) 간단 분석/노트
+  const totMin = clipped.flatMap(d=>d.activities).reduce((s,a)=>s+(HM.toMin(a.end)-HM.toMin(a.start)),0);
+  const buckets = { work:0, study:0, exercise:0, reading:0, hobby:0, others:0 };
+  const cat = (a) => {
+    if ((a.type||'').toLowerCase()==='lifestyle'){
+      if (/운동|헬스|러닝|요가/i.test(a.title)) return 'exercise';
+      if (/독서|책/i.test(a.title)) return 'reading';
+      if (/게임|취미|음악|여가/i.test(a.title)) return 'hobby';
+      if (/근무|출근|회사/i.test(a.title)) return 'work';
+      return 'others';
+    }
+    if (/공부|시험|준비|학습|강의/i.test(a.title)) return 'study';
+    if (/업무|개발|코딩|프로젝트|회사/i.test(a.title)) return 'work';
+    return 'others';
+  };
+  clipped.forEach(d=>d.activities.forEach(a=>{ buckets[cat(a)] += HM.toMin(a.end)-HM.toMin(a.start); }));
+  const pct=(m)=>totMin?Math.round((m/totMin)*100):0;
+
+  return {
+    schedule: clipped,
+    activityAnalysis: {
+      work: pct(buckets.work),
+      study: pct(buckets.study),
+      exercise: pct(buckets.exercise),
+      reading: pct(buckets.reading),
+      hobby: pct(buckets.hobby),
+      others: pct(buckets.others)
+    },
+    notes: [
+      `오늘(day:${todayDay})의 현재 시각 이전 활동은 제거/절단했습니다.`,
+      `마감일 최댓값(day:${latestDay})까지만 출력했습니다.`,
+      `태스크 사이 최소 휴식 ${minRestMin}분을 보장하도록 시프트했습니다.`
+    ]
+  };
 }

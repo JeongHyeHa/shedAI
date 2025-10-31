@@ -52,9 +52,23 @@ const toDateSafe = (v) => {
     });
   }
 
+// 중복 요청 차단 (idempotency)
+const inProgress = new Set();
+
 class AIController {
     // 스케줄 생성
     async generateSchedule(req, res) {
+        const { userId, sessionId } = req.body || {};
+        const dedupeKey = JSON.stringify({ userId, sessionId: sessionId || Date.now() });
+        
+        // 중복 요청 차단
+        if (inProgress.has(dedupeKey)) {
+            console.warn('[AI Controller] 중복 요청 차단:', dedupeKey);
+            return res.status(429).json({ ok: false, error: 'duplicate request' });
+        }
+        inProgress.add(dedupeKey);
+        
+        try {
         const {
             messages,
             prompt,
@@ -231,6 +245,9 @@ class AIController {
                 }
                 
                 return res.json({ ok: true, ...result });
+        } finally {
+            inProgress.delete(dedupeKey);
+        }
         } catch (error) {
             console.error('=== 스케줄 생성 컨트롤러 에러 ===');
             console.error('에러 타입:', error.constructor.name);
@@ -265,6 +282,8 @@ class AIController {
                 console.error('로컬 폴백 실패:', fallbackError);
                 console.error('폴백 에러 스택:', fallbackError.stack);
                 return res.status(500).json({ ok: false, message: '스케줄 생성에 실패했습니다.' });
+            } finally {
+                inProgress.delete(dedupeKey);
             }
         }
     }
