@@ -474,6 +474,9 @@ JSON만 반환하세요.`
             console.log('API 키 길이:', this.openaiApiKey ? this.openaiApiKey.length : 0);
             console.log('요청 메시지 수:', enhancedMessages.length);
 
+            // 타이밍 로그 시작
+            const T0 = Date.now();
+            
             const payload = {
                 model: 'gpt-4o-mini',
                 messages: enhancedMessages,
@@ -481,9 +484,16 @@ JSON만 반환하세요.`
                 max_tokens: 2400, // 토큰 상한
                 response_format: { type: 'json_object' }
             };
+            
+            const T1 = Date.now();
+            console.log('[타이밍] 프롬프트 구성 시간:', T1 - T0, 'ms');
 
-            const response = await this.callWithRetry(() =>
-                axios.post(
+            const response = await this.callWithRetry(() => {
+                const T2 = Date.now();
+                console.log('[타이밍] 대기열 시간:', T2 - T1, 'ms');
+                const T3 = Date.now();
+                
+                return axios.post(
                     'https://api.openai.com/v1/chat/completions',
                     payload,
                     {
@@ -493,8 +503,13 @@ JSON만 반환하세요.`
                             'Authorization': `Bearer ${this.openaiApiKey}`
                         }
                     }
-                )
-            );
+                ).then(res => {
+                    const T4 = Date.now();
+                    console.log('[타이밍] OpenAI 응답 시간:', T4 - T3, 'ms');
+                    console.log('[타이밍] 총 소요 시간:', T4 - T0, 'ms');
+                    return res;
+                });
+            });
 
             const content = response.data.choices?.[0]?.message?.content;
             
@@ -1153,13 +1168,24 @@ JSON만 반환하세요.`
         } catch (error) {
             const status = error.response?.status;
             const data = error.response?.data;
+            const isTimeout = String(error.message || '').includes('timeout') || 
+                             error.code === 'ETIMEDOUT' || 
+                             error.code === 'ECONNRESET';
+            
             console.error('=== GPT 호출 실패 상세 정보 ===');
             console.error('에러 타입:', error.constructor.name);
             console.error('에러 메시지:', error.message);
+            console.error('에러 코드:', error.code);
+            console.error('타임아웃 여부:', isTimeout);
             console.error('HTTP 상태:', status);
             console.error('응답 데이터:', data);
             console.error('에러 스택:', error.stack);
             console.error('===============================');
+            
+            if (isTimeout) {
+                console.error('[⚠️ 타임아웃] OpenAI API 호출이 시간 초과되었습니다. 타임아웃 설정을 확인하세요.');
+            }
+            
             throw new Error('시간표 생성 실패: ' + (error.response?.data?.error?.message || error.message));
         }
     }
@@ -1693,11 +1719,13 @@ ${conversationText}
                 hobby: 15,
                 others: 15
             },
-            notes: ['개발 모드 - 더미 데이터'],
+            notes: ['개발 모드 - 더미 데이터', '⚠️ 이 스케줄은 로컬 폴백으로 생성되었습니다. AI 호출이 실패했을 가능성이 높습니다.'],
             __debug: {
                 mode: 'dummy',
+                isFallback: true,
                 lifestylePatterns: lifestylePatterns?.length || 0,
-                existingTasks: existingTasks?.length || 0
+                existingTasks: existingTasks?.length || 0,
+                reason: 'API 키가 없거나 AI 호출이 실패하여 더미 스케줄을 생성했습니다.'
             }
         };
     }

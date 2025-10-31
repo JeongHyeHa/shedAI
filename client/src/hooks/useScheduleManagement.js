@@ -315,12 +315,38 @@ export const useScheduleManagement = (setAllEvents) => {
         localStorage.setItem('shedai_session_id', sessionId);
       }
 
+      // 타이밍 로그 시작
+      const T0 = Date.now();
+      
       const apiResponse = await apiService.generateSchedule(
         messages,
         lifestylePatterns,
         existingTasks,
         { ...opts, userId: user.uid, sessionId }
       );
+      
+      const T1 = Date.now();
+      const apiResponseTime = T1 - T0;
+      
+      // 로컬 폴백 감지
+      const isFallback = 
+        apiResponse?.__fallback === true ||
+        apiResponse?.__debug?.mode === 'dummy' ||
+        apiResponse?.__debug?.isFallback === true ||
+        apiResponse?.explanation?.includes('더미 스케줄') ||
+        apiResponse?.explanation?.includes('개발 모드');
+      
+      if (isFallback) {
+        console.warn('[⚠️ 폴백 감지] 로컬 더미 스케줄이 생성되었습니다. AI 호출이 실패했을 가능성이 높습니다.');
+        console.warn('[⚠️ 폴백 감지] 응답 시간:', apiResponseTime, 'ms');
+        console.warn('[⚠️ 폴백 감지] __debug:', apiResponse?.__debug);
+        console.warn('[⚠️ 폴백 감지] __fallback:', apiResponse?.__fallback);
+        console.warn('[⚠️ 폴백 감지] 이유:', apiResponse?.__debug?.reason || apiResponse?.message || '알 수 없음');
+      } else {
+        console.log('[✅ AI 스케줄] 정상 응답 수신');
+        console.log('[✅ AI 스케줄] 응답 시간:', apiResponseTime, 'ms');
+      }
+      
       // 응답 스키마 방어적으로 정규화
       let scheduleArr = [];
       if (Array.isArray(apiResponse)) {
