@@ -13,8 +13,8 @@ const debug = (...args) => {
 };
 
 // 클라이언트용 날짜 전처리 함수 (test_dates.js와 동일한 로직)
-export function preprocessMessage(message) {
-  const base = new Date();
+export function preprocessMessage(message, nowLike) {
+  const base = resolveNow(nowLike);
   // 브라우저 호환성을 위해 lookbehind 제거
   const KB = { L: '(^|[^가-힣A-Za-z0-9])', R: '($|[^가-힣A-Za-z0-9])' };
   
@@ -35,7 +35,7 @@ export function preprocessMessage(message) {
   const toDay = (offset) => {
     const d = new Date(base);
     d.setDate(d.getDate() + offset);
-    return getGptDayIndex(d);
+    return convertToRelativeDay(d, base);
   };
   
   const wrap = (re, fn) => {
@@ -82,7 +82,7 @@ export function preprocessMessage(message) {
         const targetDayOffset = dayNum - 1; // dayNum은 1=월요일, 7=일요일
         d.setDate(d.getDate() + targetDayOffset);
         
-        const finalDay = getGptDayIndex(d);
+        const finalDay = convertToRelativeDay(d, base);
         return `${prefix}${weekWord} ${dayWord} (day:${finalDay})${suffix}`;
       });
     }
@@ -99,8 +99,8 @@ export function preprocessMessage(message) {
       d.setDate(d.getDate() - toMonday);      // 그 주 월요일
       const sat = new Date(d); sat.setDate(d.getDate() + 5);
       const sun = new Date(d); sun.setDate(d.getDate() + 6);
-      const satDay = getGptDayIndex(sat);
-      const sunDay = getGptDayIndex(sun);
+      const satDay = convertToRelativeDay(sat, base);
+      const sunDay = convertToRelativeDay(sun, base);
       return `${prefix}${weekWord} 토요일 (day:${satDay}) 일요일 (day:${sunDay})${suffix}`;
     });
   }
@@ -123,7 +123,7 @@ export function preprocessMessage(message) {
         if (delta < 0) delta += 7;
         if (kw === '다음' && delta === 0) delta = 7;
         d.setDate(d.getDate() + delta);
-        return `${prefix}${kw} ${dw} (day:${getGptDayIndex(d)})${suffix}`;
+        return `${prefix}${kw} ${dw} (day:${convertToRelativeDay(d, base)})${suffix}`;
       });
     }
   }
@@ -139,7 +139,7 @@ export function preprocessMessage(message) {
       if (d < resetToStartOfDay(base)) d = new Date(yy + 1, mm, dd);
       // 유효성: 역직렬화해서 연/월/일 동일해야 함
       if (d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
-        return `${m} (day:${getGptDayIndex(d)})`;
+        return `${m} (day:${convertToRelativeDay(d, base)})`;
       }
       return m; // 무효하면 그대로 반환(태깅 생략)
     }},
@@ -150,7 +150,7 @@ export function preprocessMessage(message) {
       const d = new Date(yy, mm, dd);
       // 유효성: 역직렬화해서 연/월/일 동일해야 함
       if (d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
-        return `${m} (day:${getGptDayIndex(d)})`;
+        return `${m} (day:${convertToRelativeDay(d, base)})`;
       }
       return m; // 무효하면 그대로 반환(태깅 생략)
     }},
@@ -158,7 +158,7 @@ export function preprocessMessage(message) {
       const offset = unit === '주' ? parseInt(num, 10) * 7 : parseInt(num, 10);
       const d = new Date(base);
       d.setDate(d.getDate() + offset);
-      return `${m} (day:${getGptDayIndex(d)})`;
+      return `${m} (day:${convertToRelativeDay(d, base)})`;
     }}
   ];
   
@@ -249,7 +249,7 @@ export function preprocessMessage(message) {
   const hasExplicitDate = /((이번|다음|다다음)\s*주\s*[월화수목금토일]요일)|(오늘|금일|익일|내일|명일|모레|내일모레)|(\d{1,2}\s*월\s*\d{1,2}\s*일)|(\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일)|(\d+\s*(일|주)\s*(후|뒤))/.test(out);
   
   if (!hasDay && foundTime && !hasExplicitDate) {
-    const dayTag = ` (day:${getGptDayIndex(base)})`;
+    const dayTag = ` (day:${convertToRelativeDay(base, base)})`;
     // 끝 공백/구두점 앞에 삽입
     out = out.replace(/(\s*[.,!?)」』\]]*\s*)$/, `${dayTag}$1`);
   }
@@ -288,16 +288,22 @@ export function resetToStartOfDay(date, isEnd = false) {
   }
   
   // GPT 프롬프트: 새 시간표 생성용
-  export function buildShedAIPrompt(lifestyleText, taskText, today) {
-    const dayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
-    const gptDayIndex = getGptDayIndex(today); // 월=1 ~ 일=7
-    const dayName = dayNames[today.getDay()];
-    const dateStr = `${today.getFullYear()}년 ${today.getMonth() + 1}월 ${today.getDate()}일`;
-    const nowTime = `${today.getHours()}시 ${today.getMinutes()}분`;
+export function buildShedAIPrompt(lifestyleText, taskText, nowLike) {
+  const today = resolveNow(nowLike);
+  const dayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+  const gptDayIndex = getGptDayIndex(today); // 월=1 ~ 일=7
+  const dayName = dayNames[today.getDay()];
+  const dateStr = `${today.getFullYear()}년 ${today.getMonth() + 1}월 ${today.getDate()}일`;
+  const nowTime = `${today.getHours()}시 ${today.getMinutes()}분`;
   
-    const prefix =
-  `당신은 사용자의 생활 패턴과 할 일, 그 외 피드백을 바탕으로,
+  const prefix =
+ `당신은 사용자의 생활 패턴과 할 일, 그 외 피드백을 바탕으로,
 사용자에게 최적화된 효율적인 스케줄을 설계해주는 고급 일정 관리 전문가입니다.
+
+[현재 기준]
+지금은 ${dateStr} ${dayName} ${nowTime} 입니다. 오늘 스케줄에서 '지금 이전' 시간대에는 어떤 활동도 배치하지 마세요.
+오늘(day:${gptDayIndex})의 활동은 반드시 ${nowTime} 이후 시각만 사용하세요. 과거 시간대 활동을 출력하면 안 됩니다.
+모든 활동의 시간은 반드시 "HH:MM" 24시간제로 표기하세요(예: "09:00", "21:30"). "9시"처럼 모호하게 쓰지 마세요.
 
 당신의 목표는 다음과 같습니다.
 - 단순히 빈 시간을 채우는 것이 아니라, 사용자의 상황과 우선순위를 정확히 분석하여 "와, 진짜 내 상황에 맞는 일정이다!"라고 느껴질 수 있도록 설계합니다.
@@ -315,6 +321,14 @@ export function resetToStartOfDay(date, isEnd = false) {
    - **주말(day:6, day:7)**: 출근, 회사 업무, 업무 관련 활동 절대 금지
    - **수면 패턴**: 요일별로 다를 수 있음 (예: 주말 늦잠)
    - **식사 패턴**: 요일별로 다를 수 있음 (예: 주말 늦은 아침)
+
+[자동 작업 판단 규칙]
+- AI는 다음 기준으로 작업의 성격을 **자동으로 판단**합니다.
+  - 긴 집중이 필요한 과제, 논문, 코딩, 발표준비, 설계 등은 "몰입형 작업"으로 간주하고 하루 1~2회, 60~120분 단위로 배치합니다.
+  - 매일 반복하거나 꾸준히 연습이 필요한 과제(공부, 연습, 복습, 운동 등)는 "반복 작업"으로 간주하고 30~90분 단위로 매일 또는 격일 배치합니다.
+  - 특정 날짜·시간이 명시된 일(회의, 시험, 발표, 제출 등)은 해당 시각에 단발로 배치하고, 필요하면 그 전에 준비 시간을 자동으로 추가합니다.
+- 모델이 판단한 작업 유형은 내부적으로만 반영하고, 출력 JSON의 "type" 필드는 기존 구조 그대로 유지합니다.
+- 따라서 출력 형식은 지금과 동일하게 유지합니다.
 
 3. 할 일 목록은 다음 기준에 따라 배치합니다:
    - **중요도**와 **긴급도**를 Eisenhower Matrix로 분석하여 우선순위 지정
@@ -351,7 +365,7 @@ export function resetToStartOfDay(date, isEnd = false) {
    - 운동 등 습관성 활동은 **되도록 동일 시간대에 반복**
    - 주말에는 휴식, 취미, 가족 시간 등 여가 활동에 집중하세요
 
-오늘 날짜는 ${dateStr} ${dayName}(day:${gptDayIndex})요일이며, 현재 시각 ${nowTime}이후부터의 시간대에만 할 일을 배치하세요. 이전 시간은 이미 지났으므로 제외하세요.
+오늘 날짜는 ${dateStr} ${dayName}(day:${gptDayIndex})요일이며, 현재 시각 ${nowTime} 이후부터의 시간대에만 할 일을 배치하세요. 이전 시간은 이미 지났으므로 제외하세요.
 
 📌 마감일 처리 방식 안내:
 - 날짜 기반 마감일("5월 19일 오전 9시", "5월 28일까지")이 주어질 경우,
@@ -462,6 +476,11 @@ export function resetToStartOfDay(date, isEnd = false) {
     const prefix =
   `당신은 사용자의 생활 패턴과 할 일, 그 외 피드백을 바탕으로,
 사용자에게 최적화된 효율적인 스케줄을 설계해주는 고급 일정 관리 전문가입니다.
+
+[현재 기준]
+지금은 ${new Date().getFullYear()}년 ${new Date().getMonth()+1}월 ${new Date().getDate()}일 입니다. 오늘 스케줄에서 '지금 이전' 시간대에는 어떤 활동도 배치하지 마세요.
+오늘의 활동은 반드시 현재 시각 이후만 사용하세요. 과거 시간대 활동을 출력하면 안 됩니다.
+모든 활동의 시간은 반드시 "HH:MM" 24시간제로 표기하세요(예: "09:00", "21:30"). "9시"처럼 모호하게 쓰지 마세요.
 
 피드백 기반 일정 수정
 - 기존 스케줄이 제공된 경우, **수정 요청이 없는 활동은 유지**
@@ -614,8 +633,10 @@ export function resetToStartOfDay(date, isEnd = false) {
   }
 
   // GPT → FullCalendar 이벤트 변환기 (배열만 받음)
-  export function convertScheduleToEvents(scheduleArray, today = new Date()) {
-    const events = [];
+export function convertScheduleToEvents(scheduleArray, nowLike = new Date()) {
+  const today = resolveNow(nowLike);
+  const events = [];
+  const nowMin = today.getHours()*60 + today.getMinutes();
     
     const ensureHms = (tRaw) => {
       const t = String(tRaw || '00:00');
@@ -659,6 +680,9 @@ export function resetToStartOfDay(date, isEnd = false) {
       const targetDate = new Date(today);
       targetDate.setDate(today.getDate() + dateOffset);
       const dateStr = formatLocalISO(targetDate).split('T')[0];
+      const isToday = (targetDate.getFullYear()===today.getFullYear()
+                    && targetDate.getMonth()===today.getMonth()
+                    && targetDate.getDate()===today.getDate());
 
       // activities가 유효하지 않으면 건너뛰기
       if (!dayBlock.activities || !Array.isArray(dayBlock.activities)) {
@@ -702,6 +726,18 @@ export function resetToStartOfDay(date, isEnd = false) {
         //     end: activity.end
         //   });
         // }
+
+        // ✅ 오늘 날짜면 '지금 이전'은 표시 금지 / 교차는 시작을 now로 절단
+        if (isToday) {
+          const sMinCurr = start.getHours()*60 + start.getMinutes();
+          const eMinCurr = end.getHours()*60 + end.getMinutes();
+          if (eMinCurr <= nowMin) {
+            return; // 완전 과거 → 스킵
+          }
+          if (sMinCurr < nowMin && eMinCurr > nowMin) {
+            start.setHours(Math.floor(nowMin/60), nowMin%60, 0, 0);
+          }
+        }
 
         if (end < start) {
           const endOfToday = resetToStartOfDay(start, true); // 당일 23:59:59.999
@@ -1703,6 +1739,33 @@ const enrichTaskMeta = (schedule, existingTasks=[]) => {
 const toMin = (s) => { const [h,m]=String(s||'0:0').split(':').map(n=>parseInt(n||'0',10)); return (isNaN(h)?0:h)*60+(isNaN(m)?0:m); };
 const toHHMM = (m) => `${String(Math.floor(m/60)%24).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
 
+// ISO 로컬 날짜/시각을 모두 허용 (예: 2025-10-31 또는 2025-10-31T14:20)  // NEW
+export const parseLocalDateOrDateTime = (s) => {
+  if (typeof s !== 'string') return null;
+  const trimmed = s.trim();
+  let m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (m) {
+    const [, y, M, d, h, m2, s2] = m;
+    return new Date(+y, +M - 1, +d, +h, +m2, +(s2 || 0), 0);
+  }
+  m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const [, y, M, d] = m;
+    return new Date(+y, +M - 1, +d, 0, 0, 0, 0);
+  }
+  return null;
+};
+
+// ✅ 기준 시각 resolve (문자열/Date/미지정 모두 처리)  // NEW
+export const resolveNow = (nowLike) => {
+  if (nowLike instanceof Date) return nowLike;
+  if (typeof nowLike === 'string') {
+    const d = parseLocalDateOrDateTime(nowLike);
+    if (d) return d;
+  }
+  return new Date();
+};
+
 const mergeRanges = (ranges) => {
   const a = [...ranges].sort((x,y)=>x[0]-y[0]);
   const out = [];
@@ -1734,15 +1797,14 @@ const enforceFutureOnly = (schedule, now = new Date()) => {
     for (const a of acts) {
       const s = hhmmToMin(a.start || '00:00');
       const e = hhmmToMin(a.end   || '00:00');
-      if (e <= nowMin) continue; // 완전히 과거면 스킵
-      if (s < nowMin && e > nowMin) { // 걸쳐 있으면 시작을 now로 당김
+      if (e <= nowMin) continue; 
+      if (s < nowMin && e > nowMin) { 
         kept.push({ ...a, start: minToHHMM(nowMin) });
         continue;
       }
       kept.push(a);
     }
 
-    // now 이후 충돌 정리: 앞 활동 우선
     const dedup = [];
     let lastEnd = nowMin;
     for (const a of kept.sort((x,y)=>hhmmToMin(x.start||'00:00')-hhmmToMin(y.start||'00:00'))) {
@@ -1792,16 +1854,23 @@ export const placeAppointmentsPass = (schedule=[], allItems=[], todayDate=new Da
     return (acts||[]).some(a => norm(a.title||'')===key);
   };
   const appts = (allItems||[]).filter(t => (t.type||'task').toLowerCase()==='appointment' && t.isActive!==false);
+  const baseDay = (todayDate.getDay()===0?7:todayDate.getDay());
+  const nowMin = todayDate.getHours()*60 + todayDate.getMinutes();
   for (const t of appts) {
     const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
     const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
     if (!dayObj) continue;
-    // 중복은 시간 겹침만 금지: 동일 타이틀 존재 여부로는 스킵하지 않음
     const occ = buildOccupiedForAppointments(dayObj.activities);
     const want = String(t.deadlineTime||'').slice(0,5);
     const target = /^\d{2}:\d{2}$/.test(want) ? toMin(want) : 9*60;
     const dur = Math.max(30, Number(t.estimatedMinutes || 60));
-    const free = freeFromOccupied(occ);
+    let free = freeFromOccupied(occ);
+    if (day === baseDay) {
+      // 오늘은 현재 시각 이전 금지: free 블록을 now 이후로 자름
+      free = free
+        .map(([fs,fe]) => [Math.max(fs, nowMin), fe])
+        .filter(([fs,fe]) => fe - fs >= Math.max(1, dur));
+    }
     let best=null;
     for (const [fs,fe] of free) {
       if (fe-fs < dur) continue;
@@ -1830,13 +1899,19 @@ export const placeTasksPass = (schedule=[], allItems=[], todayDate=new Date()) =
   const norm = (s='') => String(s).replace(/\s+/g,'').toLowerCase();
   const hasSameTitleSameDay = (acts=[], title='') => (acts||[]).some(a => norm(a.title||'')===norm(title||''));
   const tasks = (allItems||[]).filter(t => String(t.type).toLowerCase()==='task' && t.isActive!==false);
+  const baseDay = (todayDate.getDay()===0?7:todayDate.getDay());
+  const nowMin = todayDate.getHours()*60 + todayDate.getMinutes();
   for (const t of tasks) {
     const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
     const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
     if (!dayObj) continue;
     // 중복은 시간 겹침만 금지: 동일 타이틀 존재 여부로는 스킵하지 않음
     const occ = buildOccupiedForTasks(dayObj.activities);
-    const free = freeFromOccupied(occ);
+    let free = freeFromOccupied(occ);
+    if (day === baseDay) {
+      // 오늘은 현재 시각 이전 금지: free 블록을 now 이후로 자름
+      free = free.map(([fs,fe]) => [Math.max(fs, nowMin), fe]).filter(([fs,fe]) => fe - fs >= 1);
+    }
     const dur = Math.max(30, Number(t.estimatedMinutes || 120));
     const preferred = 19*60;
     let best=null;
@@ -1902,17 +1977,19 @@ export const postprocessSchedule = ({
   raw,
   parsedPatterns,
   existingTasksForAI,
-  today,
+  today,                   // backward compat
+  nowLike,                 // ✅ 새로 추가
   whitelistPolicy = 'off', // 'off' | 'strict' | 'exam-exempt' | 'smart'
-  breakMinutesOverride // NEW: 피드백으로 휴식 분 단위 강제하려면 주입
+  breakMinutesOverride 
 }) => {
+  const now = resolveNow(nowLike ?? today);
   let schedule = enrichTaskMeta(Array.isArray(raw) ? raw : (raw?.schedule || []), existingTasksForAI);
 
   const allowedTitles = new Set(
     (existingTasksForAI || []).map(t => canonTitle(t.title || '')).filter(Boolean)
   );
 
-  const baseDay = today.getDay() === 0 ? 7 : today.getDay();
+  const baseDay = now.getDay() === 0 ? 7 : now.getDay();
   schedule = normalizeRelativeDays(schedule, baseDay).map(day => ({
     ...day,
     activities: (day.activities || []).map(a => {
@@ -1925,16 +2002,19 @@ export const postprocessSchedule = ({
 
   schedule = applyLifestyleHardOverlay(schedule, parsedPatterns);
 
+  // ✅ 오늘은 현재 시각 이전 활동 제거/절단
+  schedule = enforceFutureOnly(schedule, now);
+
   // ✅ 화이트리스트/자동반복 순서 개선: fixOverlaps 먼저 실행 후 필터링
   // (자동 반복으로 추가된 태스크가 다시 필터링되지 않도록)
-  const deadlineMap = buildDeadlineDayMap(existingTasksForAI, today);
+  const deadlineMap = buildDeadlineDayMap(existingTasksForAI, now);
   try {
     console.log('[ShedAI][DEADLINE] size=', deadlineMap.size);
     if (deadlineMap.size === 0) {
       console.warn('[ShedAI][DEADLINE] 비어 있음 → 로컬 DB/Firestore에서 할 일 수집 실패 가능성 높음');
     }
   } catch {}
-  schedule = fixOverlaps(schedule, { allowedTitles, allowAutoRepeat: true, deadlineMap, today, breakMinutesOverride });
+  schedule = fixOverlaps(schedule, { allowedTitles, allowAutoRepeat: false, deadlineMap, today: now, breakMinutesOverride });
 
   // 화이트리스트 강제 (정책에 따라) - fixOverlaps 이후 적용
   if (whitelistPolicy === 'strict') {
@@ -1963,12 +2043,8 @@ export const postprocessSchedule = ({
       })
     }));
   }
-  // 'off'면 그대로 유지
   schedule = capTasksByDeadline(schedule, deadlineMap);
   schedule = stripWeekendWork(schedule);
-
-  // ✅ 오늘 이전 시간 제거 + 겹침 정리  // NEW
-  schedule = enforceFutureOnly(schedule, today);
 
   // 활동 유효성 필터 (기본 type 보강 후 검증)
   schedule = schedule.map(d => {
@@ -2014,4 +2090,3 @@ export function tasksToFixedEvents(tasks = []) {
       };
     });
 }
-  

@@ -29,6 +29,70 @@ export const useScheduleManagement = (setAllEvents) => {
   // 전처리 꼬리 태그 제거: (day:x), (HH:MM)
   const stripPostTags = (s = '') => s.replace(/\s*(\((?:day:\d+|\d{1,2}:\d{2})\)\s*)+$/g, '').trim();
 
+  // ===== Helpers for natural language date/time parsing (inside hook) =====
+  // 요일 매핑 (월=1 ... 일=7 규칙 가정)
+  const WEEKDAY_MAP = { '월':1,'화':2,'수':3,'목':4,'금':5,'토':6,'일':7 };
+
+  // baseDate(로컬) 기준 "이번주/다음주/다다음주 + 요일" -> 실제 날짜 계산
+  function resolveWeekday(baseDate, weekWord, korDow) {
+    const wantDow = WEEKDAY_MAP[korDow]; // 1~7
+    const d = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
+    // 현재 주의 월요일(= day:1)을 구함 (일요일=0, 월요일=1 ...)
+    const jsDow = d.getDay(); // 0(일)~6(토)
+    const currentWeekMonday = new Date(d);
+    // 월요일로 이동
+    const offsetToMonday = (jsDow === 0 ? -6 : 1 - jsDow);
+    currentWeekMonday.setDate(d.getDate() + offsetToMonday);
+
+    let weekOffset = 0;
+    if (weekWord === '다음주') weekOffset = 1;
+    if (weekWord === '다다음주') weekOffset = 2;
+    const targetWeekMonday = new Date(currentWeekMonday);
+    targetWeekMonday.setDate(currentWeekMonday.getDate() + weekOffset * 7);
+
+    const target = new Date(targetWeekMonday);
+    // 월요일(=1) 기준 wantDow까지 이동
+    target.setDate(targetWeekMonday.getDate() + (wantDow - 1));
+
+    // "이번주"인데 그 요일이 이미 지났으면: 오늘 이후로 가장 가까운 해당 요일(= 다음주 같은 요일)
+    if (weekWord === '이번주') {
+      if (target < d) target.setDate(target.getDate() + 7);
+    }
+    return target;
+  }
+
+  // "오전/오후 H시 m분" → 시/분 계산
+  function parseKoreanTime(text) {
+    // HH:mm 혹은 HH시 mm분 / HH시
+    let ap = null; // 오전/오후
+    const apMatch = text.match(/(오전|오후)/);
+    if (apMatch) ap = apMatch[1];
+
+    let H = null, M = 0;
+    const hhmm = text.match(/(\d{1,2})\s*[:시]\s*(\d{1,2})/);
+    const hhOnly = text.match(/(\d{1,2})\s*시/);
+
+    if (hhmm) { H = parseInt(hhmm[1],10); M = parseInt(hhmm[2],10); }
+    else if (hhOnly) { H = parseInt(hhOnly[1],10); }
+
+    if (H != null) {
+      if (ap === '오전') { H = H % 12; }
+      if (ap === '오후') { H = (H % 12) + 12; }
+      return { hour: H, minute: M };
+    }
+    return null;
+  }
+
+  // 분을 10분 단위로 올림
+  function ceilTo10Min(date) {
+    const d = new Date(date);
+    const m = d.getMinutes();
+    const add = (10 - (m % 10)) % 10;
+    if (add) d.setMinutes(m + add, 0, 0);
+    else d.setSeconds(0,0);
+    return d;
+  }
+
   // 마지막 사용자 메시지 텍스트 추출
   const getLastUserText = (messages = []) => {
     if (!Array.isArray(messages)) return '';
@@ -46,60 +110,78 @@ export const useScheduleManagement = (setAllEvents) => {
   // -----------------------------
   const extractEventFromMessage = (messages, baseDate = new Date()) => {
     const raw = getLastUserText(messages);
+    const now = (baseDate instanceof Date && !isNaN(baseDate)) ? new Date(baseDate) : new Date();
 
-    // 제목 추출: 트리거 꼬리를 제거
+    // 1) 제목 추출(트리거 꼬리/날짜·시간 토큰 제거)
     const core = stripPostTags(raw).replace(SIMPLE_SCHEDULE_RE, '').trim();
     const title = (core
       .replace(/\b(오늘|내일|모레|이번주|다음주|다다음주)\b/g, '')
-      .replace(/\b(오전|오후)?\s*\d{1,2}\s*시(\s*\d{1,2}\s*분)?/g, '')
-      .replace(/\s*\((?:day:\d+|\d{1,2}:\d{2})\)\s*/g, '')
+      .replace(/\b(월|화|수|목|금|토|일)요일\b/g, '')
+      .replace(/\b(오전|오후)\b/g, '')
+      .replace(/\d{4}-\d{2}-\d{2}/g, '')
+      .replace(/\d{1,2}\s*월\s*\d{1,2}\s*일/g, '')
+      .replace(/\d{1,2}\s*:\s*\d{2}/g, '')
+      .replace(/\d{1,2}\s*시(\s*\d{1,2}\s*분)?/g, '')
       .replace(/\s+/g, ' ')
       .trim()) || '새 일정';
 
-    // 날짜/시간 파싱(간단 규칙)
-    let m = raw.match(/(\d{4})-(\d{2})-(\d{2})[^\d]{1,3}(\d{1,2})[:시](\d{1,2})/);
-    let m2 = raw.match(/(\d{4})-(\d{2})-(\d{2})[^\d]{1,3}(\d{1,2})\s*시/);
-    let m3 = raw.match(/(\d{1,2})월\s*(\d{1,2})일[^\d]{1,3}(\d{1,2})[:시](\d{1,2})/);
-    let m4 = raw.match(/(\d{1,2})월\s*(\d{1,2})일[^\d]{1,3}(\d{1,2})\s*시/);
+    // 2) 날짜/시간 파싱 우선순위
+    // A) yyyy-MM-dd [HH:mm|HH시 mm분|HH시]
+    let dtYmd = raw.match(/(\d{4})-(\d{2})-(\d{2})/);
+    // B) (이번주|다음주|다다음주) (월|화|수|목|금|토|일)요일
+    let dtW = raw.match(/(이번주|다음주|다다음주)\s*([월화수목금토일])요일/);
+    // C) M월 D일
+    let dtMD = raw.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+    // D) 오늘/내일/모레
+    let rel = null;
+    if (/오늘/.test(raw)) rel = 0;
+    else if (/내일/.test(raw)) rel = 1;
+    else if (/모레/.test(raw)) rel = 2;
 
-    let year, month, day, hour = 9, minute = 0; // 기본 09:00
-    const now = baseDate instanceof Date ? baseDate : new Date();
+    // 시간(선택)
+    const tParsed = parseKoreanTime(raw);
+    const hhmm = raw.match(/(\d{1,2}):(\d{2})/);
+    const hhOnly = raw.match(/(\d{1,2})\s*시/);
 
-    if (m) {
-      year = +m[1]; month = +m[2]; day = +m[3]; hour = +m[4]; minute = +m[5];
-    } else if (m2) {
-      year = +m2[1]; month = +m2[2]; day = +m2[3]; hour = +m2[4]; minute = 0;
-    } else if (m3) {
-      year = now.getFullYear(); month = +m3[1]; day = +m3[2]; hour = +m3[3]; minute = +m3[4];
-    } else if (m4) {
-      year = now.getFullYear(); month = +m4[1]; day = +m4[2]; hour = +m4[3]; minute = 0;
+    let Y, M, D, H, Min;
+
+    if (dtYmd) {
+      Y = +dtYmd[1]; M = +dtYmd[2]; D = +dtYmd[3];
+    } else if (dtW) {
+      const anchor = resolveWeekday(now, dtW[1], dtW[2]);
+      Y = anchor.getFullYear(); M = anchor.getMonth() + 1; D = anchor.getDate();
+    } else if (dtMD) {
+      Y = now.getFullYear(); M = +dtMD[1]; D = +dtMD[2];
+    } else if (rel != null) {
+      const t = new Date(now.getFullYear(), now.getMonth(), now.getDate() + rel);
+      Y = t.getFullYear(); M = t.getMonth() + 1; D = t.getDate();
     } else {
-      if (/내일/.test(raw)) {
-        const ap = raw.match(/오전|오후/);
-        const hhMatch = raw.match(/(\d{1,2})\s*시/);
-        const mmMatch = raw.match(/(\d{1,2})\s*분/);
-        let H = hhMatch ? parseInt(hhMatch[1], 10) : 9;
-        if (ap && ap[0] === '오전') H = H % 12;
-        if (ap && ap[0] === '오후') H = (H % 12) + 12;
-        const M = mmMatch ? parseInt(mmMatch[1], 10) : 0;
-        const t = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, H, M);
-        year = t.getFullYear(); month = t.getMonth() + 1; day = t.getDate(); hour = t.getHours(); minute = t.getMinutes();
-      } else if (/모레/.test(raw)) {
-        const ap = raw.match(/오전|오후/);
-        const hhMatch = raw.match(/(\d{1,2})\s*시/);
-        const mmMatch = raw.match(/(\d{1,2})\s*분/);
-        let H = hhMatch ? parseInt(hhMatch[1], 10) : 9;
-        if (ap && ap[0] === '오전') H = H % 12;
-        if (ap && ap[0] === '오후') H = (H % 12) + 12;
-        const M = mmMatch ? parseInt(mmMatch[1], 10) : 0;
-        const t = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2, H, M);
-        year = t.getFullYear(); month = t.getMonth() + 1; day = t.getDate(); hour = t.getHours(); minute = t.getMinutes();
-      } else {
-        year = now.getFullYear(); month = now.getMonth() + 1; day = now.getDate(); hour = now.getHours(); minute = 0;
-      }
+      // 날짜 미지정 → 오늘
+      Y = now.getFullYear(); M = now.getMonth() + 1; D = now.getDate();
     }
 
-    const start = new Date(year, month - 1, day, hour, minute, 0, 0);
+    // 시간 설정 규칙
+    if (tParsed) {
+      H = tParsed.hour; Min = tParsed.minute;
+    } else if (hhmm) {
+      H = parseInt(hhmm[1],10); Min = parseInt(hhmm[2],10);
+    } else if (hhOnly) {
+      H = parseInt(hhOnly[1],10); Min = 0;
+    } else {
+      // ⬅️ 시간 미지정: "지금 시각을 10분 올림"으로 시작
+      const rounded = ceilTo10Min(now);
+      H = rounded.getHours();
+      Min = rounded.getMinutes();
+    }
+
+    const start = new Date(Y, M - 1, D, H, Min, 0, 0);
+    // 과거 시각 방지: ‘오늘’인데 이미 지났다면 10분 올림된 now로
+    if (start < now && (Y===now.getFullYear() && M===now.getMonth()+1 && D===now.getDate())) {
+      const r = ceilTo10Min(now);
+      start.setHours(r.getHours(), r.getMinutes(), 0, 0);
+    }
+
+    // 기본 지속시간: 60분
     const end = new Date(start.getTime() + 60 * 60 * 1000);
 
     return { title, start, end };
