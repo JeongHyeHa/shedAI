@@ -1201,6 +1201,19 @@ const cleanLifestyleTitle = (title, start, end) => {
   return cleaned;
 };
 
+// ===== 휴식 정책 =====  // NEW
+const BREAK_MINUTES_DEFAULT = 20;      // 기본 휴식
+const BREAK_MINUTES_HARD    = 30;      // 중요/난이도 '상' 휴식
+
+// 작업 난이도/중요도 기반 휴식 길이 계산  // NEW
+const requiredBreakAfter = (a, override = null) => {
+  if (typeof override === 'number' && override >= 0) return override;
+  const imp = String(a?.importance || '').trim();
+  const diff = String(a?.difficulty || '').trim();
+  const isHard = imp === '상' || diff === '상' || isExamTitle(a?.title || '');
+  return isHard ? BREAK_MINUTES_HARD : BREAK_MINUTES_DEFAULT;
+};
+
 // day별 lifestyle 블록에서 빈 시간대 계산
 const buildFreeBlocks = (activities) => {
   const dayStart = 0;
@@ -1237,15 +1250,26 @@ const buildFreeBlocks = (activities) => {
   return free;
 };
 
+// 오늘(day:base)에는 현재 시각 이전 배치 금지  // NEW
+const clipTodayFreeBlocksFromNow = (freeBlocks, nowMin) => {
+  const out = [];
+  for (const [fs, fe] of freeBlocks) {
+    if (fe <= nowMin) continue;
+    out.push([Math.max(fs, nowMin), fe]);
+  }
+  return out;
+};
+
 // 19:00 근접도 가중치 기반 배치
-const placeIntoFree = (freeBlocks, durationMin) => {
+const placeIntoFree = (freeBlocks, durationMin, opts = {}) => {
   const preferred = PREFERRED_MIN;
+  const padAfterMin = Math.max(0, Number(opts.padAfterMin || 0));  // NEW
   let best = null;
 
   for (const [fs, fe] of freeBlocks) {
-    if (fe - fs < durationMin) continue;
+    if (fe - fs < durationMin + padAfterMin) continue; // NEW
     const earliest = fs;
-    const latest = fe - durationMin;
+    const latest = (fe - padAfterMin) - durationMin; // NEW
     const target = preferred - durationMin / 2;
     const start = Math.min(Math.max(target, earliest), latest);
     const mid = start + durationMin / 2;
@@ -1254,13 +1278,13 @@ const placeIntoFree = (freeBlocks, durationMin) => {
       best = { start, end: start + durationMin, distance };
     }
   }
-  if (best) return { start: best.start, end: best.end };
+  if (best) return { start: best.start, end: best.end, padAfterMin }; // CHANGED
 
   let longest = null, len = -1;
   for (const [fs, fe] of freeBlocks) {
     if (fe - fs > len) { len = fe - fs; longest = [fs, fe]; }
   }
-  return longest ? { start: longest[0], end: longest[0] + Math.min(len, durationMin) } : null;
+  return longest ? { start: longest[0], end: longest[0] + Math.min(len, durationMin), padAfterMin: 0 } : null; // CHANGED
 };
 
 // 분할 배치 함수
@@ -1324,6 +1348,13 @@ const fixOverlaps = (schedule, opts = {}) => {
     
     if (!freeBlocks) {
       freeBlocks = buildFreeBlocks(day.activities);
+      // 오늘이면 '지금 이전' 슬롯 제거  // NEW
+      const baseDay = (opts.today || new Date()).getDay() === 0 ? 7 : (opts.today || new Date()).getDay();
+      if (day.day === baseDay) {
+        const now = opts.today || new Date();
+        const nowMin = now.getHours()*60 + now.getMinutes();
+        freeBlocks = clipTodayFreeBlocksFromNow(freeBlocks, nowMin);
+      }
       lifestyleBlocksCache.set(dayKey, freeBlocks);
     }
 
@@ -1353,10 +1384,28 @@ const fixOverlaps = (schedule, opts = {}) => {
         }
       }
       
-      let placed = placeIntoFree(freeBlocks, dur);
+      // === 휴식 여유 확보 후 배치 ===  // NEW
+      const breakNeed = requiredBreakAfter(a, opts.breakMinutesOverride);
+      let placed = placeIntoFree(freeBlocks, dur, { padAfterMin: breakNeed });
       if (placed) {
         a.start = minToHHMM(placed.start);
         a.end = minToHHMM(placed.end);
+        // 바로 뒤에 휴식 블록 삽입 (겹침 방지용) // NEW
+        if (placed.padAfterMin > 0) {
+          const brStart = placed.end;
+          const brEnd   = placed.end + placed.padAfterMin;
+          day.activities.push({
+            title: '휴식/리커버리',
+            start: minToHHMM(brStart),
+            end:   minToHHMM(brEnd),
+            type: 'task',
+            importance: '중',
+            difficulty: '하',
+            extendedProps: { isBreak: true }
+          });
+          // 휴식도 점유 영역이므로 freeBlocks 재계산  // NEW
+          freeBlocks = buildFreeBlocks(day.activities);
+        }
       } else {
         const parts = splitPlaceIntoFree(freeBlocks, dur);
         if (parts && parts.length) {
@@ -1373,61 +1422,88 @@ const fixOverlaps = (schedule, opts = {}) => {
               isRepeating: a.isRepeating
             });
           }
+          // 첫 세그먼트 뒤에도 최소 휴식 삽입 시도  // NEW
+          const brStart = parts[0].end;
+          const brEnd   = brStart + breakNeed;
+          const canFit  = buildFreeBlocks(day.activities).some(([fs,fe]) => brStart>=fs && brEnd<=fe);
+          if (canFit) {
+            day.activities.push({
+              title: '휴식/리커버리',
+              start: minToHHMM(brStart),
+              end:   minToHHMM(brEnd),
+              type: 'task',
+              importance: '중',
+              difficulty: '하',
+              extendedProps: { isBreak: true }
+            });
+          }
         } else {
           a.start = minToHHMM(FALLBACK_BLOCK[0]);
           a.end = minToHHMM(Math.min(FALLBACK_BLOCK[0] + dur, FALLBACK_BLOCK[1]));
+          // 폴백 구간 뒤에도 휴식 끼워넣기 (가능 시)  // NEW
+          const brStart = hhmmToMin(a.end);
+          const brEnd   = brStart + breakNeed;
+          const freeNow = buildFreeBlocks(day.activities);
+          const canFit  = freeNow.some(([fs,fe]) => brStart>=fs && brEnd<=fe);
+          if (canFit) {
+            day.activities.push({
+              title: '휴식/리커버리',
+              start: minToHHMM(brStart),
+              end:   minToHHMM(brEnd),
+              type: 'task',
+              importance: '중',
+              difficulty: '하',
+              extendedProps: { isBreak: true }
+            });
+          }
         }
       }
       if (!a.type) a.type = 'task';
     }
 
     if (allowAutoRepeat && examTasks.length > 0) {
-      const hasExamTask = day.activities.some(a => 
-        (a.type||'').toLowerCase() === 'task' && 
-        (a.importance === '상' || a.difficulty === '상' || a.isRepeating)
-      );
-      if (!hasExamTask) {
-        const base = copy[0]?.day ?? day.day;
-        const offset = (day.day - base) % examTasks.length;
-        const safeIdx = offset < 0 ? offset + examTasks.length : offset;
-        const examTask = examTasks[safeIdx];
-        
-      const dl = findDeadlineDayForTitle(examTask.title||'', deadlineMap);
-        if (dl && day.day > dl) {
-          // skip
-        } else {
-          const hasSameTitle = day.activities.some(a =>
-            (a.type||'').toLowerCase() === 'task' && canonTitle(a.title||'') === canonTitle(examTask.title||'')
-          );
-          
-          if (!hasSameTitle) {
-            const placed = placeIntoFree(freeBlocks, examTask.duration);
-            
-            if (placed) {
-              const repeatedTask = {
-                title: examTask.title,
-                start: minToHHMM(placed.start),
-                end: minToHHMM(placed.end),
-                type: 'task',
-                importance: examTask.importance,
-                difficulty: examTask.difficulty,
-                isRepeating: true,
-                source: 'auto_repeat'
-              };
-              
-              // ✅ 중요/상난이도/시험 계열은 화이트리스트 우회 허용
-              const isImportant = repeatedTask.isRepeating || 
-                                  repeatedTask.importance === '상' || 
-                                  repeatedTask.difficulty === '상' || 
-                                  isExamTitle(repeatedTask.title);
-              if (!isImportant && !allowed.has(canonTitle(repeatedTask.title||''))) {
-                continue; // 중요 태스크가 아니고 화이트리스트에도 없으면 스킵
-              }
-              
-              day.activities.push(repeatedTask);
-            }
+      // 중요/상난이도/반복 태스크를 당일 빈 시간에 최대한 촘촘히 추가
+      // 하루 상한 제거, 중복은 시간 겹침만 금지
+      let guard = 0;
+      while (guard++ < 20) { // 안전장치
+        let added = false;
+        for (const examTask of examTasks) {
+          const isImportant = examTask.isRepeating || examTask.importance === '상' || examTask.difficulty === '상' || isExamTitle(examTask.title);
+          if (!isImportant) continue;
+
+          const dl = findDeadlineDayForTitle(examTask.title||'', deadlineMap);
+          if (dl && day.day > dl) continue;
+
+          // 현재 활동 전체를 점유로 간주해 자유 슬롯 계산 (겹침 방지)
+          const occupied = buildOccupiedForTasks(day.activities);
+          const free = freeFromOccupied(occupied);
+
+          // 가장 이른 슬롯에 배치 (퍼뜨리지 않음)
+          let placedInterval = null;
+          for (const [fs, fe] of free) {
+            if (fe - fs >= (examTask.duration || 150)) { placedInterval = { start: fs, end: fs + (examTask.duration || 150) }; break; }
           }
+          if (!placedInterval) continue;
+
+          // 화이트리스트 정책 우회 판단
+          const titleKey = canonTitle(examTask.title||'');
+          if (!allowed.has(titleKey)) {
+            // 중요 태스크는 우회 허용
+          }
+
+          day.activities.push({
+            title: examTask.title,
+            start: minToHHMM(placedInterval.start),
+            end: minToHHMM(placedInterval.end),
+            type: 'task',
+            importance: examTask.importance,
+            difficulty: examTask.difficulty,
+            isRepeating: true,
+            source: 'auto_repeat'
+          });
+          added = true;
         }
+        if (!added) break;
       }
     }
 
@@ -1645,6 +1721,41 @@ const freeFromOccupied = (occupied, dayStart=0, dayEnd=24*60) => {
   return free;
 };
 
+// 오늘의 과거 활동 제거/정리  // NEW
+const enforceFutureOnly = (schedule, now = new Date()) => {
+  const baseDay = now.getDay() === 0 ? 7 : now.getDay();
+  const nowMin  = now.getHours() * 60 + now.getMinutes();
+
+  return (schedule || []).map(day => {
+    if (day.day !== baseDay) return day;
+
+    const acts = (day.activities || []).slice().sort((a,b)=>hhmmToMin(a.start||'00:00')-hhmmToMin(b.start||'00:00'));
+    const kept = [];
+    for (const a of acts) {
+      const s = hhmmToMin(a.start || '00:00');
+      const e = hhmmToMin(a.end   || '00:00');
+      if (e <= nowMin) continue; // 완전히 과거면 스킵
+      if (s < nowMin && e > nowMin) { // 걸쳐 있으면 시작을 now로 당김
+        kept.push({ ...a, start: minToHHMM(nowMin) });
+        continue;
+      }
+      kept.push(a);
+    }
+
+    // now 이후 충돌 정리: 앞 활동 우선
+    const dedup = [];
+    let lastEnd = nowMin;
+    for (const a of kept.sort((x,y)=>hhmmToMin(x.start||'00:00')-hhmmToMin(y.start||'00:00'))) {
+      const s = Math.max(hhmmToMin(a.start||'00:00'), lastEnd);
+      const e = Math.max(s + 1, hhmmToMin(a.end||'00:00'));
+      dedup.push({ ...a, start: minToHHMM(s), end: minToHHMM(e) });
+      lastEnd = e;
+    }
+
+    return { ...day, activities: dedup };
+  });
+};
+
 const buildOccupiedForAppointments = (acts=[]) => {
   return mergeRanges(
     (acts||[])
@@ -1656,7 +1767,7 @@ const buildOccupiedForAppointments = (acts=[]) => {
 const buildOccupiedForTasks = (acts=[]) => {
   return mergeRanges(
     (acts||[])
-      .filter(a => ['lifestyle','appointment'].includes((a.type||'').toLowerCase()) && a.start && a.end)
+      .filter(a => (a.start && a.end))
       .flatMap(a => {
         const s = toMin(a.start), e = toMin(a.end);
         return e>=s ? [[s,e]] : [[0,e],[s,24*60]];
@@ -1685,7 +1796,7 @@ export const placeAppointmentsPass = (schedule=[], allItems=[], todayDate=new Da
     const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
     const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
     if (!dayObj) continue;
-    if (hasSameTitleSameDay(dayObj.activities, t.title)) continue;
+    // 중복은 시간 겹침만 금지: 동일 타이틀 존재 여부로는 스킵하지 않음
     const occ = buildOccupiedForAppointments(dayObj.activities);
     const want = String(t.deadlineTime||'').slice(0,5);
     const target = /^\d{2}:\d{2}$/.test(want) ? toMin(want) : 9*60;
@@ -1723,7 +1834,7 @@ export const placeTasksPass = (schedule=[], allItems=[], todayDate=new Date()) =
     const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
     const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
     if (!dayObj) continue;
-    if (hasSameTitleSameDay(dayObj.activities, t.title)) continue;
+    // 중복은 시간 겹침만 금지: 동일 타이틀 존재 여부로는 스킵하지 않음
     const occ = buildOccupiedForTasks(dayObj.activities);
     const free = freeFromOccupied(occ);
     const dur = Math.max(30, Number(t.estimatedMinutes || 120));
@@ -1792,7 +1903,8 @@ export const postprocessSchedule = ({
   parsedPatterns,
   existingTasksForAI,
   today,
-  whitelistPolicy = 'off' // 'off' | 'strict' | 'exam-exempt' | 'smart'
+  whitelistPolicy = 'off', // 'off' | 'strict' | 'exam-exempt' | 'smart'
+  breakMinutesOverride // NEW: 피드백으로 휴식 분 단위 강제하려면 주입
 }) => {
   let schedule = enrichTaskMeta(Array.isArray(raw) ? raw : (raw?.schedule || []), existingTasksForAI);
 
@@ -1822,7 +1934,7 @@ export const postprocessSchedule = ({
       console.warn('[ShedAI][DEADLINE] 비어 있음 → 로컬 DB/Firestore에서 할 일 수집 실패 가능성 높음');
     }
   } catch {}
-  schedule = fixOverlaps(schedule, { allowedTitles, allowAutoRepeat: true, deadlineMap });
+  schedule = fixOverlaps(schedule, { allowedTitles, allowAutoRepeat: true, deadlineMap, today, breakMinutesOverride });
 
   // 화이트리스트 강제 (정책에 따라) - fixOverlaps 이후 적용
   if (whitelistPolicy === 'strict') {
@@ -1854,6 +1966,9 @@ export const postprocessSchedule = ({
   // 'off'면 그대로 유지
   schedule = capTasksByDeadline(schedule, deadlineMap);
   schedule = stripWeekendWork(schedule);
+
+  // ✅ 오늘 이전 시간 제거 + 겹침 정리  // NEW
+  schedule = enforceFutureOnly(schedule, today);
 
   // 활동 유효성 필터 (기본 type 보강 후 검증)
   schedule = schedule.map(d => {
