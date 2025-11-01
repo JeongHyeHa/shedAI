@@ -1,7 +1,8 @@
 // scheduleUtils.js: 스케줄과 관련된 모든 처리 로직을 담당하는 유틸리티
-
 import { parseDateString } from './dateUtils';
 import { toISODateLocal, toKoreanDate, toLocalMidnightDate } from './dateNormalize';
+import { normalizeCategoryName } from './categoryAlias';
+import { inferCategory } from './categoryClassifier';
 
 // 디버깅 유틸리티 (환경 독립형)
 const isDev =
@@ -419,16 +420,17 @@ export function buildShedAIPrompt(lifestyleText, taskText, nowLike) {
 - 예: "할 일의 총 소요 시간이 충분히 분산되어 day:10까지만 계획하면 됩니다."
 - 계획이 짧게 끝난 경우, 사용자가 불안해하지 않도록 **왜 더 이상 배치하지 않았는지 반드시 notes에 포함**해야 합니다.
 
-📊 활동 비중 분석 요구사항
-- 스케줄 생성과 함께 사용자의 활동 패턴을 분석하여 활동 비중을 계산해주세요.
-- 다음 카테고리별로 활동 시간을 집계하여 비중을 계산하세요:
-  - work: 업무, 개발, 코딩, 회사 관련 활동
-  - study: 공부, 학습, 시험 준비, 강의 관련 활동
-  - exercise: 운동, 헬스, 러닝, 요가 등 신체 활동
-  - reading: 독서, 책 읽기 관련 활동
-  - hobby: 취미, 게임, 음악, 여가 활동
-  - others: 기타 활동들
-- 각 카테고리의 비중은 해당 카테고리의 총 활동 시간을 전체 활동 시간으로 나눈 비율로 계산하세요.
+📊 활동 분류 & 비중 분석 (동적)
+- 활동 카테고리는 고정값을 사용하지 말고, 이번 스케줄의 활동들을 보고 4~8개의 카테고리를 스스로 정의하세요(taxonomy).
+- 예시는 "Deep work", "Admin/잡무", "Study/학습", "Exercise", "Commute", "Meals", "Chores", "Leisure" 등이나, 이번 데이터에 맞춰 더 적절한 이름을 만드세요.
+- 모든 activities 항목에 "category" 필드를 추가해 반드시 해당 카테고리 중 하나로 라벨링하세요.
+- 각 라벨의 총 소요시간을 합산해 전체 대비 비중(%)을 계산하여 activityAnalysis에 담으세요.
+- 출력 JSON에는 아래 키를 포함합니다:
+  - "taxonomy": [{ "name": "<카테고리명>", "description": "<짧은 정의>" }, ...]
+  - "activityAnalysis": { "<카테고리명>": <정수 %>, ... }   // 퍼센트 합은 100이어야 함
+- (선택) 활동 단위에 아래 메타를 추가해 품질을 높여도 됩니다:
+  - "confidence": 0~1 사이 소수(라벨 신뢰도)
+  - "altCategories": ["대안1","대안2"]  // 상위 1~2개 후보
 
 📤 출력 형식 필수 지침 (※ 이 부분이 매우 중요)
 - 출력은 반드시 아래와 같은 **JSON 형식 하나만 반환**하세요.
@@ -449,10 +451,10 @@ export function buildShedAIPrompt(lifestyleText, taskText, nowLike) {
       "day": 3,
       "weekday": "수요일",
       "activities": [
-        { "start": "06:00", "end": "07:00", "title": "회사 준비", "type": "lifestyle" },
-        { "start": "08:00", "end": "17:00", "title": "근무", "type": "lifestyle" },
-        { "start": "19:00", "end": "21:00", "title": "정보처리기사 실기 개념 암기", "type": "task" },
-        { "start": "21:00", "end": "22:00", "title": "운동", "type": "lifestyle" }
+        { "start": "06:00", "end": "07:00", "title": "회사 준비", "type": "lifestyle", "category": "Admin" },
+        { "start": "08:00", "end": "17:00", "title": "근무", "type": "lifestyle", "category": "Deep work" },
+        { "start": "19:00", "end": "21:00", "title": "정보처리기사 실기 개념 암기", "type": "task", "category": "Study" },
+        { "start": "21:00", "end": "22:00", "title": "운동", "type": "lifestyle", "category": "Exercise" }
       ]
     },
     {
@@ -466,13 +468,21 @@ export function buildShedAIPrompt(lifestyleText, taskText, nowLike) {
     }
     // ... day:14까지 반복
   ],
+  "taxonomy": [
+    { "name": "Deep work", "description": "집중이 필요한 주요 작업" },
+    { "name": "Study", "description": "학습 및 자기계발 활동" },
+    { "name": "Exercise", "description": "신체 활동 및 운동" },
+    { "name": "Meals", "description": "식사 시간" },
+    { "name": "Commute", "description": "출퇴근 이동 시간" },
+    { "name": "Leisure", "description": "여가 및 휴식 활동" }
+  ],
   "activityAnalysis": {
-    "work": 45,
-    "study": 20,
-    "exercise": 10,
-    "reading": 5,
-    "hobby": 5,
-    "others": 15
+    "Deep work": 35,
+    "Study": 20,
+    "Exercise": 10,
+    "Meals": 15,
+    "Commute": 10,
+    "Leisure": 10
   },
   "notes": [
     "정보처리기사 시험이 4일 남아 있어 상위 우선순위로 배치함.",
@@ -572,16 +582,17 @@ export function buildShedAIPrompt(lifestyleText, taskText, nowLike) {
 ⚠️ 중요: 반드시 현재 일정의 전체 날짜 범위를 유지해야 합니다. 기존 일정이 day:${maxDay}까지 있었다면,
 새 일정도 최소한 day:${maxDay}까지 포함해야 합니다. 절대로 일정을 7일 이하로 줄이지 마세요.
 
-📊 활동 비중 분석 요구사항
-- 스케줄 생성과 함께 사용자의 활동 패턴을 분석하여 활동 비중을 계산해주세요.
-- 다음 카테고리별로 활동 시간을 집계하여 비중을 계산하세요:
-  - work: 업무, 개발, 코딩, 회사 관련 활동
-  - study: 공부, 학습, 시험 준비, 강의 관련 활동
-  - exercise: 운동, 헬스, 러닝, 요가 등 신체 활동
-  - reading: 독서, 책 읽기 관련 활동
-  - hobby: 취미, 게임, 음악, 여가 활동
-  - others: 기타 활동들
-- 각 카테고리의 비중은 해당 카테고리의 총 활동 시간을 전체 활동 시간으로 나눈 비율로 계산하세요.
+📊 활동 분류 & 비중 분석 (동적)
+- 활동 카테고리는 고정값을 사용하지 말고, 이번 스케줄의 활동들을 보고 4~8개의 카테고리를 스스로 정의하세요(taxonomy).
+- 예시는 "Deep work", "Admin/잡무", "Study/학습", "Exercise", "Commute", "Meals", "Chores", "Leisure" 등이나, 이번 데이터에 맞춰 더 적절한 이름을 만드세요.
+- 모든 activities 항목에 "category" 필드를 추가해 반드시 해당 카테고리 중 하나로 라벨링하세요.
+- 각 라벨의 총 소요시간을 합산해 전체 대비 비중(%)을 계산하여 activityAnalysis에 담으세요.
+- 출력 JSON에는 아래 키를 포함합니다:
+  - "taxonomy": [{ "name": "<카테고리명>", "description": "<짧은 정의>" }, ...]
+  - "activityAnalysis": { "<카테고리명>": <정수 %>, ... }   // 퍼센트 합은 100이어야 함
+- (선택) 활동 단위에 아래 메타를 추가해 품질을 높여도 됩니다:
+  - "confidence": 0~1 사이 소수(라벨 신뢰도)
+  - "altCategories": ["대안1","대안2"]  // 상위 1~2개 후보
 
 📤 출력 형식 필수 지침 (※ 이 부분이 매우 중요)
 - 출력은 반드시 아래와 같은 **JSON 형식 하나만 반환**하세요.
@@ -743,12 +754,18 @@ export function convertScheduleToEvents(scheduleArray, nowLike = new Date()) {
           end = new Date(`${dateStr}T${ensureHms(activity.end)}`);
         }
         
+        // 카테고리 자동 분류 및 정규화 적용
+        const rawCategory = activity.category || inferCategory(activity);
+        const normalizedCategory = normalizeCategoryName(rawCategory);
+        
         const extendedProps = {
           type: activity.type || "task",
           importance: activity.importance,
           difficulty: activity.difficulty,
           isRepeating: !!activity.isRepeating,
-          description: activity.description
+          description: activity.description,
+          category: normalizedCategory,
+          confidence: activity.confidence ?? undefined
         };
         
         // 디버깅 로그 제거 (필요시 주석 해제)
@@ -2250,10 +2267,14 @@ export function postProcessSchedule(modelOut, {
     d.activities = out;
   }
 
-  // 7) 간단 분석/노트
+  // 7) 간단 분석/노트 (AI category 우선 사용)
   const totMin = clipped.flatMap(d=>d.activities).reduce((s,a)=>s+(HM.toMin(a.end)-HM.toMin(a.start)),0);
-  const buckets = { work:0, study:0, exercise:0, reading:0, hobby:0, others:0 };
-  const cat = (a) => {
+  
+  // AI가 제공한 category 기반 계산 (동적 taxonomy)
+  const buckets = new Map(); // category name -> minutes
+  
+  // 폴백: 고정 카테고리 분류 (AI category가 없을 때만 사용)
+  const fallbackCat = (a) => {
     if ((a.type||'').toLowerCase()==='lifestyle'){
       if (/운동|헬스|러닝|요가/i.test(a.title)) return 'exercise';
       if (/독서|책/i.test(a.title)) return 'reading';
@@ -2265,19 +2286,36 @@ export function postProcessSchedule(modelOut, {
     if (/업무|개발|코딩|프로젝트|회사/i.test(a.title)) return 'work';
     return 'others';
   };
-  clipped.forEach(d=>d.activities.forEach(a=>{ buckets[cat(a)] += HM.toMin(a.end)-HM.toMin(a.start); }));
-  const pct=(m)=>totMin?Math.round((m/totMin)*100):0;
+  
+  clipped.forEach(d=>{
+    d.activities.forEach(a=>{
+      const dur = HM.toMin(a.end) - HM.toMin(a.start);
+      // AI category가 있으면 우선 사용하고 정규화, 없으면 fallback
+      const rawCat = (a.category && a.category.trim()) ? a.category.trim() : fallbackCat(a);
+      const cat = normalizeCategoryName(rawCat);
+      buckets.set(cat, (buckets.get(cat) || 0) + dur);
+    });
+  });
+  
+  const pct = (m) => totMin ? Math.round((m/totMin)*100) : 0;
+  
+  // Map을 객체로 변환 (퍼센트 합 100 맞추기)
+  const entries = Array.from(buckets.entries()).map(([k, v]) => [k, pct(v)]);
+  const rounded = entries.map(([k, p]) => [k, Math.round(p)]);
+  const sum = rounded.reduce((s, [, p]) => s + p, 0);
+  const diff = 100 - sum;
+  
+  // 가장 큰 항목에 보정치 몰아주기
+  if (diff !== 0 && rounded.length > 0) {
+    const maxIdx = rounded.reduce((imax, [, p], idx, arr) => (p > arr[imax][1] ? idx : imax), 0);
+    rounded[maxIdx][1] += diff;
+  }
+  
+  const activityAnalysis = Object.fromEntries(rounded);
 
   return {
     schedule: clipped,
-    activityAnalysis: {
-      work: pct(buckets.work),
-      study: pct(buckets.study),
-      exercise: pct(buckets.exercise),
-      reading: pct(buckets.reading),
-      hobby: pct(buckets.hobby),
-      others: pct(buckets.others)
-    },
+    activityAnalysis,
     notes: [
       `오늘(day:${todayDay})의 현재 시각 이전 활동은 제거/절단했습니다.`,
       `마감일 최댓값(day:${latestDay})까지만 출력했습니다.`,

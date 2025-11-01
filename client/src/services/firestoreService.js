@@ -415,6 +415,42 @@ class FirestoreService {
     }
   }
 
+  // 최근 스케줄의 활동 비중 업데이트
+  async updateLastScheduleActivityAnalysis(userId, activityAnalysis) {
+    try {
+      const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
+      const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(10));
+      const qs = await getDocs(q);
+      
+      // 실제 스케줄 존재 여부 판단 헬퍼
+      const hasRealSchedule = (sd) => {
+        if (!sd) return false;
+        if (Array.isArray(sd)) return sd.length > 0;
+        if (Array.isArray(sd?.days)) {
+          return sd.days.some(d => Array.isArray(d.activities) && d.activities.length > 0);
+        }
+        if (Array.isArray(sd?.events)) return sd.events.length > 0;
+        return false;
+      };
+      
+      for (const doc of qs.docs) {
+        const data = doc.data();
+        if (hasRealSchedule(data?.scheduleData)) {
+          await updateDoc(doc.ref, {
+            activityAnalysis,
+            updatedAt: serverTimestamp()
+          });
+          return true;
+        }
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('최근 스케줄 활동 비중 업데이트 실패:', error);
+      return false;
+    }
+  }
+
   // 피드백 저장 (기존 방식)
   async saveFeedback(userId, feedbackData) {
     try {

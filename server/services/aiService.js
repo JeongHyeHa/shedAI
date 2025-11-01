@@ -187,32 +187,58 @@ class AIService {
                     (hasEventKeyword && !hasNonEventHint);
                 
                 if (isEvent) {
-                    // day 계산 (deadline 기준)
-                    if (task.deadline || task.deadlineAtMidnight) {
-                        const deadlineDate = task.deadline ? new Date(task.deadline) : new Date(task.deadlineAtMidnight);
-                        const daysDiff = Math.floor((deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-                        const taskDay = baseRelDay + daysDiff;
-                        
-                        if (allowedDays.includes(taskDay)) {
-                            const start = normalizeHHMM(task.deadlineTime || '12:00');
-                            const duration = task.estimatedMinutes || task.durationMin || 60;
-                            const startMin = timeToMinutes(start);
-                            const endMin = startMin + duration;
-                            const end = minutesToTime(endMin);
-                            
-                            fixedEvents.push({
-                                day: taskDay,
-                                start,
-                                end,
-                                title: taskTitle,
-                                source: 'event'
-                            });
-                            console.log(`[새 아키텍처] 고정 일정으로 분리: ${taskTitle} → day ${taskDay}, ${start}-${end}`);
+                    // 1) 날짜 산출: deadline | date | startDate | occursOn(day) 순서
+                    let eventDate = null;
+                    if (task.deadline) {
+                        eventDate = new Date(task.deadline);
+                    } else if (task.deadlineAtMidnight) {
+                        eventDate = new Date(task.deadlineAtMidnight);
+                    } else if (task.date) {
+                        eventDate = new Date(task.date);
+                    } else if (task.startDate) {
+                        eventDate = new Date(task.startDate);
+                    }
+                    
+                    // occursOn이 상대 day 숫자로 들어오는 경우도 허용
+                    let taskDay = null;
+                    if (eventDate instanceof Date && !isNaN(eventDate.getTime())) {
+                        const daysDiff = Math.floor((eventDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                        taskDay = baseRelDay + daysDiff;
+                    } else if (Number.isFinite(task.occursOn)) {
+                        taskDay = task.occursOn;
+                    }
+                    
+                    // 2) 시간 산출: start/end 우선, 없으면 startTime+duration, 마지막으로 deadlineTime+duration
+                    let start = null, end = null;
+                    if (task.start && task.end) {
+                        start = normalizeHHMM(task.start);
+                        end = normalizeHHMM(task.end);
+                    } else if (task.startTime && (task.endTime || task.durationMin || task.estimatedMinutes)) {
+                        start = normalizeHHMM(task.startTime);
+                        const dur = task.durationMin || task.estimatedMinutes || 60;
+                        if (task.endTime) {
+                            end = normalizeHHMM(task.endTime);
+                        } else {
+                            end = minutesToTime(timeToMinutes(start) + dur);
                         }
-        } else {
-                        // deadline이 없어도 키워드 매칭되면 busy에 포함 (하지만 day를 알 수 없으므로 경고)
-                        console.warn(`[새 아키텍처] 고정 일정 키워드 매칭되었지만 deadline 없음: ${taskTitle}`);
-        }
+                    } else if (task.deadlineTime && (task.durationMin || task.estimatedMinutes)) {
+                        start = normalizeHHMM(task.deadlineTime);
+                        const dur = task.durationMin || task.estimatedMinutes || 60;
+                        end = minutesToTime(timeToMinutes(start) + dur);
+                    }
+                    
+                    if (taskDay && start && end && allowedDays.includes(taskDay)) {
+                        fixedEvents.push({
+                            day: taskDay,
+                            start,
+                            end,
+                            title: taskTitle,
+                            source: 'event'
+                        });
+                        console.log(`[새 아키텍처] 고정 일정으로 분리: ${taskTitle} → day ${taskDay}, ${start}-${end}`);
+                    } else {
+                        console.warn(`[새 아키텍처] 고정 일정 판단 but 필수값 부족/범위 외: title=${taskTitle}, taskDay=${taskDay}, start=${start}, end=${end}, allowedDays=${allowedDays.includes(taskDay ? taskDay : -1)}`);
+                    }
       } else {
                     // task만 tasksOnly에 추가
                     tasksOnly.push(task);
@@ -314,9 +340,13 @@ class AIService {
             
             // === 새 아키텍처: 프롬프트 재작성 (간소화) ===
             // AI에는 규칙 힌트만, 보장은 서버에서
+            // freeWindowsList 정규화 (start/end 시간 정규화)
             const freeWindowsList = Object.keys(freeWindows).map(day => ({
                 day: parseInt(day, 10),
-                free_windows: freeWindows[day]
+                free_windows: (freeWindows[day] || []).map(w => ({
+                    start: normalizeHHMM(w.start),
+                    end: normalizeHHMM(w.end)
+                }))
             }));
             
             // AI에 넘길 tasks (간소화된 스키마)
@@ -574,6 +604,15 @@ placements 배열만 반환하세요.`
                 console.log('=== AI 응답 파싱 (새 아키텍처) ===');
                 console.log('parsed 키들:', Object.keys(parsed));
                 
+                // placements 키 정규화 (snake_case → camelCase)
+                const normalizePlacement = (p) => ({
+                    taskId: p.taskId || p.task_id || p.id,
+                    day: typeof p.day === 'string' ? parseInt(p.day, 10) : p.day,
+                    start: normalizeHHMM(p.start),
+                    end: normalizeHHMM(p.end),
+                    reason: p.reason || p.explanation || ''
+                });
+                
                 // placements, breaks, unplaced 구조 파싱
                 let placements = [];
                 let breaks = [];
@@ -583,7 +622,7 @@ placements 배열만 반환하세요.`
                 // AI 응답 파싱: placements 배열 또는 schedule 구조
                 if (Array.isArray(parsed.placements)) {
                     console.log('[새 아키텍처] placements 구조 사용');
-                    placements = parsed.placements || [];
+                    placements = (parsed.placements || []).map(normalizePlacement);
                     breaks = parsed.breaks || [];
                     unplaced = parsed.unplaced || [];
                     explanation = parsed.explanation || parsed.reason || '';
@@ -594,7 +633,7 @@ placements 배열만 반환하세요.`
                 } else if (Array.isArray(parsed)) {
                     // AI가 placements 배열만 반환한 경우
                     console.log('[새 아키텍처] placements 배열 직접 반환');
-                    placements = parsed || [];
+                    placements = (parsed || []).map(normalizePlacement);
                     breaks = [];
                     unplaced = [];
                     explanation = '';
@@ -632,13 +671,13 @@ placements 배열만 반환하세요.`
                                     }
                                     
                                     if (taskId) {
-                                        placements.push({
+                                        placements.push(normalizePlacement({
                                             taskId: taskId,
                                             day: dayObj.day,
                                             start: act.start,
                                             end: act.end,
                                             reason: act.reason || ''
-                                        });
+                                        }));
                                     }
                                 }
                             }
@@ -660,7 +699,7 @@ placements 배열만 반환하세요.`
                 
                 // === 새 아키텍처: mergeAIPlacements로 병합 ===
                 console.log('[새 아키텍처] mergeAIPlacements 호출 시작');
-                const finalSchedule = this.mergeAIPlacements({
+                let finalSchedule = this.mergeAIPlacements({
                     baseDate: now,
                     busy,
                     placements,
@@ -671,6 +710,56 @@ placements 배열만 반환하세요.`
                 });
                 
                 console.log('[새 아키텍처] 병합 완료, schedule 길이:', finalSchedule.length);
+                
+                // 🔒 마지막 안전망: busy와 placements 간 충돌 자동 수선
+                // mergeAIPlacements 내부에서 이미 validateAndRepair를 호출하지만,
+                // 최종 스케줄에서도 한 번 더 검증하여 겹침 제거
+                try {
+                    const { validateAndRepair: _validate } = require('./scheduleValidator');
+                    // finalSchedule을 placements 형태로 재변환하여 검증
+                    const schedulePlacements = [];
+                    for (const dayObj of finalSchedule) {
+                        for (const act of dayObj.activities || []) {
+                            if (act.type === 'task' && act.taskId) {
+                                schedulePlacements.push({
+                                    taskId: act.taskId,
+                                    day: dayObj.day,
+                                    start: act.start,
+                                    end: act.end
+                                });
+                            }
+                        }
+                    }
+                    
+                    // 재검증 및 재배치
+                    const repairedPlacements = _validate(
+                        schedulePlacements,
+                        freeWindows || {},
+                        tasksById,
+                        now,
+                        baseRelDay,
+                        busy,
+                        weekendPolicy
+                    );
+                    
+                    // 재검증된 placements가 있고 원본과 다르면 다시 병합
+                    if (Array.isArray(repairedPlacements) && repairedPlacements.length !== schedulePlacements.length) {
+                        console.log('[새 아키텍처] 재검증 완료, 재병합 시작');
+                        finalSchedule = this.mergeAIPlacements({
+                            baseDate: now,
+                            busy,
+                            placements: repairedPlacements,
+                            breaks,
+                            tasksById,
+                            freeWindows,
+                            weekendPolicy
+                        });
+                        console.log('[새 아키텍처] 재병합 완료');
+                    }
+                } catch (validateError) {
+                    console.warn('[새 아키텍처] 최종 검증 실패 (무시 가능):', validateError.message);
+                    // 검증 실패해도 기존 finalSchedule 사용
+                }
                 console.log('[새 아키텍처] unplaced 개수:', unplaced.length);
                 
                 // 설명 자동 생성

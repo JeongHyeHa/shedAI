@@ -138,6 +138,31 @@ const saveScheduleSessionUnified = async ({
 
   const promptPreview = typeof aiPrompt === 'string' ? aiPrompt.slice(0, 10000) : '';
 
+  // 활동 비중 계산 (스케줄이 배열인 경우)
+  let activityAnalysis = {};
+  if (Array.isArray(schedule) && schedule.length > 0) {
+    const { computeActivityMix } = await import('../utils/activityMix');
+    const { normalizeCategoryName } = await import('../utils/categoryAlias');
+    const { inferCategory } = await import('../utils/categoryClassifier');
+    
+    // 카테고리 누락 시 제목/타입 기반으로 즉석 분류 → 정규화
+    const normalizedSchedule = schedule.map(day => ({
+      ...day,
+      activities: (day.activities || []).map(activity => {
+        const raw = activity.category || inferCategory(activity);
+        return { ...activity, category: normalizeCategoryName(raw) };
+      })
+    }));
+    
+    const mixResult = computeActivityMix(normalizedSchedule);
+    activityAnalysis = mixResult.byCategory;
+    
+    // 디버깅 로그 (개발 모드에서만)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[saveScheduleSessionUnified] 활동 비중 계산 완료:', activityAnalysis);
+    }
+  }
+
   const data = {
     scheduleData: schedule,
     hasSchedule: true,
@@ -145,6 +170,7 @@ const saveScheduleSessionUnified = async ({
     lifestyleContext: lifestyleContextForSave,
     aiPromptPreview: promptPreview,
     conversationContext: Array.isArray(conversationContext) ? conversationContext.slice(-8) : [],
+    activityAnalysis, // 활동 비중 추가
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   };

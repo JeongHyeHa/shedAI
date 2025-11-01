@@ -1,3 +1,4 @@
+// MonthlyReport.jsx ::  월말 레포트 페이지
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -5,6 +6,9 @@ import firestoreService from '../services/firestoreService';
 import apiService from '../services/apiService';
 import PieChart from '../components/Report/PieChart';
 import HabitTracker from '../components/Report/HabitTracker';
+import { computeActivityMix } from '../utils/activityMix';
+import { normalizeCategoryName } from '../utils/categoryAlias';
+import { inferCategory } from '../utils/categoryClassifier';
 
 // 마크다운 텍스트 파싱 함수
 const parseMarkdownText = (text) => {
@@ -23,88 +27,35 @@ const parseMarkdownText = (text) => {
 };
 
 function extractCategoriesFromPatternsAndTasks({ lifestylePatterns = [], lastSchedule = null }) {
-  // AI가 제공한 활동 비중 데이터가 있으면 우선 사용
-  if (lastSchedule?.activityAnalysis) {
+  // 1) AI가 제공한 활동 비중 데이터가 있으면 우선 사용
+  if (lastSchedule?.activityAnalysis && typeof lastSchedule.activityAnalysis === 'object') {
     return lastSchedule.activityAnalysis;
   }
 
-  // AI 데이터가 없으면 스케줄 데이터에서 시간 기반으로 계산
-  const buckets = {
-    work: 0,
-    study: 0,
-    exercise: 0,
-    reading: 0,
-    hobby: 0,
-    others: 0
-  };
-
-  if (lastSchedule?.scheduleData) {
-    try {
-      const events = Array.isArray(lastSchedule.scheduleData) ? lastSchedule.scheduleData : [];
-      for (const dayBlock of events) {
-        if (dayBlock?.activities && Array.isArray(dayBlock.activities)) {
-          for (const activity of dayBlock.activities) {
-            if (activity?.title && activity?.start && activity?.end) {
-              // 시간 계산 (간단한 시간 차이 계산)
-              const startTime = activity.start;
-              const endTime = activity.end;
-              const duration = calculateDuration(startTime, endTime);
-              
-              const title = String(activity.title).toLowerCase();
-              
-              // 더 포괄적인 분류 로직
-              if (/(운동|exercise|gym|workout|헬스|조깅|달리기|수영|요가|필라테스|산책)/.test(title)) {
-                buckets.exercise += duration;
-              }
-              else if (/(독서|reading|book|책|읽기|독서실)/.test(title)) {
-                buckets.reading += duration;
-              }
-              else if (/(공부|study|lecture|exam|자기계발|학습|공부실|도서관|과제|프로젝트|발표|시험|수업)/.test(title)) {
-                buckets.study += duration;
-              }
-              else if (/(개발|코딩|dev|code|프로그래밍|작업|업무|회의|프로젝트|출근|근무)/.test(title)) {
-                buckets.work += duration;
-              }
-              else if (/(취미|hobby|게임|game|music|음악|영화|드라마|넷플릭스|유튜브|게임|만화|애니)/.test(title)) {
-                buckets.hobby += duration;
-              }
-              else {
-                buckets.others += duration;
-              }
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('스케줄 데이터 파싱 오류:', error);
-    }
+  // 2) 스케줄 데이터가 있으면 computeActivityMix으로 계산
+  let scheduleArray = null;
+  if (lastSchedule?.scheduleData && Array.isArray(lastSchedule.scheduleData)) {
+    scheduleArray = lastSchedule.scheduleData;
+  } else if (lastSchedule?.schedule && Array.isArray(lastSchedule.schedule)) {
+    scheduleArray = lastSchedule.schedule;
   }
 
-  // 생활 패턴에서도 시간 기반으로 계산 (간단한 추정)
-  for (const pattern of lifestylePatterns) {
-    const text = String(pattern).toLowerCase();
+  if (scheduleArray && scheduleArray.length > 0) {
+    // 카테고리 누락 시 제목/타입 기반으로 즉석 분류 → 정규화
+    const normalizedSchedule = scheduleArray.map(day => ({
+      ...day,
+      activities: (day.activities || []).map(activity => {
+        const raw = activity.category || inferCategory(activity);
+        return { ...activity, category: normalizeCategoryName(raw) };
+      })
+    }));
     
-    if (/(운동|exercise|gym|workout|헬스|조깅|달리기|수영|요가|필라테스|산책)/.test(text)) {
-      buckets.exercise += 1; // 1시간으로 추정
-    }
-    else if (/(독서|reading|book|책|읽기|독서실)/.test(text)) {
-      buckets.reading += 1;
-    }
-    else if (/(공부|study|lecture|exam|자기계발|학습|공부실|도서관|과제|프로젝트|발표|시험|수업)/.test(text)) {
-      buckets.study += 1;
-    }
-    else if (/(개발|코딩|dev|code|프로그래밍|작업|업무|회의|프로젝트|출근|근무)/.test(text)) {
-      buckets.work += 1;
-    }
-    else if (/(취미|hobby|게임|game|music|음악|영화|드라마|넷플릭스|유튜브|게임|만화|애니)/.test(text)) {
-      buckets.hobby += 1;
-    }
-    else {
-      buckets.others += 1;
-    }
+    const mixResult = computeActivityMix(normalizedSchedule);
+    return mixResult.byCategory;
   }
 
-  return buckets;
+  // 3) fallback: 빈 객체 반환
+  return {};
 }
 
 // 시간 차이 계산 함수 (간단한 버전)
@@ -136,6 +87,7 @@ export default function MonthlyReport() {
   const [aiAdvice, setAiAdvice] = useState('');
   const [aiAdviceTimestamp, setAiAdviceTimestamp] = useState(null);
   const [isGeneratingAdvice, setIsGeneratingAdvice] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
@@ -245,14 +197,27 @@ export default function MonthlyReport() {
   const pieData = useMemo(() => {
     if (!buckets) return [];
     
-    // 카테고리 라벨 매핑
+    // 카테고리 라벨 매핑 (정규화된 키 대응)
     const categoryLabels = {
+      // 기존 고정 카테고리 (하위 호환성)
       work: '업무',
       study: '공부',
       exercise: '운동',
       reading: '독서',
       hobby: '취미',
-      others: '기타'
+      others: '기타',
+      // 새로운 동적 카테고리
+      'Deep work': '집중 작업',
+      'Study': '학습/공부',
+      'Exercise': '운동',
+      'Meetings': '회의/미팅',
+      'Commute': '통근/이동',
+      'Meals': '식사',
+      'Sleep': '수면',
+      'Admin': '관리/행정',
+      'Chores': '집안일',
+      'Leisure': '여가/휴식',
+      'Uncategorized': '분류없음'
     };
     
     return Object.entries(buckets)
@@ -321,7 +286,55 @@ export default function MonthlyReport() {
 
       <section style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24 }}>
         <div className="report-card" style={{ background: '#fff', borderRadius: 12, padding: 16 }}>
-          <h3>활동 비중</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 style={{ margin: 0 }}>활동 비중</h3>
+            <button
+              onClick={async () => {
+                if (!userData || isRefreshing || !user?.uid) return;
+                
+                setIsRefreshing(true);
+                try {
+                  // 활동 비중 재계산
+                  const activityAnalysis = extractCategoriesFromPatternsAndTasks(userData);
+                  
+                  // Firestore에 업데이트
+                  const success = await firestoreService.updateLastScheduleActivityAnalysis(
+                    user.uid,
+                    activityAnalysis
+                  );
+                  
+                  if (success) {
+                    // userData 다시 로드하여 화면 갱신
+                    const updatedData = await firestoreService.getUserDataForAI(user.uid, user);
+                    setUserData(updatedData);
+                    console.log('활동 비중이 업데이트되었습니다.');
+                  } else {
+                    console.warn('활동 비중 업데이트에 실패했습니다.');
+                  }
+                } catch (error) {
+                  console.error('활동 비중 새로고침 실패:', error);
+                } finally {
+                  setIsRefreshing(false);
+                }
+              }}
+              disabled={isRefreshing || !userData || !user?.uid}
+              style={{
+                background: isRefreshing || !userData ? '#ccc' : '#6C8AE4',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '6px 12px',
+                cursor: isRefreshing || !userData ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                fontWeight: '500',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              {isRefreshing ? '새로고침 중...' : '새로고침'}
+            </button>
+          </div>
           {userData ? (
             <>
               <PieChart data={pieData} colors={colors} size={240} />
