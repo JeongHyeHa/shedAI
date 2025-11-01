@@ -130,6 +130,36 @@ export function preprocessMessage(message, nowLike) {
   
   // === 3) 특정 날짜들 ===
   const DATE_PATTERNS = [
+    // (추가) YYYY.MM.DD / YYYY-MM-DD / YYYY/MM/DD
+    { re: /(\d{4})\s*[.\-\/]\s*(\d{1,2})\s*[.\-\/]\s*(\d{1,2})(?![^()]*\))/g,
+      fn: (m, year, month, day) => {
+        const yy = parseInt(year, 10);
+        const mm = parseInt(month, 10) - 1;
+        const dd = parseInt(day, 10);
+        const d = new Date(yy, mm, dd);
+        // 유효성: 역직렬화해서 연/월/일 동일해야 함
+        if (d.getFullYear() === yy && d.getMonth() === mm && d.getDate() === dd) {
+          return `${m} (day:${convertToRelativeDay(d, base)})`;
+        }
+        return m; // 무효하면 그대로 반환(태깅 생략)
+      }
+    },
+    // (추가) MM.DD / MM-DD / MM/DD  (연도 미기재 시, base 기준으로 지난 날짜면 내년으로 밀기)
+    { re: /(\d{1,2})\s*[.\-\/]\s*(\d{1,2})(?!\d)(?![^()]*\))/g,
+      fn: (m, month, day) => {
+        const yy = base.getFullYear();
+        const mm = parseInt(month, 10) - 1;
+        const dd = parseInt(day, 10);
+        let d = new Date(yy, mm, dd);
+        // 옵션: 이미 과거면 내년
+        if (d < resetToStartOfDay(base)) d = new Date(yy + 1, mm, dd);
+        // 유효성: 역직렬화해서 연/월/일 동일해야 함
+        if (d.getMonth() === mm && d.getDate() === dd) {
+          return `${m} (day:${convertToRelativeDay(d, base)})`;
+        }
+        return m; // 무효하면 그대로 반환(태깅 생략)
+      }
+    },
     { re: /(\d{1,2})\s*월\s*(\d{1,2})\s*일(?![^()]*\))/g, fn: (m, month, day) => {
       const yy = base.getFullYear();
       const mm = parseInt(month, 10) - 1;
@@ -947,13 +977,56 @@ const safeParseDateString = (text, today) => {
   try { return parseDateString(text, today); } catch { return null; }
 };
 
+// YYYY.MM.DD / YYYY-MM-DD / M월 D일 + (오전|오후) HH(:mm)? "시" 조합까지 처리
+function tryParseKoreanDateTime(s, today = new Date()) {
+  const text = String(s || '').replace(/\s+/g, ' ').trim();
+
+  // 1) YYYY.MM.DD HH(:mm)? (AM/PM 한국어)
+  let m = text.match(/(\d{4})[.\-\/]\s*(\d{1,2})[.\-\/]\s*(\d{1,2})\s*(오전|오후)?\s*(\d{1,2})(?::(\d{1,2}))?\s*시?/);
+  if (m) {
+    const y = +m[1], M = +m[2] - 1, d = +m[3];
+    let h = +(m[5] || 0), mm = +(m[6] || 0);
+    if (m[4] === '오후' && h < 12) h += 12;
+    if (m[4] === '오전' && h === 12) h = 0;
+    return new Date(y, M, d, h, mm, 0, 0);
+  }
+
+  // 2) M월 D일 (AM/PM) HH(:mm)? "시"
+  m = text.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일\s*(오전|오후)?\s*(\d{1,2})(?::(\d{1,2}))?\s*시?/);
+  if (m) {
+    const y = today.getFullYear(), M = +m[1] - 1, d = +m[2];
+    let h = +(m[4] || 0), mm = +(m[5] || 0);
+    if (m[3] === '오후' && h < 12) h += 12;
+    if (m[3] === '오전' && h === 12) h = 0;
+    const dt = new Date(y, M, d, h, mm, 0, 0);
+    // 과거면 내년으로 밀어주는 옵션 (원래 코드 정책과 일치)
+    const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    if (dt < base) dt.setFullYear(dt.getFullYear() + 1);
+    return dt;
+  }
+
+  return null;
+}
+
+// 약속/회의 키워드 체크용 정규식
+const APPOINTMENT_KEYWORDS = /(브런치|점심|저녁|약속|미팅|회의|면담|인터뷰|진료|병원|상담|촬영|행사|발표|수업|강의|세미나|티타임|점심 회동|식사 약속|식사)/i;
+
 // 채팅 문장 → 태스크 파싱
-export const parseTaskFromFreeText = (text, today = new Date()) => {
+export const parseTaskFromFreeText = (text, nowLike = new Date()) => {
+  const today = resolveNow(nowLike);
   if (!text || typeof text !== 'string') return null;
   const s = text.replace(/\s+/g, ' ').trim();
 
-  // 날짜(+시각) 1차 감지
-  const dtFull = safeParseDateString(s, today); // Date(시:분 포함 가능)
+  // 0) 날짜+시간 한 번에 잡기 (가장 우선)
+  let dtFull = tryParseKoreanDateTime(s, today);
+
+  // 1) 기존 parseDateString 시도 (시간 포함 가능)
+  if (!dtFull) {
+    dtFull = safeParseDateString(s, today);
+    if (dtFull && isNaN(dtFull.getTime())) dtFull = null;
+  }
+
+  // 2) 날짜만 / 상대 표현만 잡히는 경우 기존 로직 유지
   let deadlineDate = dtFull;
   if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) {
     const rawCandidates = s.match(/(\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}[.\-\/]\d{1,2})/g) || [];
@@ -1042,6 +1115,10 @@ export const parseTaskFromFreeText = (text, today = new Date()) => {
   const difficulty = levelMap[diffRaw] || (isExam ? '상' : '중');
   const localMid = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
 
+  // 타입 지정: 회의/약속류는 appointment, 그 외 task
+  // 키워드 OR deadlineTime 존재하면 appointment
+  const looksAppointment = APPOINTMENT_KEYWORDS.test(s) || !!deadlineTime;
+
   const result = {
     title,
     importance,
@@ -1049,12 +1126,15 @@ export const parseTaskFromFreeText = (text, today = new Date()) => {
     description: s.replace(title, '').trim(),
     deadlineAtMidnight: localMid,
     deadlineTime,
-    estimatedMinutes: isExam ? 150 : 120
+    estimatedMinutes: looksAppointment ? 60 : (isExam ? 150 : 120),
+    type: looksAppointment ? 'appointment' : 'task'
   };
 
-  // 타입 지정: 회의/약속류는 appointment, 그 외 task
-  // 기본은 task, 일정 분류는 상위 레이어에서 끝말 명령으로만 판단
-  result.type = 'task';
+  // 약속인데 시각이 빠졌다면, 안전 기본값(예: 12:00) 보강
+  if (result.type === 'appointment' && !result.deadlineTime) {
+    result.deadlineTime = '12:00';
+  }
+
   return result;
 };
 
@@ -1995,11 +2075,8 @@ export const postprocessSchedule = ({
   }));
 
   schedule = applyLifestyleHardOverlay(schedule, parsedPatterns);
-
-  // ✅ 오늘은 현재 시각 이전 활동 제거/절단
-  schedule = enforceFutureOnly(schedule, now);
-
-  // ✅ 화이트리스트/자동반복 순서 개선: fixOverlaps 먼저 실행 후 필터링
+  schedule = placeAppointmentsPass(schedule, existingTasksForAI, now);
+  schedule = placeTasksPass(schedule, existingTasksForAI, now);
   // (자동 반복으로 추가된 태스크가 다시 필터링되지 않도록)
   const deadlineMap = buildDeadlineDayMap(existingTasksForAI, now);
   try {
@@ -2038,6 +2115,9 @@ export const postprocessSchedule = ({
   }
   schedule = capTasksByDeadline(schedule, deadlineMap);
   schedule = stripWeekendWork(schedule);
+
+  // ✅ 오늘은 현재 시각 이전 활동 제거/절단 (약속/태스크 배치 이후)
+  schedule = enforceFutureOnly(schedule, now);
 
   // 활동 유효성 필터 (기본 type 보강 후 검증)
   schedule = schedule.map(d => {
