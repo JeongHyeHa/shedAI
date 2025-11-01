@@ -574,6 +574,38 @@ class AIController {
         }
     }
 
+    // AI 원본 응답 조회 (디버깅용)
+    async getLastAIResponse(req, res) {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const debugPath = path.join(__dirname, '../debug-last-ai.json');
+            
+            if (!fs.existsSync(debugPath)) {
+                return res.status(404).json({ 
+                    ok: false, 
+                    message: 'AI 응답 파일이 없습니다.' 
+                });
+            }
+            
+            const fileContent = fs.readFileSync(debugPath, 'utf-8');
+            const data = JSON.parse(fileContent);
+            
+            res.json({ 
+                ok: true, 
+                data,
+                timestamp: data.timestamp || new Date().toISOString()
+            });
+        } catch (error) {
+            console.error('AI 응답 조회 실패:', error);
+            res.status(500).json({ 
+                ok: false, 
+                message: 'AI 응답 조회에 실패했습니다.',
+                error: error.message
+            });
+        }
+    }
+
     // 로컬 폴백 스케줄 생성 메서드
     generateLocalSchedule(messages, lifestylePatterns) {
         try {

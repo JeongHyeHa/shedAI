@@ -63,4 +63,7 @@ router.get('/advice', aiController.getAdvice);
 // OpenAI 연결 진단
 router.get('/debug/openai', aiController.debugOpenAI);
 
+// AI 원본 응답 조회 (디버깅용)
+router.get('/debug/last-ai', aiController.getLastAIResponse);
+
 module.exports = router;
