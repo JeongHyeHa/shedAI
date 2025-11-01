@@ -1059,8 +1059,13 @@ ${conversationText}
   }
 
   // AI 조언 생성
-  async generateDailyAdvice(userData, activityAnalysis) {
+  async generateDailyAdvice(userData, activityAnalysis, goal = '') {
     try {
+      // 목표 정보를 프롬프트에 반영
+      const goalContext = goal.trim() 
+        ? `\n**사용자 목표:** ${goal.trim()}\n이 목표를 달성하기 위해 현재 활동 패턴이 얼마나 효과적인지, 어떤 개선이 필요한지 구체적으로 분석해주세요.`
+        : '';
+      
       const systemPrompt = {
         role: 'system',
         content: `당신은 사용자의 일일 활동 패턴을 분석하여 개인화된 조언을 제공하는 AI 어시스턴트입니다.
@@ -1069,7 +1074,7 @@ ${conversationText}
 1. 활동 비중 분석 (어떤 활동이 많은지, 부족한지)
 2. 균형 잡힌 라이프스타일을 위한 구체적인 제안
 3. 개선이 필요한 영역과 해결방안
-4. 격려와 동기부여 메시지
+4. 격려와 동기부여 메시지${goalContext}
 
 **중요**: 활동 분류를 정확히 파악하고, 각 카테고리별로 구체적인 조언을 제공하세요.
 - work(업무): 업무 관련 활동
@@ -1089,18 +1094,23 @@ ${conversationText}
          한국어로 응답하고, 300자 이내로 작성해주세요.`
       };
 
+      // 목표 정보를 userPrompt에 반영
+      const goalSection = goal.trim() 
+        ? `\n**사용자 목표:** ${goal.trim()}\n이 목표를 달성하기 위해 현재 활동 패턴이 얼마나 효과적인지, 어떤 개선이 필요한지 구체적으로 분석해주세요.`
+        : '';
+      
       const userPrompt = {
         role: 'user',
         content: `사용자 활동 분석 데이터:
 - 활동 비중 (시간 단위): ${JSON.stringify(activityAnalysis)}
 - 생활 패턴: ${userData.lifestylePatterns?.join(', ') || '없음'}
-- 최근 스케줄: ${userData.lastSchedule ? '있음' : '없음'}
+- 최근 스케줄: ${userData.lastSchedule ? '있음' : '없음'}${goalSection}
 
 **분석 요청사항**:
 1. 각 활동 카테고리별 시간 비중을 분석해주세요
 2. 가장 많은 시간을 소요한 활동과 가장 적은 시간을 소요한 활동을 파악해주세요
 3. 균형 잡힌 라이프스타일을 위해 개선이 필요한 영역을 제안해주세요
-4. 구체적이고 실행 가능한 조언을 제공해주세요
+4. 구체적이고 실행 가능한 조언을 제공해주세요${goal.trim() ? '\n5. 사용자가 설정한 목표를 달성하기 위한 구체적인 전략과 조언을 제공해주세요.' : ''}
 
 위 데이터를 바탕으로 개인화된 AI 조언을 생성해주세요.`
       };

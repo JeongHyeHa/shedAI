@@ -221,10 +221,10 @@ class ApiService {
   }
 
   // AI 조언 생성
-  async generateAdvice(userData, activityAnalysis) {
+  async generateAdvice(userData, activityAnalysis, goal = '') {
     return this.request('/api/advice/generate', {
       method: 'POST',
-      body: JSON.stringify({ userData, activityAnalysis })
+      body: JSON.stringify({ userData, activityAnalysis, goal })
     });
   }
 

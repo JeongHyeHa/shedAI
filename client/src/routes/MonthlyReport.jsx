@@ -88,6 +88,7 @@ export default function MonthlyReport() {
   const [aiAdviceTimestamp, setAiAdviceTimestamp] = useState(null);
   const [isGeneratingAdvice, setIsGeneratingAdvice] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [goal, setGoal] = useState('');
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
@@ -100,7 +101,7 @@ export default function MonthlyReport() {
     try {
       // buckets를 직접 계산하여 사용
       const activityAnalysis = userData ? extractCategoriesFromPatternsAndTasks(userData) : {};
-      const response = await apiService.generateAdvice(userData, activityAnalysis);
+      const response = await apiService.generateAdvice(userData, activityAnalysis, goal.trim());
       if (response.ok) {
         const currentTime = new Date();
         setAiAdvice(response.advice);
@@ -365,8 +366,27 @@ export default function MonthlyReport() {
           )}
         </div>
         <div className="report-card" style={{ background: '#fff', borderRadius: 12, padding: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h3 style={{ margin: 0 }}>AI 조언</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: '300px' }}>
+              <h3 style={{ margin: 0 }}>AI 조언</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <label style={{ fontSize: '14px', color: '#666', whiteSpace: 'nowrap' }}>목표 :</label>
+                <input
+                  type="text"
+                  value={goal}
+                  onChange={(e) => setGoal(e.target.value)}
+                  placeholder="예: 나는 정보처리기사 실기 합격을 목표로 합니다."
+                  style={{
+                    padding: '6px 12px',
+                    border: '1px solid #ddd',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    minWidth: '600px',
+                    flex: 1
+                  }}
+                />
+              </div>
+            </div>
             <button
               onClick={generateAIAdvice}
               disabled={isGeneratingAdvice || !userData}
@@ -378,7 +398,8 @@ export default function MonthlyReport() {
                 padding: '8px 16px',
                 cursor: isGeneratingAdvice || !userData ? 'not-allowed' : 'pointer',
                 fontSize: '14px',
-                fontWeight: '500'
+                fontWeight: '500',
+                whiteSpace: 'nowrap'
               }}
             >
               {isGeneratingAdvice ? '생성 중...' : '조언 받기'}

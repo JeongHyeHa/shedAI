@@ -538,7 +538,7 @@ class AIController {
     // AI 조언 생성
     async generateAdvice(req, res) {
         try {
-            const { userData, activityAnalysis } = req.body;
+            const { userData, activityAnalysis, goal = '' } = req.body;
             
             if (!userData) {
                 return res.status(400).json({ 
@@ -547,7 +547,7 @@ class AIController {
                 });
             }
 
-            const advice = await aiService.generateDailyAdvice(userData, activityAnalysis);
+            const advice = await aiService.generateDailyAdvice(userData, activityAnalysis, goal);
             
             res.json({ 
                 ok: true, 
