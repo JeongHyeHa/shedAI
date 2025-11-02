@@ -1062,7 +1062,10 @@ function CalendarPage() {
       api?.removeAllEvents();
       
       updateSchedule({ schedule: withTasks });
-      addAIMessage("스케줄이 생성되었습니다!");
+      
+      // 서버에서 받은 explanation 또는 notes를 표시 (없으면 기본 메시지)
+      const explanation = apiResp?.explanation || (apiResp?.notes && apiResp.notes.length > 0 ? apiResp.notes.join('\n') : null) || "스케줄이 생성되었습니다!";
+      addAIMessage(explanation);
 
       const scheduleSessionId = await saveScheduleSessionUnified({
         uid: user.uid,

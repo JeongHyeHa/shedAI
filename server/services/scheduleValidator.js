@@ -197,11 +197,7 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
     const dayOfWeek = now.getDay();
     const baseRelDay = dayOfWeek === 0 ? 7 : dayOfWeek;
     
-    // 주말 정책 로깅
-    console.log(`[mergeAIPlacements] 주말 정책: ${weekendPolicy === 'rest' ? '주말 휴식 (배치 금지)' : '주말 허용'}`);
-    
     // 1) 검증 및 재배치
-    console.log('[mergeAIPlacements] 검증 및 재배치 시작, placements 개수:', placements.length);
     const validPlacements = validateAndRepair(
         placements, 
         freeWindows || {}, 
@@ -211,7 +207,6 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
         busy,
         weekendPolicy
     );
-    console.log('[mergeAIPlacements] 검증 완료, 유효 placements 개수:', validPlacements.length);
     
     // 2) 중복 제거
     const seen = new Set();
@@ -219,7 +214,6 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
         const taskId = p.task_id || p.taskId;
         const key = `${taskId}|${p.day}|${p.start}|${p.end}`;
         if (seen.has(key)) {
-            console.log(`[mergeAIPlacements] 중복 제거: ${taskId}`);
             return false;
         }
         seen.add(key);
@@ -231,7 +225,6 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
         const taskId = p.task_id || p.taskId;
         const task = tasksById[taskId];
         if (!task) {
-            console.warn(`[mergeAIPlacements] taskId ${taskId} 없음, 제거`);
             return null;
         }
         return {

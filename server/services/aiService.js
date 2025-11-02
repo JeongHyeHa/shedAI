@@ -2,7 +2,7 @@ const axios = require('axios');
 const https = require('https');
 const { hhmm, normalizeHHMM, timeToMinutes, minutesToTime, mapDayToWeekday, relDayToWeekdayNumber, extractAllowedDays } = require('../utils/scheduleUtils');
 const { convertLifestyleToBusy, parseLifestyleString } = require('../utils/lifestyleUtils');
-const { calculateFreeWindows } = require('../utils/freeWindowsUtils');
+const { calculateFreeWindows, splitLargeFreeWindows } = require('../utils/freeWindowsUtils');
 const { mergeAIPlacements } = require('./scheduleValidator');
 
 class AIService {
@@ -284,20 +284,44 @@ class AIService {
                 return baseRelDay + diffDays;
             };
             
-            const tasksForAI = tasksOnly.map((task, idx) => {
+                const tasksForAI = tasksOnly.map((task, idx) => {
                 const taskId = task.id || `t${idx + 1}`;
                 tasksById[taskId] = task;
                 
-                // 전략 계산: 중요/난이도 高 + 임박 마감
-                // 수정: (중요/난이도 高) AND (데드라인 임박)일 때만 120분
-                const urgent = daysUntil(task.deadline) <= 3;  // D-3 이내
+                // 전략 계산: 중요/난이도 高 + 임박 마감 + 집중 작업 여부
+                const daysUntilDeadline = daysUntil(task.deadline);
+                const urgent = daysUntilDeadline <= 3;  // D-3 이내
+                const veryUrgent = daysUntilDeadline <= 2;  // D-2 이내
                 const highPriority = task.importance === '상';
                 const highDifficulty = task.difficulty === '상';
                 const high = (highPriority || highDifficulty);
                 
-                // 규칙: (중요/난이도 高) AND (데드라인 임박)일 때만 120분
-                const minBlockMinutes = (high && urgent) ? 120 : 60;  // 분
+                // 집중해서 빠르게 끝낼 수 있는 작업 판단 (과제, 보고서, 발표 준비 등)
+                const canFocusFinish = /(과제|보고서|프로젝트|발표|문서|자료|준비|작성|정리)/.test(task.title || '');
+                
+                // 블록 길이 결정:
+                // 1) 매우 긴급 + 집중 작업: 180분 (3시간)
+                // 2) 긴급 + 집중 작업: 150분 (2.5시간)
+                // 3) 매우 긴급 + 고난이도: 150분
+                // 4) 긴급 + 고난이도: 120분
+                // 5) 나머지: 60분
+                let minBlockMinutes = 60;
+                if (veryUrgent && canFocusFinish) {
+                    minBlockMinutes = 180; // 3시간
+                } else if (urgent && canFocusFinish) {
+                    minBlockMinutes = 150; // 2.5시간
+                } else if (veryUrgent && high) {
+                    minBlockMinutes = 150; // 2.5시간
+                } else if (urgent && high) {
+                    minBlockMinutes = 120; // 2시간
+                } else if (high) {
+                    minBlockMinutes = 90; // 1.5시간
+                }
+                
                 const deadlineDay = getDeadlineDay(task.deadline);
+                
+                // 중요도와 난이도가 모두 상이면 매일 배치 필요
+                const bothHigh = highPriority && highDifficulty;
                 
                 const taskForAI = {
                     id: taskId,
@@ -307,23 +331,26 @@ class AIService {
                     difficulty: highDifficulty ? '상' : (task.difficulty === '중' ? '중' : '하'),
                     min_block_minutes: minBlockMinutes,
                     prefer_around: task.preferNear || '19:00',
+                    // 긴급도 정보 추가 (AI가 우선순위 판단에 사용)
+                    urgency_level: bothHigh ? '매우중요' : (veryUrgent ? '매우긴급' : (urgent ? '긴급' : '보통')),
+                    days_until_deadline: daysUntilDeadline,
+                    can_focus_finish: canFocusFinish,
+                    // 매일 배치 필요 플래그 (중요도+난이도 모두 상이거나, 긴급한 경우)
+                    require_daily: bothHigh || urgent || veryUrgent,
                     // 메타 정보 (검증용 - 서버에서만 사용)
                     _original: {
                         deadline: task.deadline,
-                        deadline_day: deadlineDay, // 추가: deadline_day를 _original에도 저장
+                        deadline_day: deadlineDay,
                         importance: task.importance || '중',
                         difficulty: task.difficulty || '중',
-                        daysUntil: daysUntil(task.deadline),
+                        daysUntil: daysUntilDeadline,
                         estimatedMinutes: task.estimatedMinutes || task.durationMin || 60
                     }
                 };
                 
-                // 디버깅: deadline_day 계산 로깅
-                console.log(`[prepareTasksForAI] ${task.title}: deadline_day=${deadlineDay}, deadline=${task.deadline}, daysUntil=${daysUntil(task.deadline)}, baseRelDay=${baseRelDay}`);
-                
                 return taskForAI;
             });
-            console.log('[새 아키텍처] tasksForAI 개수 (task만):', tasksForAI.length);
+            // tasksForAI 개수만 로깅 (상세 로그 제거)
             
             // === freeWindows 계산 ===
             // 수정: 개선된 calculateFreeWindows 사용 (겹침 병합, 경계 클램핑, nowFloor 지원)
@@ -339,14 +366,9 @@ class AIService {
                     baseNow: now,
                     minMinutes: 30
                 });
-                console.log('[새 아키텍처] freeWindows 계산 완료 (겹침 병합, 경계 클램핑 적용)');
-                for (const day of allowedDays.slice(0, 3)) { // 처음 3일만 로그
-                    const windows = freeWindows[day] || [];
-                    console.log(`  day ${day}: ${windows.length}개 자유 시간대`);
-                    if (windows.length > 0) {
-                        console.log(`    ${windows.map(w => `${w.start}-${w.end}`).join(', ')}`);
-                    }
-                }
+                
+                // 큰 free window를 2시간 단위로 분할 (최대한 활용)
+                freeWindows = splitLargeFreeWindows(freeWindows, 120, 60); // 2시간 단위, 최소 1시간
             } catch (fwError) {
                 console.error('[새 아키텍처] freeWindows 계산 실패:', fwError);
                 console.error('busy:', busy);
@@ -427,11 +449,18 @@ class AIService {
 **반드시 준수할 규칙:**
 1) 배치는 오직 제공된 free_windows 내부에서만
 2) **마감일 엄수**: 각 작업은 반드시 deadline_day를 넘기지 마세요 (deadline_day보다 큰 day에 배치 절대 금지)
-3) **중요도/난이도 상 작업**: (priority='상' 또는 difficulty='상')인 작업은 **마감일까지 여러 날에 걸쳐 충분히 배치**하세요. 특히 (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${baseRelDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하고, **여러 날에 분산 배치**하세요.
-4) 같은 날에 동일 작업은 가급적 1회, 부족하면 2회까지 분할
-5) 겹치기 금지, 생활패턴/고정일정 침범 금지
-6) **연속 작업 방지**: 같은 작업이나 다른 작업을 연속으로 배치할 때는 최소 30분 간격을 두세요 (예: 17:00-18:00 작업 후 다음 작업은 18:10 이후)
-7) **주말 정책**: ${weekendInstruction}
+3) **중요도+난이도 모두 상인 작업 (priority='상' AND difficulty='상')**: 반드시 **마감일까지 매일, 비슷한 시간에 배치**하세요. 예를 들어 "오픽 시험 준비"가 priority='상', difficulty='상'이면 deadline_day까지 **매일 매일 같은 시간대(예: 19:00-21:00)에 배치**해야 합니다. 하루도 빠뜨리지 마세요!
+4) **우선순위 기반 배치**: 
+   - **긴급 작업 (deadline_day <= ${baseRelDay + 3})**: 반드시 **매일 일정 시간 투자**하도록 배치하세요. 같은 작업을 여러 날에 걸쳐 매일 배치하여 마감일까지 꾸준히 진행하세요.
+   - **매우 긴급 (deadline_day <= ${baseRelDay + 2})**: 당일부터 매일 배치, 하루 2시간 이상 배치
+   - **긴급 (deadline_day <= ${baseRelDay + 4})**: 당일 또는 다음날부터 매일 배치, 하루 1시간 이상 배치
+5) **중요도/난이도 상 작업**: (priority='상' 또는 difficulty='상')인 작업은 **마감일까지 여러 날에 걸쳐 충분히 배치**하세요. 특히 (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${baseRelDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하고, **여러 날에 분산 배치**하세요.
+6) **마감일 임박 + 집중 작업**: 마감일이 얼마 안 남았고(deadline_day <= ${baseRelDay + 2}), 집중해서 빠르게 끝낼 수 있는 작업은 **긴 시간(2-3시간 블록)**을 투자하여 배치하세요. 한 번에 몰아서 끝내는 것이 효율적입니다.
+7) **빈 시간 최대한 활용**: free_windows에 제공된 **모든 빈 시간을 반드시 활용**하세요. 빈 시간이 많으면 같은 작업을 여러 번 배치하거나, 다른 작업들을 가능한 많은 빈 시간에 배치하세요. **빈 시간을 최대한 알뜰하게 채우는 것**이 목표입니다. 빈 시간을 놓치지 마세요!
+8) 같은 날에 동일 작업은 **여러 번 분할하여 배치 가능**합니다. 특히 긴급하거나 중요한 작업은 같은 날에 여러 번 배치하세요.
+9) 겹치기 금지, 생활패턴/고정일정 침범 금지
+10) **연속 작업 방지**: 같은 작업이나 다른 작업을 연속으로 배치할 때는 최소 30분 간격을 두세요 (예: 17:00-18:00 작업 후 다음 작업은 18:30 이후). **쉬는 시간을 반드시 포함**하세요.
+11) **주말 정책**: ${weekendInstruction}
 
 **입력 (tasks만 배치하세요):**
 \`\`\`json
@@ -447,12 +476,18 @@ class AIService {
   "placements": [
     { "task_id": "t1", "day": 8, "start": "17:00", "end": "19:00" },
     { "task_id": "t2", "day": 7, "start": "13:00", "end": "15:00" }
+  ],
+  "notes": [
+    "인턴 프로젝트 발표 준비를 마감일까지 매일 배치했습니다.",
+    "오픽 시험 준비는 중요도와 난이도가 모두 상이므로 매일 동일한 시간에 배치했습니다.",
+    "모든 빈 시간을 최대한 활용하여 작업을 배치했습니다."
   ]
 }
 \`\`\`
 
 **중요:**
-- 오직 "placements" 키만 포함하세요.
+- 오직 "placements"와 "notes" 키만 포함하세요.
+- "notes"는 스케줄 생성 이유와 배치 전략을 설명하는 문자열 배열입니다.
 - 각 placement는 반드시 제공된 tasks의 task_id만 사용하세요.
 - "schedule", "activities", "lifestyle", "appointment" 키워드는 절대 사용하지 마세요.`
             };
@@ -674,8 +709,6 @@ class AIService {
                 }
                 
                 // === 새 아키텍처: placements 구조 파싱 ===
-                console.log('=== AI 응답 파싱 (새 아키텍처) ===');
-                console.log('parsed 키들:', Object.keys(parsed));
                 
                 // placements 키 정규화 (snake_case → camelCase)
                 const normalizePlacement = (p) => ({
@@ -686,32 +719,27 @@ class AIService {
                     reason: p.reason || p.explanation || ''
                 });
                 
-                // placements, breaks, unplaced 구조 파싱
+                // placements, breaks, unplaced, notes 구조 파싱
                 let placements = [];
                 let breaks = [];
                 let unplaced = [];
                 let explanation = '';
+                let notes = [];
                 
                 // AI 응답 파싱: placements 배열 또는 schedule 구조
                 if (Array.isArray(parsed.placements)) {
-                    console.log('[새 아키텍처] placements 구조 사용');
                     placements = (parsed.placements || []).map(normalizePlacement);
                     breaks = parsed.breaks || [];
                     unplaced = parsed.unplaced || [];
                     explanation = parsed.explanation || parsed.reason || '';
-                    
-                    console.log(`[새 아키텍처] placements: ${placements.length}개`);
-                    console.log(`[새 아키텍처] breaks: ${breaks.length}개`);
-                    console.log(`[새 아키텍처] unplaced: ${unplaced.length}개`);
+                    notes = Array.isArray(parsed.notes) ? parsed.notes : (parsed.notes ? [parsed.notes] : []);
                 } else if (Array.isArray(parsed)) {
                     // AI가 placements 배열만 반환한 경우
-                    console.log('[새 아키텍처] placements 배열 직접 반환');
                     placements = (parsed || []).map(normalizePlacement);
                     breaks = [];
                     unplaced = [];
                     explanation = '';
-                    
-                    console.log(`[새 아키텍처] placements: ${placements.length}개`);
+                    notes = [];
                 } else {
                     // 레거시 호환: schedule/scheduleData 구조를 placements로 변환
                     // 수정: scheduleData도 지원
@@ -720,7 +748,7 @@ class AIService {
                                    : null;
                     
                     if (dayArrays) {
-                        console.log(`[레거시 호환] ${parsed.schedule ? 'schedule' : 'scheduleData'} 구조를 placements로 변환`);
+                        // 레거시 호환: schedule/scheduleData 구조를 placements로 변환
                         
                         // busy와 중복 체크를 위한 헬퍼 함수
                         // AI는 busy를 피해서 task만 배치하므로, 제목만 매칭하면 됨 (시간 무관)
@@ -735,7 +763,6 @@ class AIService {
                                 const bTitle = normalizeTitle(b.title);
                                 const actTitle = normalizeTitle(title);
                                 if (bTitle && actTitle && bTitle === actTitle) {
-                                    console.log(`[레거시 호환] busy와 제목 중복 (시간 무관): ${b.title} (busy: ${b.start}-${b.end}, AI: ${start}-${end})`);
                                     return true;
                                 }
                                 
@@ -819,7 +846,7 @@ class AIService {
                 // TODO: 나중에 userPreferences나 opts에서 받아올 수 있음
                 
                 // === 새 아키텍처: mergeAIPlacements로 병합 ===
-                console.log('[새 아키텍처] mergeAIPlacements 호출 시작');
+                // mergeAIPlacements 호출
                 
                 // 디버깅: placements에 "회의"가 포함되어 있는지 확인
                 const meetingPlacements = placements.filter(p => {
@@ -864,88 +891,66 @@ class AIService {
                     console.log('[새 아키텍처] day 8 최종 스케줄:', JSON.stringify(day8Schedule.activities, null, 2));
                 }
                 
-                // 🔒 마지막 안전망: busy와 placements 간 충돌 자동 수선
-                // [후보정 비활성화] AI 응답 신뢰 - 재검증/재병합 주석처리
-                /*
-                // mergeAIPlacements 내부에서 이미 validateAndRepair를 호출하지만,
-                // 최종 스케줄에서도 한 번 더 검증하여 겹침 제거
-                try {
-                    const { validateAndRepair: _validate } = require('./scheduleValidator');
-                    // finalSchedule을 placements 형태로 재변환하여 검증
-                    const schedulePlacements = [];
-                    for (const dayObj of finalSchedule) {
-                        for (const act of dayObj.activities || []) {
-                            if (act.type === 'task' && act.taskId) {
-                                schedulePlacements.push({
-                                    taskId: act.taskId,
-                                    day: dayObj.day,
-                                    start: act.start,
-                                    end: act.end
-                                });
-                            }
-                        }
-                    }
-                    
-                    // 재검증 및 재배치
-                    const repairedPlacements = _validate(
-                        schedulePlacements,
-                        freeWindows || {},
-                        tasksById,
-                        now,
-                        baseRelDay,
-                        busy,
-                        weekendPolicy
-                    );
-                    
-                    // 재검증된 placements가 있고 원본과 다르면 다시 병합
-                    if (Array.isArray(repairedPlacements) && repairedPlacements.length !== schedulePlacements.length) {
-                        console.log('[새 아키텍처] 재검증 완료, 재병합 시작');
-                        finalSchedule = this.mergeAIPlacements({
-                            baseDate: now,
-                            busy,
-                            placements: repairedPlacements,
-                            breaks,
-                            tasksById,
-                            freeWindows,
-                            weekendPolicy
-                        });
-                        console.log('[새 아키텍처] 재병합 완료');
-                    }
-                } catch (validateError) {
-                    console.warn('[새 아키텍처] 최종 검증 실패 (무시 가능):', validateError.message);
-                    // 검증 실패해도 기존 finalSchedule 사용
-                }
-                */
-                console.log('[새 아키텍처] 후보정 비활성화: AI 원본 응답 사용');
-                console.log('[새 아키텍처] unplaced 개수:', unplaced.length);
-                
-                // 설명 자동 생성
+                // 설명 자동 생성 (더 상세하게)
                 const buildFallbackExplanationNew = (schedule, tasks, unplacedCount) => {
                     const taskCount = schedule.reduce((sum, day) => 
                         sum + (day.activities?.filter(a => a.type === 'task').length || 0), 0);
-                    const highPriorityTasks = tasks.filter(t => t.importance === '상').length;
+                    const highPriorityTasks = tasks.filter(t => t.importance === '상' || t.difficulty === '상').length;
+                    const urgentTasks = tasks.filter(t => {
+                        const deadlineDay = t.deadline_day || 999;
+                        return deadlineDay <= 5; // D-5 이내
+                    }).length;
                     const days = schedule.length;
                     
-                    let msg = `총 ${days}일간의 스케줄을 생성했습니다. ${taskCount}개의 작업을 배치했으며, ${highPriorityTasks}개의 고우선순위 작업을 포함합니다.`;
-                    if (unplacedCount > 0) {
-                        msg += ` ${unplacedCount}개의 작업은 마감일 내에 배치할 시간이 부족하여 미배치되었습니다.`;
+                    // 배치된 작업별 통계
+                    const taskStats = {};
+                    for (const day of schedule) {
+                        for (const act of day.activities || []) {
+                            if (act.type === 'task' && act.title) {
+                                taskStats[act.title] = (taskStats[act.title] || 0) + 1;
+                            }
+                        }
                     }
+                    const taskList = Object.entries(taskStats)
+                        .map(([title, count]) => `- ${title}: ${count}회 배치`)
+                        .join('\n');
+                    
+                    let msg = `📅 스케줄 생성 완료!\n\n`;
+                    msg += `**기간**: ${days}일간 (오늘부터 ${days}일 후까지)\n`;
+                    msg += `**총 배치 작업**: ${taskCount}개\n`;
+                    if (highPriorityTasks > 0) {
+                        msg += `**고우선순위 작업**: ${highPriorityTasks}개 (중요도/난이도 상)\n`;
+                    }
+                    if (urgentTasks > 0) {
+                        msg += `**긴급 작업**: ${urgentTasks}개 (마감일 D-5 이내)\n`;
+                    }
+                    if (taskList) {
+                        msg += `\n**배치 내역**:\n${taskList}\n`;
+                    }
+                    if (unplacedCount > 0) {
+                        msg += `\n⚠️ **미배치 작업**: ${unplacedCount}개 (마감일 내 시간 부족)`;
+                    }
+                    msg += `\n\n빈 시간을 최대한 활용하여 일정을 배치했습니다. 각 작업 사이에는 휴식 시간(30분)이 포함되어 있습니다.`;
+                    
                     return msg;
                 };
+                
+                // notes를 explanation에 통합 (notes가 있으면 우선 사용)
+                let finalExplanation = '';
+                if (notes.length > 0) {
+                    finalExplanation = notes.join('\n');
+                } else if (explanation?.trim()) {
+                    finalExplanation = explanation.trim();
+                } else {
+                    finalExplanation = buildFallbackExplanationNew(finalSchedule, tasksOnly, unplaced.length);
+                }
                 
                 // === 새 아키텍처: 최종 반환 ===
                 return {
                     schedule: finalSchedule,
-                    explanation: explanation?.trim() || buildFallbackExplanationNew(finalSchedule, tasksOnly, unplaced.length),
-                    unplaced: unplaced,
-                    __debug: {
-                        allowedDays,
-                        anchorDay,
-                        mode: 'placements',
-                        busyCount: busy.length,
-                        placementsCount: placements.length,
-                        unplacedCount: unplaced.length
-                    }
+                    explanation: finalExplanation,
+                    notes: notes,
+                    unplaced: unplaced
                 };
             } catch (parseError) {
                 console.error('AI 응답 JSON 파싱 실패:', parseError);

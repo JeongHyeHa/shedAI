@@ -121,6 +121,69 @@ function calculateFreeWindows(
   return freeWindows;
 }
 
+/**
+ * 큰 free window를 2시간 단위로 분할 (최대한 활용)
+ * - 2시간 이상이면 2시간 단위로 자르기
+ * - 마지막 남은 부분은 1시간 이상이면 그대로 사용, 아니면 제거
+ * - 예: 6시간 블록 → [2시간, 2시간, 2시간] 또는 [2시간, 2시간, 남은 시간]
+ *
+ * @param {Object<number, Array<{start:string, end:string}>>} freeWindows
+ * @param {number} [chunkMinutes=120] - 분할할 단위 (기본 2시간)
+ * @param {number} [minChunkMinutes=60] - 최소 허용 단위 (기본 1시간)
+ */
+function splitLargeFreeWindows(freeWindows, chunkMinutes = 120, minChunkMinutes = 60) {
+  const toMinSafe = (t) => (t === '24:00' ? 24 * 60 : timeToMinutes(t));
+  const result = {};
+  
+  for (const [day, windows] of Object.entries(freeWindows || {})) {
+    const dayNum = Number(day);
+    if (!Array.isArray(windows)) continue;
+    
+    const splitWindows = [];
+    
+    for (const win of windows) {
+      const startMin = toMinSafe(win.start);
+      const endMin = toMinSafe(win.end);
+      const duration = endMin - startMin;
+      
+      // chunkMinutes보다 작으면 그대로 사용
+      if (duration <= chunkMinutes) {
+        splitWindows.push(win);
+        continue;
+      }
+      
+      // chunkMinutes 단위로 자르기
+      let cursor = startMin;
+      while (cursor < endMin) {
+        const remaining = endMin - cursor;
+        
+        // 남은 시간이 minChunkMinutes보다 작으면 중단 (너무 작은 조각 제거)
+        if (remaining < minChunkMinutes) {
+          break;
+        }
+        
+        // 남은 시간이 chunkMinutes 이상이면 chunkMinutes만큼, 아니면 남은 시간만큼
+        const chunkSize = remaining >= chunkMinutes ? chunkMinutes : remaining;
+        const chunkEnd = cursor + chunkSize;
+        
+        splitWindows.push({
+          start: minutesToTime(cursor),
+          end: minutesToTime(chunkEnd)
+        });
+        
+        cursor = chunkEnd;
+      }
+    }
+    
+    if (splitWindows.length > 0) {
+      result[dayNum] = splitWindows;
+    }
+  }
+  
+  return result;
+}
+
 module.exports = {
-    calculateFreeWindows
+    calculateFreeWindows,
+    splitLargeFreeWindows
 };
