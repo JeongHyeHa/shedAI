@@ -229,10 +229,10 @@ class ApiService {
   }
 
   // 피드백 제출
-  async submitFeedback(sessionId, scheduleId, feedbackText) {
+  async submitFeedback(userId, scheduleId, feedbackText) {
     return this.request('/api/feedback', {
       method: 'POST',
-      body: JSON.stringify({ sessionId, scheduleId, feedbackText })
+      body: JSON.stringify({ userId, sessionId: userId, scheduleId, feedbackText })
     });
   }
 }

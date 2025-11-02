@@ -246,16 +246,48 @@ class FirestoreService {
         }
     }
 
-    // 피드백 저장
-    async saveFeedback(userId, feedbackText, rating) {
+    // 피드백 저장 (구조화된 형태)
+    async saveFeedback(userId, feedbackText, rating, metadata = {}) {
         try {
             const feedbackRef = db.collection('users').doc(userId).collection('feedbacks');
-            const docRef = await feedbackRef.add({
-                feedbackText,
+            
+            // 피드백에서 패턴 추출
+            const lowerText = (feedbackText || '').toLowerCase();
+            const patterns = {
+                weekendRest: /(주말|토요일|일요일).*(쉬|안|못|금지|배치.*말|안.*해|쉴|휴식)/.test(lowerText),
+                morningPreference: /(오전|아침|새벽|일찍|평일.*오전).*(작업|공부|할일|일정)/i.test(lowerText),
+                eveningPreference: /(오후|저녁|밤|늦|21시|9시.*이후|오후.*9시).*(작업|공부|할일|일정|빈.*시간)/i.test(lowerText),
+                timePreference: lowerText.match(/(\d+)시.*이후|오후\s*(\d+)시/i) ? true : false
+            };
+            
+            // 구조화된 피드백 문서 생성
+            const feedbackDoc = {
+                // 기본 정보
+                feedbackText: feedbackText,
                 rating: typeof rating === 'number' ? rating : null,
-                createdAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-            console.log(`[Firestore] 피드백 저장 완료: ${docRef.id}`);
+                
+                // 메타데이터
+                type: metadata.type || 'general', // 'general', 'schedule_preference', 'time_preference', etc.
+                scheduleId: metadata.scheduleId || null,
+                sessionId: metadata.sessionId || null,
+                
+                // 추출된 패턴
+                patterns: patterns,
+                
+                // 추가 메타데이터
+                metadata: {
+                    userAgent: metadata.userAgent || null,
+                    source: metadata.source || 'manual', // 'manual', 'chat', 'ui'
+                    ...metadata.additionalData
+                },
+                
+                // 타임스탬프
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            };
+            
+            const docRef = await feedbackRef.add(feedbackDoc);
+            console.log(`[Firestore] 피드백 저장 완료: ${docRef.id} (타입: ${feedbackDoc.type})`);
             return docRef.id;
         } catch (error) {
             console.error('[Firestore] 피드백 저장 실패:', error);
@@ -396,16 +428,72 @@ class FirestoreService {
         return false;
     }
 
-    async getFeedbacks(userId) {
-            try {
-              const ref = db.collection('users').doc(userId).collection('feedbacks');
-              const snap = await ref.orderBy('createdAt', 'desc').get();
-              return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-            } catch (e) {
-              console.error('[Firestore] 피드백 목록 조회 실패:', e);
-              return [];
+    // 피드백 목록 조회
+    async getFeedbacks(userId, options = {}) {
+        try {
+            const ref = db.collection('users').doc(userId).collection('feedbacks');
+            let query = ref.orderBy('createdAt', 'desc');
+            
+            // 타입 필터링 (선택적)
+            if (options.type) {
+                query = query.where('type', '==', options.type);
             }
-          }
+            
+            // 개수 제한 (선택적, 기본 50개)
+            const limit = options.limit || 50;
+            query = query.limit(limit);
+            
+            const snap = await query.get();
+            return snap.docs.map(d => ({ 
+                id: d.id, 
+                ...d.data(),
+                // createdAt을 Date로 변환
+                createdAt: d.data().createdAt?.toDate ? d.data().createdAt.toDate() : d.data().createdAt
+            }));
+        } catch (e) {
+            console.error('[Firestore] 피드백 목록 조회 실패:', e);
+            return [];
+        }
+    }
+    
+    // 피드백 패턴 조회 (시간대 선호도, 주말 정책 등)
+    async getFeedbackPatterns(userId) {
+        try {
+            const feedbacks = await this.getFeedbacks(userId, { limit: 20 });
+            
+            // 최근 피드백에서 패턴 집계
+            const patterns = {
+                weekendRest: false,
+                morningPreference: false,
+                eveningPreference: false,
+                timePreference: null,
+                lastUpdated: null
+            };
+            
+            if (feedbacks.length > 0) {
+                // 최신 피드백의 패턴 사용
+                const latest = feedbacks[0];
+                if (latest.patterns) {
+                    patterns.weekendRest = latest.patterns.weekendRest || false;
+                    patterns.morningPreference = latest.patterns.morningPreference || false;
+                    patterns.eveningPreference = latest.patterns.eveningPreference || false;
+                    patterns.timePreference = latest.patterns.timePreference || false;
+                }
+                patterns.lastUpdated = latest.createdAt;
+            }
+            
+            return patterns;
+        } catch (e) {
+            console.error('[Firestore] 피드백 패턴 조회 실패:', e);
+            return {
+                weekendRest: false,
+                morningPreference: false,
+                eveningPreference: false,
+                timePreference: null,
+                lastUpdated: null
+            };
+        }
+    }
 }
 
 module.exports = new FirestoreService();

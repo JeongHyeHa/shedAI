@@ -27,7 +27,7 @@ export function useFeedbackManagement() {
         text
       );
 
-      if (response.success) {
+      if (response.ok || response.success) {
         // 성공 콜백 실행
         if (onSuccess) {
           onSuccess(text, response.analysis, response.advice);

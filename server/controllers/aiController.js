@@ -233,6 +233,35 @@ class AIController {
                 }
             }
 
+            // 피드백 조회 및 반영
+            let userFeedback = '';
+            if (userId) {
+                try {
+                    const firestoreService = require('../services/firestoreService');
+                    const feedbacks = await firestoreService.getFeedbacks(userId);
+                    if (Array.isArray(feedbacks) && feedbacks.length > 0) {
+                        // 최근 피드백 5개만 사용 (너무 많으면 프롬프트가 길어짐)
+                        const recentFeedbacks = feedbacks.slice(0, 5).map(f => f.feedbackText || '').filter(Boolean);
+                        if (recentFeedbacks.length > 0) {
+                            userFeedback = `\n\n**사용자 피드백/선호도:**\n${recentFeedbacks.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[AI Controller] 피드백 조회 실패:', e.message);
+                }
+            }
+            
+            // 피드백을 messages에 추가
+            if (userFeedback) {
+                // 마지막 user 메시지에 피드백 추가
+                if (messageArray.length > 0 && messageArray[messageArray.length - 1].role === 'user') {
+                    messageArray[messageArray.length - 1].content += userFeedback;
+                } else {
+                    // user 메시지가 없으면 새로 추가
+                    messageArray.push({ role: 'user', content: `스케줄 생성 요청${userFeedback}` });
+                }
+            }
+            
             // AI 서비스 호출
             console.log('[AI Controller] AI 서비스로 전달할 할 일:', existingTasks.length, '개');
             console.log('[AI Controller] AI 서비스 호출 시작 - 메시지:', messageArray.length, '개, 생활패턴:', parsedLifestylePatterns.length, '개');
@@ -241,7 +270,7 @@ class AIController {
                 messageArray,
                 parsedLifestylePatterns,
                 existingTasks,
-                { nowOverride, anchorDay }
+                { nowOverride, anchorDay, userFeedback }
             );
             
              try {
@@ -474,7 +503,7 @@ class AIController {
     // 피드백 저장
     async saveFeedback(req, res) {
         try {
-            const { userId, sessionId, scheduleId, feedbackText, feedback, rating } = req.body;
+            const { userId, sessionId, scheduleId, feedbackText, feedback, rating, type } = req.body;
             
             // 클라이언트에서 feedbackText 또는 feedback으로 보낼 수 있음
             const feedbackContent = feedbackText || feedback;
@@ -487,10 +516,22 @@ class AIController {
             }
 
             const firestoreService = require('../services/firestoreService');
-            await firestoreService.saveFeedback(userId, feedbackContent, rating);
+            
+            // 메타데이터 구성
+            const metadata = {
+                type: type || 'general',
+                scheduleId: scheduleId || null,
+                sessionId: sessionId || null,
+                userAgent: req.headers['user-agent'] || null,
+                source: 'manual'
+            };
+            
+            const feedbackId = await firestoreService.saveFeedback(userId, feedbackContent, rating, metadata);
             
             res.json({ 
-                ok: true, 
+                ok: true,
+                success: true,
+                feedbackId: feedbackId,
                 message: '피드백이 저장되었습니다.' 
             });
         } catch (error) {

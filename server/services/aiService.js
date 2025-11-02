@@ -421,22 +421,31 @@ class AIService {
             
             if (weekendOptOut.test(clean)) {
                 weekendPolicy = 'rest';
-                console.log('[새 아키텍처] 사용자 피드백: 주말 휴식 모드 활성화');
             } else if (weekendOptIn.test(clean)) {
                 weekendPolicy = 'allow';
-                console.log('[새 아키텍처] 사용자 피드백: 주말 허용 모드 활성화');
-            } else {
-                console.log('[새 아키텍처] 주말 정책: 기본값 (주말 허용)');
             }
+            
+            // 피드백에서 시간대 선호도 추출 (오전/오후 작업형)
+            const morningPreference = /(오전|아침|새벽|일찍|평일.*오전).*(작업|공부|할일|일정)/i.test(clean);
+            const eveningPreference = /(오후|저녁|밤|늦|21시|9시.*이후|오후.*9시).*(작업|공부|할일|일정|빈.*시간)/i.test(clean);
             
             // 프롬프트에 주말 정책 반영
             const weekendInstruction = weekendPolicy === 'rest' 
                 ? '사용자가 주말에는 쉬고 싶다고 했습니다. 주말(day:6 토요일, day:7 일요일)에는 할 일을 배치하지 마세요.'
                 : '주말(day:6 토요일, day:7 일요일)도 스케줄 배치가 가능합니다. 필요한 경우 주말에도 배치하세요.';
             
+            // 피드백 기반 시간대 선호도 반영
+            let timePreferenceInstruction = '';
+            if (morningPreference) {
+                timePreferenceInstruction = '\n- **오전 작업 선호**: 사용자가 오전 시간대 작업을 선호합니다. 가능한 한 오전 시간(00:00-12:00)에 작업을 배치하세요.';
+            }
+            if (eveningPreference) {
+                timePreferenceInstruction += '\n- **저녁 시간 활용**: 사용자가 오후 9시(21:00) 이후 시간대를 활용하고 싶어합니다. 21:00 이후 빈 시간에도 작업을 배치하세요.';
+            }
+            
             const systemPrompt = {
                 role: 'system',
-                content: `당신은 할 일(task) 배치 전문가입니다. 오직 제공된 tasks만 placements 형식으로 배치하세요.
+                content: `당신은 할 일(task) 배치 전문가입니다. 오직 제공된 tasks만 placements 형식으로 배치하세요.${timePreferenceInstruction}
 
 **현재 날짜: ${year}년 ${month}월 ${date}일 (${currentDayName})**
 **기준 day: ${anchorDay}**

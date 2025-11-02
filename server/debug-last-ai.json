@@ -1,5 +1,5 @@
 {
-  "schedule": [
+  "scheduleData": [
     {
       "day": 1,
       "weekday": "월요일",
@@ -23,14 +23,14 @@
           "type": "task"
         },
         {
-          "start": "19:00",
-          "end": "20:00",
-          "title": "회의",
+          "start": "20:00",
+          "end": "21:00",
+          "title": "오픽 시험 준비",
           "type": "task"
         },
         {
-          "start": "20:00",
-          "end": "21:00",
+          "start": "21:00",
+          "end": "22:00",
           "title": "오픽 시험 준비",
           "type": "task"
         }
@@ -53,14 +53,26 @@
           "type": "lifestyle"
         },
         {
+          "start": "14:00",
+          "end": "15:00",
+          "title": "회의",
+          "type": "task"
+        },
+        {
           "start": "17:00",
           "end": "19:00",
           "title": "인턴 프로젝트 발표 준비",
           "type": "task"
         },
         {
-          "start": "19:00",
-          "end": "20:00",
+          "start": "20:00",
+          "end": "21:00",
+          "title": "오픽 시험 준비",
+          "type": "task"
+        },
+        {
+          "start": "21:00",
+          "end": "22:00",
           "title": "오픽 시험 준비",
           "type": "task"
         }
@@ -85,6 +97,18 @@
         {
           "start": "17:00",
           "end": "19:00",
+          "title": "오픽 시험 준비",
+          "type": "task"
+        },
+        {
+          "start": "20:00",
+          "end": "21:00",
+          "title": "오픽 시험 준비",
+          "type": "task"
+        },
+        {
+          "start": "21:00",
+          "end": "22:00",
           "title": "오픽 시험 준비",
           "type": "task"
         }
@@ -113,8 +137,14 @@
           "type": "task"
         },
         {
-          "start": "19:00",
-          "end": "20:00",
+          "start": "20:00",
+          "end": "21:00",
+          "title": "오픽 시험 준비",
+          "type": "task"
+        },
+        {
+          "start": "21:00",
+          "end": "22:00",
           "title": "오픽 시험 준비",
           "type": "task"
         }
@@ -141,6 +171,18 @@
           "end": "19:00",
           "title": "오픽 시험 준비",
           "type": "task"
+        },
+        {
+          "start": "20:00",
+          "end": "21:00",
+          "title": "오픽 시험 준비",
+          "type": "task"
+        },
+        {
+          "start": "21:00",
+          "end": "22:00",
+          "title": "오픽 시험 준비",
+          "type": "task"
         }
       ]
     },
@@ -165,12 +207,6 @@
           "end": "12:00",
           "title": "수면",
           "type": "lifestyle"
-        },
-        {
-          "start": "17:00",
-          "end": "19:00",
-          "title": "오픽 시험 준비",
-          "type": "task"
         }
       ]
     },
@@ -288,5 +324,29 @@
         }
       ]
     }
-  ]
+  ],
+  "taxonomy": [
+    {
+      "name": "Study",
+      "description": "학습 및 준비 활동"
+    },
+    {
+      "name": "Commute",
+      "description": "출퇴근 및 이동 시간"
+    },
+    {
+      "name": "Sleep",
+      "description": "수면 시간"
+    },
+    {
+      "name": "Work",
+      "description": "업무 관련 활동"
+    }
+  ],
+  "activityAnalysis": {
+    "Study": 40,
+    "Commute": 10,
+    "Sleep": 45,
+    "Work": 5
+  }
 }
