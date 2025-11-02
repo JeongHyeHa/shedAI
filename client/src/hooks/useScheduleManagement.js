@@ -365,6 +365,21 @@ export const useScheduleManagement = (setAllEvents) => {
       }
 
       try { console.debug('[AI raw schedule]', JSON.stringify(scheduleArr, null, 2)); } catch {}
+      
+      // 디버깅: 서버에서 받은 스케줄의 day 2 확인
+      const day2FromServer = scheduleArr.find(d => d.day === 2);
+      if (day2FromServer) {
+        const meetingActs = day2FromServer.activities.filter(a => a.title && a.title.includes('회의'));
+        if (meetingActs.length > 0) {
+          console.warn(`[useScheduleManagement] 서버 응답 day 2에 "회의" 포함:`, meetingActs.map(a => ({
+            title: a.title,
+            type: a.type,
+            start: a.start,
+            end: a.end,
+            source: a.source
+          })));
+        }
+      }
 
       if (!scheduleArr.length) {
         throw new Error('EMPTY_SCHEDULE_FROM_SERVER');

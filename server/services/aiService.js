@@ -168,23 +168,30 @@ class AIService {
             const tasksOnly = [];
             
             // 고정 일정 키워드
-            const EVENT_KEYWORDS = ['회의', '미팅', '수업', '세미나', '발표', '진료', '인터뷰', '약속', '행사', '촬영', '면담', '상담', '강의', '시험'];
+            const EVENT_KEYWORDS = ['회의', '미팅', '수업', '세미나', '발표', '진료', '인터뷰', '약속', '행사', '촬영', '면담', '상담', '강의'];
             // 이벤트가 아닌 힌트 (준비/공부/연습이 포함되면 task로 처리)
             const NON_EVENT_HINTS = ['준비', '공부', '연습'];
-            
             for (const task of (existingTasks || [])) {
                 const taskType = task.type || 'task';
                 const taskTitle = (task.title || '').trim();
                 
-                // 이벤트 판정: 키워드가 있어도 "준비/공부/연습"이 포함되면 task로 처리
+                // 이벤트 판정: 키워드와 힌트 체크
                 const hasEventKeyword = EVENT_KEYWORDS.some(k => taskTitle.includes(k));
                 const hasNonEventHint = NON_EVENT_HINTS.some(k => taskTitle.includes(k));
                 
+                // "준비/공부/연습"이 포함되면 무조건 task로 처리 (deadlineTime이 있어도 task)
+                // 예: "발표 준비", "시험 준비", "인턴 프로젝트 발표 준비", "오픽 시험 준비"
+                if (hasNonEventHint) {
+                    // "준비" 등 힌트가 있으면 task로 처리
+                    tasksOnly.push(task);
+                    continue;
+                }
+                
+                // 이벤트 판정: "준비" 힌트가 없을 때만 이벤트 판정
                 const isEvent = 
-                    taskType === 'appointment' || 
-                    taskType === 'event' || 
-                    task.deadlineTime ||
-                    (hasEventKeyword && !hasNonEventHint);
+                    (taskType === 'appointment' || taskType === 'event') ||
+                    (task.deadlineTime) ||
+                    (hasEventKeyword);
                 
                 if (isEvent) {
                     // 1) 날짜 산출: deadline | date | startDate | occursOn(day) 순서
@@ -202,7 +209,14 @@ class AIService {
                     // occursOn이 상대 day 숫자로 들어오는 경우도 허용
                     let taskDay = null;
                     if (eventDate instanceof Date && !isNaN(eventDate.getTime())) {
-                        const daysDiff = Math.floor((eventDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                        // 타임존 문제 방지: 날짜만 비교 (자정 기준)
+                        const eventMidnight = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+                        const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                        const msDiff = eventMidnight.getTime() - nowMidnight.getTime();
+                        // 미래 날짜는 올림, 과거 날짜는 내림 (0일 깎임 방지)
+                        const daysDiff = msDiff >= 0 
+                            ? Math.ceil(msDiff / (1000 * 60 * 60 * 24))   // 미래는 올림
+                            : Math.floor(msDiff / (1000 * 60 * 60 * 24)); // 과거는 내림
                         taskDay = baseRelDay + daysDiff;
                     } else if (Number.isFinite(task.occursOn)) {
                         taskDay = task.occursOn;
@@ -285,7 +299,7 @@ class AIService {
                 const minBlockMinutes = (high && urgent) ? 120 : 60;  // 분
                 const deadlineDay = getDeadlineDay(task.deadline);
                 
-                return {
+                const taskForAI = {
                     id: taskId,
                     title: task.title,
                     deadline_day: deadlineDay,
@@ -296,12 +310,18 @@ class AIService {
                     // 메타 정보 (검증용 - 서버에서만 사용)
                     _original: {
                         deadline: task.deadline,
+                        deadline_day: deadlineDay, // 추가: deadline_day를 _original에도 저장
                         importance: task.importance || '중',
                         difficulty: task.difficulty || '중',
                         daysUntil: daysUntil(task.deadline),
                         estimatedMinutes: task.estimatedMinutes || task.durationMin || 60
                     }
                 };
+                
+                // 디버깅: deadline_day 계산 로깅
+                console.log(`[prepareTasksForAI] ${task.title}: deadline_day=${deadlineDay}, deadline=${task.deadline}, daysUntil=${daysUntil(task.deadline)}, baseRelDay=${baseRelDay}`);
+                
+                return taskForAI;
             });
             console.log('[새 아키텍처] tasksForAI 개수 (task만):', tasksForAI.length);
             
@@ -394,20 +414,26 @@ class AIService {
             
             const systemPrompt = {
                 role: 'system',
-                content: `당신은 스케줄러입니다. 제공된 free_windows 안에서만 tasks를 배치하세요.
+                content: `당신은 할 일(task) 배치 전문가입니다. 오직 제공된 tasks만 placements 형식으로 배치하세요.
 
 **현재 날짜: ${year}년 ${month}월 ${date}일 (${currentDayName})**
 **기준 day: ${anchorDay}**
 
-**규칙 (가능한 한 따르세요):**
-1) 배치는 제공된 free_windows 내부에서만
-2) 각 작업은 deadline_day를 넘기지 마세요
-3) (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${baseRelDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하세요.
+**절대 금지 사항:**
+- lifestyle, appointment, schedule 형식 생성 금지
+- 제공되지 않은 tasks 생성 금지
+- 기존 생활패턴이나 고정일정 중복 생성 금지
+
+**반드시 준수할 규칙:**
+1) 배치는 오직 제공된 free_windows 내부에서만
+2) **마감일 엄수**: 각 작업은 반드시 deadline_day를 넘기지 마세요 (deadline_day보다 큰 day에 배치 절대 금지)
+3) **중요도/난이도 상 작업**: (priority='상' 또는 difficulty='상')인 작업은 **마감일까지 여러 날에 걸쳐 충분히 배치**하세요. 특히 (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${baseRelDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하고, **여러 날에 분산 배치**하세요.
 4) 같은 날에 동일 작업은 가급적 1회, 부족하면 2회까지 분할
 5) 겹치기 금지, 생활패턴/고정일정 침범 금지
-6) **주말 정책**: ${weekendInstruction}
+6) **연속 작업 방지**: 같은 작업이나 다른 작업을 연속으로 배치할 때는 최소 30분 간격을 두세요 (예: 17:00-18:00 작업 후 다음 작업은 18:10 이후)
+7) **주말 정책**: ${weekendInstruction}
 
-**입력:**
+**입력 (tasks만 배치하세요):**
 \`\`\`json
 {
   "free_windows": ${JSON.stringify(freeWindowsList, null, 2)},
@@ -415,7 +441,7 @@ class AIService {
 }
 \`\`\`
 
-**출력 형식:**
+**출력 (반드시 이 형식만 사용, 다른 형식 금지):**
 \`\`\`json
 {
   "placements": [
@@ -425,7 +451,10 @@ class AIService {
 }
 \`\`\`
 
-placements 배열만 반환하세요.`
+**중요:**
+- 오직 "placements" 키만 포함하세요.
+- 각 placement는 반드시 제공된 tasks의 task_id만 사용하세요.
+- "schedule", "activities", "lifestyle", "appointment" 키워드는 절대 사용하지 마세요.`
             };
 
             // 시스템 프롬프트를 맨 앞에 추가
@@ -498,40 +527,84 @@ placements 배열만 반환하세요.`
             try {
                 console.log('AI 원본 응답 길이:', content.length);
                 
-                // 여러 JSON 객체가 있을 수 있으므로 가장 큰 것 찾기
+                // 1) 코드블록에서 JSON 추출 (```json ... ``` 또는 ``` ... ```)
                 let bestJson = null;
+                const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/g;
+                let match;
                 let maxLength = 0;
                 
-                // { 로 시작하는 모든 JSON 객체 찾기
-                let start = 0;
-                while (start < content.length) {
-                    const jsonStart = content.indexOf('{', start);
-                    if (jsonStart === -1) break;
-                    
-                    // 이 위치에서 시작하는 JSON 객체의 끝 찾기
-                    let braceCount = 0;
-                    let jsonEnd = -1;
-                    
-                    for (let i = jsonStart; i < content.length; i++) {
-                        if (content[i] === '{') braceCount++;
-                        else if (content[i] === '}') {
-                            braceCount--;
-                            if (braceCount === 0) {
-                                jsonEnd = i;
-                                break;
+                while ((match = codeBlockRegex.exec(content)) !== null) {
+                    const jsonCandidate = match[1].trim();
+                    if (jsonCandidate.length > maxLength) {
+                        bestJson = jsonCandidate;
+                        maxLength = jsonCandidate.length;
+                    }
+                }
+                
+                // 2) 코드블록이 없으면 직접 JSON 파싱 시도
+                if (!bestJson) {
+                    try {
+                        const directParse = JSON.parse(content.trim());
+                        bestJson = content.trim();
+                    } catch (e) {
+                        // 여러 JSON 객체가 있을 수 있으므로 가장 큰 것 찾기
+                        // { 로 시작하는 모든 JSON 객체 찾기
+                        let start = 0;
+                        while (start < content.length) {
+                            const jsonStart = content.indexOf('{', start);
+                            if (jsonStart === -1) break;
+                            
+                            // 이 위치에서 시작하는 JSON 객체의 끝 찾기 (문자열 처리 개선)
+                            let braceCount = 0;
+                            let jsonEnd = -1;
+                            let inString = false;
+                            let escapeNext = false;
+                            
+                            for (let i = jsonStart; i < content.length; i++) {
+                                const char = content[i];
+                                
+                                if (escapeNext) {
+                                    escapeNext = false;
+                                    continue;
+                                }
+                                
+                                if (char === '\\') {
+                                    escapeNext = true;
+                                    continue;
+                                }
+                                
+                                if (char === '"' && !escapeNext) {
+                                    inString = !inString;
+                                }
+                                
+                                if (!inString) {
+                                    if (char === '{') braceCount++;
+                                    else if (char === '}') {
+                                        braceCount--;
+                                        if (braceCount === 0) {
+                                            jsonEnd = i;
+                                            break;
+                                        }
+                                    }
+                                }
                             }
+                            
+                            if (jsonEnd !== -1) {
+                                const jsonString = content.substring(jsonStart, jsonEnd + 1);
+                                try {
+                                    JSON.parse(jsonString); // 유효성 검증
+                                    if (jsonString.length > maxLength) {
+                                        bestJson = jsonString;
+                                        maxLength = jsonString.length;
+                                    }
+                                } catch (e) {
+                                    // 유효하지 않은 JSON, 무시
+                                }
+                            }
+                            
+                            start = jsonStart + 1;
                         }
                     }
-                    
-                    if (jsonEnd !== -1) {
-                        const jsonString = content.substring(jsonStart, jsonEnd + 1);
-                        if (jsonString.length > maxLength) {
-                            bestJson = jsonString;
-                            maxLength = jsonString.length;
-                        }
-                    }
-                    
-                    start = jsonStart + 1;
                 }
                 
                 if (!bestJson) {
@@ -648,43 +721,91 @@ placements 배열만 반환하세요.`
                     
                     if (dayArrays) {
                         console.log(`[레거시 호환] ${parsed.schedule ? 'schedule' : 'scheduleData'} 구조를 placements로 변환`);
+                        
+                        // busy와 중복 체크를 위한 헬퍼 함수
+                        // AI는 busy를 피해서 task만 배치하므로, 제목만 매칭하면 됨 (시간 무관)
+                        const isOverlappingWithBusy = (day, start, end, title) => {
+                            const normalizeTitle = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '');
+                            
+                            return busy.some(b => {
+                                if (b.day !== day) return false;
+                                
+                                // 같은 day에서 제목이 완전히 일치하면 중복 (시간 무관)
+                                // AI는 busy를 피해서 배치하므로, 같은 제목이면 busy에 이미 있는 것
+                                const bTitle = normalizeTitle(b.title);
+                                const actTitle = normalizeTitle(title);
+                                if (bTitle && actTitle && bTitle === actTitle) {
+                                    console.log(`[레거시 호환] busy와 제목 중복 (시간 무관): ${b.title} (busy: ${b.start}-${b.end}, AI: ${start}-${end})`);
+                                    return true;
+                                }
+                                
+                                return false;
+                            });
+                        };
+                        
                         for (const dayObj of dayArrays) {
                             if (!dayObj || !Array.isArray(dayObj.activities)) continue;
                             
                             for (const act of dayObj.activities) {
-                                // task 타입만 placements로 변환
-                                if (act.type === 'task') {
-                                    // taskId가 없으면 title로 tasksById에서 찾기
-                                    let taskId = act.taskId || act.id;
-                                    if (!taskId && act.title) {
-                                        // tasksById에서 title로 찾기
-                                        for (const [tid, task] of Object.entries(tasksById)) {
-                                            if (task.title === act.title) {
-                                                taskId = tid;
-                                                break;
-                                            }
-                                        }
-                                        // 못 찾으면 생성 (임시 ID)
-                                        if (!taskId) {
-                                            taskId = `t_${act.title.replace(/\s+/g, '_')}`;
+                                // task 타입만 placements로 변환 (lifestyle은 무시)
+                                // AI는 lifestyle 정보를 반환하지만, 우리는 이미 busy로 알고 있으므로 무시
+                                if (act.type !== 'task') {
+                                    continue; // lifestyle/appointment는 무시
+                                }
+                                
+                                // taskId가 없으면 title로 tasksById에서 찾기
+                                let taskId = act.taskId || act.id;
+                                if (!taskId && act.title) {
+                                    // tasksById에서 title로 찾기
+                                    for (const [tid, task] of Object.entries(tasksById)) {
+                                        if (task.title === act.title) {
+                                            taskId = tid;
+                                            break;
                                         }
                                     }
-                                    
-                                    if (taskId) {
-                                        placements.push(normalizePlacement({
-                                            taskId: taskId,
-                                            day: dayObj.day,
-                                            start: act.start,
-                                            end: act.end,
-                                            reason: act.reason || ''
-                                        }));
+                                    // 못 찾으면 제거 (제공되지 않은 task는 배치하지 않음)
+                                    if (!taskId) {
+                                        console.log(`[레거시 호환] tasksForAI에 없는 task 제거: ${act.title} (day ${dayObj.day}, ${act.start}-${act.end})`);
+                                        continue; // 제공되지 않은 task는 건너뛰기
                                     }
                                 }
+                                
+                                // taskId가 tasksById에 없으면 제거
+                                if (!taskId || !tasksById[taskId]) {
+                                    console.log(`[레거시 호환] 유효하지 않은 taskId 제거: ${taskId || '없음'} (${act.title})`);
+                                    continue;
+                                }
+                                
+                                // busy(고정 일정)와 중복 체크
+                                // AI는 busy를 피해서 배치하므로, 같은 제목이면 busy에 이미 있는 것
+                                if (isOverlappingWithBusy(dayObj.day, act.start, act.end, act.title)) {
+                                    console.log(`[레거시 호환] busy와 중복되는 placement 제거: ${act.title} (day ${dayObj.day}, ${act.start}-${act.end})`);
+                                    continue; // 중복이면 건너뛰기
+                                }
+                                
+                                placements.push(normalizePlacement({
+                                    taskId: taskId,
+                                    day: dayObj.day,
+                                    start: act.start,
+                                    end: act.end,
+                                    reason: act.reason || ''
+                                }));
                             }
                         }
                     }
                     
                     explanation = parsed.explanation || '';
+                }
+                
+                // placements 배열 로깅
+                console.log(`[새 아키텍처] placements 변환 완료: ${placements.length}개`);
+                if (placements.length > 0) {
+                    console.log('[새 아키텍처] placements 상세:', placements.map(p => ({
+                        taskId: p.taskId,
+                        day: p.day,
+                        start: p.start,
+                        end: p.end
+                    })));
                 }
                 
                 // placements가 비어있으면 경고
@@ -699,6 +820,17 @@ placements 배열만 반환하세요.`
                 
                 // === 새 아키텍처: mergeAIPlacements로 병합 ===
                 console.log('[새 아키텍처] mergeAIPlacements 호출 시작');
+                
+                // 디버깅: placements에 "회의"가 포함되어 있는지 확인
+                const meetingPlacements = placements.filter(p => {
+                    const taskId = p.task_id || p.taskId;
+                    const task = tasksById[taskId];
+                    return task && task.title && task.title.includes('회의');
+                });
+                if (meetingPlacements.length > 0) {
+                    console.warn(`[새 아키텍처] placements에 "회의" 포함: ${meetingPlacements.length}개`, meetingPlacements);
+                }
+                
                 let finalSchedule = this.mergeAIPlacements({
                     baseDate: now,
                     busy,
@@ -709,9 +841,32 @@ placements 배열만 반환하세요.`
                     weekendPolicy: weekendPolicy // 주말 정책 전달
                 });
                 
+                // 디버깅: finalSchedule의 day 2에 "회의"가 포함되어 있는지 확인
+                const day2Schedule = finalSchedule.find(d => d.day === 2);
+                if (day2Schedule) {
+                    const meetingActs = day2Schedule.activities.filter(a => a.title && a.title.includes('회의'));
+                    if (meetingActs.length > 0) {
+                        console.warn(`[새 아키텍처] day 2 최종 스케줄에 "회의" 포함:`, meetingActs.map(a => ({
+                            title: a.title,
+                            start: a.start,
+                            end: a.end,
+                            type: a.type,
+                            source: a.source
+                        })));
+                    }
+                }
+                
                 console.log('[새 아키텍처] 병합 완료, schedule 길이:', finalSchedule.length);
                 
+                // day 8 상세 로깅 (디버깅용)
+                const day8Schedule = finalSchedule.find(d => d.day === 8);
+                if (day8Schedule) {
+                    console.log('[새 아키텍처] day 8 최종 스케줄:', JSON.stringify(day8Schedule.activities, null, 2));
+                }
+                
                 // 🔒 마지막 안전망: busy와 placements 간 충돌 자동 수선
+                // [후보정 비활성화] AI 응답 신뢰 - 재검증/재병합 주석처리
+                /*
                 // mergeAIPlacements 내부에서 이미 validateAndRepair를 호출하지만,
                 // 최종 스케줄에서도 한 번 더 검증하여 겹침 제거
                 try {
@@ -760,6 +915,8 @@ placements 배열만 반환하세요.`
                     console.warn('[새 아키텍처] 최종 검증 실패 (무시 가능):', validateError.message);
                     // 검증 실패해도 기존 finalSchedule 사용
                 }
+                */
+                console.log('[새 아키텍처] 후보정 비활성화: AI 원본 응답 사용');
                 console.log('[새 아키텍처] unplaced 개수:', unplaced.length);
                 
                 // 설명 자동 생성

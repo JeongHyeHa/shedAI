@@ -735,11 +735,38 @@ export function convertScheduleToEvents(scheduleArray, nowLike = new Date()) {
         return;
       }
 
+      // 디버깅: dayBlock의 전체 activities 로깅 (day 2)
+      if (dayBlock.day === 2) {
+        console.log(`[convertScheduleToEvents] day 2 전체 activities (변환 전):`, dayBlock.activities.map(a => ({
+          title: a.title,
+          type: a.type,
+          start: a.start,
+          end: a.end,
+          source: a.source
+        })));
+      }
+      
       dayBlock.activities.forEach(activity => {
         // activity가 유효하지 않으면 건너뛰기
         if (!activity || !activity.start || !activity.title) {
           console.warn('convertScheduleToEvents: 유효하지 않은 activity', activity);
           return;
+        }
+        
+        // 디버깅: "회의" activity 로깅
+        if (activity.title && activity.title.includes('회의')) {
+          console.log(`[convertScheduleToEvents] 회의 activity 처리:`, {
+            day: dayBlock.day,
+            dateOffset,
+            dateStr,
+            activity: {
+              title: activity.title,
+              type: activity.type,
+              start: activity.start,
+              end: activity.end,
+              source: activity.source
+            }
+          });
         }
         
         const start = new Date(`${dateStr}T${ensureHms(activity.start)}`);
@@ -752,6 +779,17 @@ export function convertScheduleToEvents(scheduleArray, nowLike = new Date()) {
           end = new Date(start.getTime() + fallbackDuration * 60 * 1000);
         } else {
           end = new Date(`${dateStr}T${ensureHms(activity.end)}`);
+        }
+        
+        // 디버깅: "회의" 이벤트 생성 로깅
+        if (activity.title && activity.title.includes('회의')) {
+          console.log(`[convertScheduleToEvents] 회의 이벤트 생성:`, {
+            title: activity.title,
+            start: start.toISOString(),
+            end: end.toISOString(),
+            startRaw: activity.start,
+            endRaw: activity.end
+          });
         }
         
         // 카테고리 자동 분류 및 정규화 적용
@@ -1099,14 +1137,73 @@ export const parseTaskFromFreeText = (text, nowLike = new Date()) => {
     title = `${/시험$/i.test(word) ? word : `${word} 시험`}`.trim();
     if (/(준비|공부|학습)/.test(s)) title += ' 준비';
   } else {
-    const cut = s.split(/(?:마감일|마감|데드라인|까지|due|deadline)/i)[0]
-                 .split(/(\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}[.\-\/]\d{1,2})/)[0]
-                 .replace(/(있어|해야 ?해|할게|한다|해줘(요)?|합니다|해요)$/,'')
-                 .trim();
-    if (cut && cut.length >= 2) title = cut;
-    else {
-      const m = s.match(/([가-힣A-Za-z0-9]+)\s*(과제|보고서|프로젝트|발표|신청|접수|등록|업무|자료|문서)/);
-      title = m ? `${m[1]} ${m[2]}` : '할 일';
+    // "...까지" 패턴 처리: "까지" 이후 부분을 우선 추출
+    const untilSplit = s.split(/(?:까지|마감일|마감|데드라인|due|deadline)/i);
+    let cut = '';
+    
+    if (untilSplit.length > 1 && untilSplit[1]) {
+      // "까지" 이후 부분 사용
+      cut = untilSplit[1]
+        .replace(/(중요도|난이도)\s*(상|중|하).*$/, '') // 중요도/난이도 정보 제거
+        .replace(/(있어|해야\s*해|해야\s*돼|할게|한다|해줘(요)?|합니다|해요)\s*\.?\s*$/, '') // 어미 제거
+        .trim();
+    } else {
+      // "까지" 패턴이 없으면 기존 방식: 날짜 이전 부분 사용
+      cut = untilSplit[0]
+        .split(/(\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}[.\-\/]\d{1,2})/)[0]
+        .replace(/(있어|해야\s*해|할게|한다|해줘(요)?|합니다|해요)$/, '')
+        .trim();
+    }
+    
+    // 날짜 표현 제거 (오늘/내일/모레, 다음주 화요일, 11월 7일 등)
+    cut = cut.replace(/^(오늘|내일|모레|이번주|다음주|다다음주)\s*(월|화|수|목|금|토|일)요일?\s*/, '')
+              .replace(/^(오는|이번|다음|다다음)\s*([월화수목금토일])요일\s*/, '')
+              .replace(/^(오늘|내일|모레|이번주|다음주|다다음주)\s*/, '') // 날짜만 (요일 없음)
+              .replace(/^\d{1,2}\s*월\s*\d{1,2}\s*일\s*/, '')
+              .replace(/^\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}\s*/, '')
+              .replace(/^\d{1,2}[.\-\/]\d{1,2}\s*/, '')
+              .trim();
+    
+    // 시간 표현 제거 (오전/오후 HH시, HH:MM 등)
+    cut = cut.replace(/^(오전|오후)\s*\d{1,2}\s*(?:시|:)\s*(?:\d{1,2}\s*(?:분)?)?\s*(?:에)?\s*/, '')
+              .replace(/^\d{1,2}\s*(?:시|:)\s*(?:\d{1,2}\s*(?:분)?)?\s*(?:에)?\s*/, '')
+              .trim();
+    
+    // 불필요한 조사/어미 제거
+    cut = cut.replace(/^[에에서으로]\s+/, '')
+              .replace(/\s*(일정|약속)\s*(추가|등록|생성|만들|넣어|잡아|잡아줘)/, '') // "일정 추가" 제거
+              .replace(/\s*(해야|해야\s*해|해야\s*돼|할게|한다|해줘|해요|합니다)\s*\.?\s*$/, '')
+              .trim();
+    
+    if (cut && cut.length >= 2) {
+      title = cut;
+    } else {
+      const appointmentKeywords = /(회의|미팅|면담|인터뷰|진료|병원|상담|촬영|행사|발표|수업|강의|세미나|약속)/;
+      const taskKeywords = /([가-힣A-Za-z0-9\s]+?)\s*(과제|보고서|프로젝트|발표|신청|접수|등록|업무|자료|문서|준비)/;
+      
+      // 1) 회의/약속 키워드 우선 체크
+      const apptMatch = s.match(appointmentKeywords);
+      if (apptMatch && apptMatch[1]) {
+        title = apptMatch[1];
+      } else {
+        // 2) 일반 과제/프로젝트 키워드 체크
+        const keywordMatch = s.match(taskKeywords);
+        if (keywordMatch && keywordMatch[1] && keywordMatch[2]) {
+          let keyword = keywordMatch[1].trim();
+          // 날짜/시간 표현 제거
+          keyword = keyword
+            .replace(/^(오늘|내일|모레|이번주|다음주|다다음주)\s*(월|화|수|목|금|토|일)요일?\s*/, '')
+            .replace(/^(오는|이번|다음|다다음)\s*([월화수목금토일])요일\s*/, '')
+            .replace(/^(오전|오후)\s*\d{1,2}\s*(?:시|:)\s*(?:\d{1,2}\s*(?:분)?)?\s*(?:에)?\s*/, '')
+            .replace(/^\d{1,2}\s*(?:시|:)\s*(?:\d{1,2}\s*(?:분)?)?\s*(?:에)?\s*/, '')
+            .trim();
+          title = keyword && keyword.length >= 2 
+            ? `${keyword} ${keywordMatch[2]}` 
+            : keywordMatch[2] || '할 일';
+        } else {
+          title = '할 일';
+        }
+      }
     }
   }
 
@@ -1117,9 +1214,6 @@ export const parseTaskFromFreeText = (text, nowLike = new Date()) => {
   const importance = levelMap[impRaw] || (isExam ? '상' : '중');
   const difficulty = levelMap[diffRaw] || (isExam ? '상' : '중');
   const localMid = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
-
-  // 타입 지정: 회의/약속류는 appointment, 그 외 task
-  // 키워드 OR deadlineTime 존재하면 appointment
   const looksAppointment = APPOINTMENT_KEYWORDS.test(s) || !!deadlineTime;
 
   const result = {
@@ -1473,12 +1567,14 @@ const fixOverlaps = (schedule, opts = {}) => {
 
     for (const a of day.activities) {
       const isLifestyle = (a.type||'').toLowerCase()==='lifestyle';
+      const isAppointment = (a.type||'').toLowerCase()==='appointment' || a.source === 'event' || a.source === 'place_appointment';
       
       if (isLifestyle) {
         a.title = cleanLifestyleTitle(a.title, a.start, a.end);
       }
       
-      if (isLifestyle) continue;
+      // lifestyle과 appointment는 고정 일정이므로 재배치하지 않음
+      if (isLifestyle || isAppointment) continue;
 
       let dur = 120;
       if (a.importance === '상' || a.difficulty === '상') {
@@ -1933,13 +2029,72 @@ export const placeAppointmentsPass = (schedule=[], allItems=[], todayDate=new Da
   const appts = (allItems||[]).filter(t => (t.type||'task').toLowerCase()==='appointment' && t.isActive!==false);
   const baseDay = (todayDate.getDay()===0?7:todayDate.getDay());
   const nowMin = todayDate.getHours()*60 + todayDate.getMinutes();
+  
+  // 디버깅: appointment 목록 로깅
+  if (appts.length > 0) {
+    console.log(`[placeAppointmentsPass] 처리할 appointment 개수: ${appts.length}`, appts.map(t => ({
+      title: t.title,
+      deadline: t.deadline,
+      deadlineTime: t.deadlineTime,
+      type: t.type
+    })));
+  }
+  
   for (const t of appts) {
     const day = dayIndexFromISO(typeof toISODateLocal==='function' ? toISODateLocal(t.deadline) : t.deadline, todayDate);
     const dayObj = copy.find(x=>x.day===day) || copy[0] || copy.at(-1);
     if (!dayObj) continue;
+    
+    // 디버깅: dayObj의 현재 activities 로깅
+    const existingTitles = dayObj.activities.map(a => ({ title: a.title, type: a.type, start: a.start, end: a.end, source: a.source }));
+    console.log(`[placeAppointmentsPass] 처리 전 day ${day} activities:`, existingTitles);
+    
+    // 이미 같은 제목이 같은 날에 있으면 중복 추가 방지 (서버에서 이미 추가된 경우)
+    // type이 다를 수 있으므로 (lifestyle/appointment/task) 제목만 비교
+    if (hasSameTitleSameDay(dayObj.activities, t.title)) {
+      console.log(`[placeAppointmentsPass] 이미 존재하는 appointment 스킵: ${t.title} (day ${day})`);
+      continue;
+    }
+    
+    // deadlineTime이 있으면 정확히 그 시간에 배치 (생활패턴과 겹쳐도 됨)
+    const hasDeadlineTime = /^\d{2}:\d{2}$/.test(String(t.deadlineTime || '').slice(0, 5));
+    if (hasDeadlineTime) {
+      // deadlineTime이 있으면 정확히 그 시간에 배치
+      const want = String(t.deadlineTime).slice(0, 5);
+      const targetMin = toMin(want);
+      const dur = Math.max(30, Number(t.estimatedMinutes || 60));
+      
+      // 같은 제목이 이미 있으면 스킵 (서버에서 이미 추가된 경우)
+      const titleMatch = dayObj.activities.some(a => {
+        const aTitle = norm(a.title || '');
+        const tTitle = norm(t.title || '');
+        return aTitle === tTitle;
+      });
+      
+      if (titleMatch) {
+        console.log(`[placeAppointmentsPass] 같은 제목 이미 존재, 스킵: ${t.title} (day ${day})`);
+        continue;
+      }
+      
+      // 생활패턴(lifestyle)과 겹쳐도 되므로, 같은 제목만 체크하고 바로 배치
+      // 해당 시간에 배치 (생활패턴과 겹쳐도 됨)
+      dayObj.activities.push({
+        title: t.title,
+        start: want,
+        end: toHHMM(targetMin + dur),
+        type: 'appointment',
+        importance: t.importance || '중',
+        difficulty: t.difficulty || '중',
+        source: 'place_appointment'
+      });
+      console.log(`[placeAppointmentsPass] deadlineTime으로 배치: ${t.title} (day ${day}, ${want}-${toHHMM(targetMin + dur)})`);
+      dayObj.activities.sort((a,b)=>toMin(a.start||'00:00')-toMin(b.start||'00:00'));
+      continue;
+    }
+    
+    // deadlineTime이 없으면 자동 배치
     const occ = buildOccupiedForAppointments(dayObj.activities);
-    const want = String(t.deadlineTime||'').slice(0,5);
-    const target = /^\d{2}:\d{2}$/.test(want) ? toMin(want) : 9*60;
+    const target = 9*60; // 기본 오전 9시
     const dur = Math.max(30, Number(t.estimatedMinutes || 60));
     let free = freeFromOccupied(occ);
     if (day === baseDay) {
@@ -2078,7 +2233,24 @@ export const postprocessSchedule = ({
   }));
 
   schedule = applyLifestyleHardOverlay(schedule, parsedPatterns);
+  
+  // placeAppointmentsPass: 서버에서 이미 busy로 추가된 appointment는 스킵
+  // 서버 스케줄의 activities에 이미 포함되어 있을 수 있음 (type: appointment 또는 source: event)
+  const scheduleBeforeAppts = JSON.parse(JSON.stringify(schedule)); // 스냅샷
   schedule = placeAppointmentsPass(schedule, existingTasksForAI, now);
+  
+  // 디버깅: appointment 추가 전후 비교
+  const apptsBefore = scheduleBeforeAppts.flatMap(d => (d.activities || []).filter(a => 
+    (a.type || '').toLowerCase() === 'appointment' || a.source === 'event' || a.source === 'place_appointment'
+  ));
+  const apptsAfter = schedule.flatMap(d => (d.activities || []).filter(a => 
+    (a.type || '').toLowerCase() === 'appointment' || a.source === 'event' || a.source === 'place_appointment'
+  ));
+  if (apptsAfter.length > apptsBefore.length) {
+    const newAppts = apptsAfter.slice(apptsBefore.length);
+    console.log(`[postprocessSchedule] placeAppointmentsPass 추가된 appointment:`, newAppts.map(a => `${a.title} (day ${a.day || '?'}, ${a.start}-${a.end})`));
+  }
+  
   schedule = placeTasksPass(schedule, existingTasksForAI, now);
   // (자동 반복으로 추가된 태스크가 다시 필터링되지 않도록)
   const deadlineMap = buildDeadlineDayMap(existingTasksForAI, now);
@@ -2087,7 +2259,37 @@ export const postprocessSchedule = ({
       console.warn('[ShedAI][DEADLINE] 비어 있음 → 로컬 DB/Firestore에서 할 일 수집 실패 가능성 높음');
     }
   } catch {}
+  // 디버깅: fixOverlaps 전후 day 2 확인
+  const day2BeforeFixOverlaps = schedule.find(d => d.day === 2);
+  if (day2BeforeFixOverlaps) {
+    const meetingActs = day2BeforeFixOverlaps.activities.filter(a => a.title && a.title.includes('회의'));
+    if (meetingActs.length > 0) {
+      console.warn(`[postprocessSchedule] fixOverlaps 전 day 2에 "회의" 포함:`, meetingActs.map(a => ({
+        title: a.title,
+        type: a.type,
+        start: a.start,
+        end: a.end,
+        source: a.source
+      })));
+    }
+  }
+  
   schedule = fixOverlaps(schedule, { allowedTitles, allowAutoRepeat: false, deadlineMap, today: now, breakMinutesOverride });
+  
+  // 디버깅: fixOverlaps 후 day 2 확인
+  const day2AfterFixOverlaps = schedule.find(d => d.day === 2);
+  if (day2AfterFixOverlaps) {
+    const meetingActs = day2AfterFixOverlaps.activities.filter(a => a.title && a.title.includes('회의'));
+    if (meetingActs.length > 0) {
+      console.warn(`[postprocessSchedule] fixOverlaps 후 day 2에 "회의" 포함:`, meetingActs.map(a => ({
+        title: a.title,
+        type: a.type,
+        start: a.start,
+        end: a.end,
+        source: a.source
+      })));
+    }
+  }
 
   // 화이트리스트 강제 (정책에 따라) - fixOverlaps 이후 적용
   if (whitelistPolicy === 'strict') {
@@ -2144,7 +2346,7 @@ export const postprocessSchedule = ({
 // 고정 시각 태스크를 FullCalendar 이벤트로 변환
 export function tasksToFixedEvents(tasks = []) {
   const safe = Array.isArray(tasks) ? tasks : [];
-  return safe
+  const result = safe
     .filter(t => (t && (t.deadlineAtMidnight || t.deadline) && t.deadlineTime))
     .map(t => {
       const base = toLocalMidnightDate(t.deadlineAtMidnight || t.deadline);
@@ -2152,6 +2354,16 @@ export function tasksToFixedEvents(tasks = []) {
       const start = base ? new Date(base.getFullYear(), base.getMonth(), base.getDate(), H || 0, M || 0) : new Date();
       const dur = Math.max(30, Number(t.estimatedMinutes || 60));
       const end = new Date(start.getTime() + dur * 60000);
+      
+      // 디버깅: 고정 이벤트 생성 로깅
+      console.log(`[tasksToFixedEvents] 고정 이벤트 생성: ${t.title}`, {
+        deadline: t.deadline || t.deadlineAtMidnight,
+        deadlineTime: t.deadlineTime,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        H, M, dur
+      });
+      
       return {
         id: `fixed_${t.id || `${start.getTime()}`}`,
         title: t.title || '(제목 없음)',
@@ -2165,6 +2377,17 @@ export function tasksToFixedEvents(tasks = []) {
         },
       };
     });
+  
+  // 디버깅: 전체 고정 이벤트 목록 로깅
+  if (result.length > 0) {
+    console.log(`[tasksToFixedEvents] 생성된 고정 이벤트 개수: ${result.length}`, result.map(e => ({
+      title: e.title,
+      start: e.start.toISOString(),
+      end: e.end.toISOString()
+    })));
+  }
+  
+  return result;
 }
 
 // ===== Lightweight post parser to preserve tasks and normalize activities =====

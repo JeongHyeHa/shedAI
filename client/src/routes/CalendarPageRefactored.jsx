@@ -1018,15 +1018,35 @@ function CalendarPage() {
       const normalized = apiResp?.schedule ? apiResp : { schedule: apiResp };
       
       // 공통 후처리 파이프라인 사용 (중요 태스크 반복 보장을 위해 'smart' 사용)
+      // ⚠️ postprocessSchedule 내부에서 이미 placeAppointmentsPass와 placeTasksPass를 호출하므로
+      // 추가로 호출하지 않음 (중복 처리 방지)
       const processedSchedule = postprocessSchedule({
         raw: normalized.schedule,
         parsedPatterns,
         existingTasksForAI,
         today,
+        nowLike: today, // ✅ 명시적으로 nowLike 전달
         whitelistPolicy: 'smart'
       });
-      const withAppts = placeAppointmentsPass(processedSchedule, existingTasksForAI, today);
-      let withTasks = placeTasksPass(withAppts, existingTasksForAI, today);
+      
+      // 디버깅: postprocessSchedule 후 day 2 확인
+      const day2AfterPostprocess = processedSchedule.find(d => d.day === 2);
+      if (day2AfterPostprocess) {
+        const meetingActs = day2AfterPostprocess.activities.filter(a => a.title && a.title.includes('회의'));
+        if (meetingActs.length > 0) {
+          console.warn(`[CalendarPageRefactored] postprocessSchedule 후 day 2에 "회의" 포함:`, meetingActs.map(a => ({
+            title: a.title,
+            type: a.type,
+            start: a.start,
+            end: a.end,
+            source: a.source
+          })));
+        }
+      }
+      
+      // postprocessSchedule이 이미 placeAppointmentsPass와 placeTasksPass를 포함하므로
+      // 추가 호출하지 않고 바로 사용
+      let withTasks = processedSchedule;
       // 디듀프 안전망
       withTasks = withTasks.map(day => ({
         ...day,

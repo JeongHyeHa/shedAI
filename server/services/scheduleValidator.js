@@ -13,8 +13,9 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
     const fmt = (m) => minutesToTime(m);
     
     const inWindow = (p, w) => {
-        return p.day === w.day && 
-               minutes(p.start) >= minutes(w.start) && 
+        // freeWindows는 이미 day별로 그룹화되어 있으므로, day 체크 불필요
+        // w.day는 없을 수 있고, p.day는 이미 freeWindows[p.day] 배열에서 체크됨
+        return minutes(p.start) >= minutes(w.start) && 
                minutes(p.end) <= minutes(w.end);
     };
     
@@ -41,9 +42,14 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
         }
         
         const original = task._original || task;
-        const deadlineDay = task.deadline_day || 999;
-        const minBlockMinutes = task.min_block_minutes || 60;
+        const deadlineDay = task.deadline_day || original.deadline_day || 999;
+        const minBlockMinutes = task.min_block_minutes || original.min_block_minutes || 60;
         const dur = minutes(p.end) - minutes(p.start);
+        
+        // 디버깅: 마감일 정보 로깅
+        if (p.day > deadlineDay) {
+            console.log(`[validateAndRepair] 마감일 체크: ${task.title}, day ${p.day}, deadline_day ${deadlineDay}, task.deadline_day: ${task.deadline_day}, original.deadline_day: ${original.deadline_day}`);
+        }
         
         // 검증 조건
         const within = freeWindows[p.day]?.some(w => inWindow(p, w)) || false;
@@ -51,24 +57,41 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
         const longEnough = dur >= minBlockMinutes;
         const noWeekendConflict = !isWeekend(p.day) || allowWeekend(task, weekendPolicy);
         
-        // busy 충돌 체크
+        // busy 충돌 체크 (시간 겹침 + 제목 중복)
         const dayBusy = (busy || []).filter(b => b.day === p.day);
+        const normalizeTitle = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '');
+        const taskTitle = normalizeTitle(task.title);
         const noBusyConflict = !dayBusy.some(b => {
+            // 1) 시간 겹침 체크
             const bStart = minutes(b.start);
             const bEnd = minutes(b.end);
             const pStart = minutes(p.start);
             const pEnd = minutes(p.end);
-            return !(pEnd <= bStart || bEnd <= pStart);
+            const timeOverlaps = !(pEnd <= bStart || bEnd <= pStart);
+            
+            // 2) 제목 중복 체크 (시간이 겹치지 않아도 같은 제목이면 중복)
+            const bTitle = normalizeTitle(b.title);
+            const titleMatches = taskTitle === bTitle;
+            
+            // 시간 겹침 또는 제목 중복이면 충돌
+            return timeOverlaps || titleMatches;
         });
         
         if (within && beforeDeadline && longEnough && noWeekendConflict && noBusyConflict) {
             ok.push(p);
         } else {
-            console.log(`[validateAndRepair] 재배치 필요: ${task.title}`, {
-                within, beforeDeadline, longEnough, noWeekendConflict, noBusyConflict,
-                day: p.day, start: p.start, end: p.end
-            });
-            fix.push({ placement: p, task, taskId });
+            // 마감일 위반만 재배치 (다른 것은 제거)
+            if (!beforeDeadline) {
+                // 마감일 위반: 재배치 필요
+                console.log(`[validateAndRepair] 마감일 위반, 재배치 필요: ${task.title} (day ${p.day} > deadline ${deadlineDay})`);
+                fix.push({ placement: p, task, taskId });
+            } else {
+                // 마감일 외 다른 문제: 제거만 함
+                console.log(`[validateAndRepair] 유효하지 않은 placement 제거: ${task.title}`, {
+                    within, beforeDeadline, longEnough, noWeekendConflict, noBusyConflict,
+                    day: p.day, start: p.start, end: p.end
+                });
+            }
         }
     }
     
@@ -165,7 +188,7 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
  * AI placements를 기존 busy와 병합 (가드 적용)
  */
 function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, freeWindows = null, weekendPolicy = 'allow' }) {
-    const { mapDayToWeekday, timeToMinutes } = require('../utils/scheduleUtils');
+    const { mapDayToWeekday, timeToMinutes, minutesToTime } = require('../utils/scheduleUtils');
     
     // baseDate는 Date 객체이거나 ISO 문자열일 수 있음
     const now = baseDate instanceof Date ? baseDate : (typeof baseDate === 'string' ? new Date(baseDate) : new Date());
@@ -207,6 +230,10 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
     const scheduledTasks = deduplicated.map(p => {
         const taskId = p.task_id || p.taskId;
         const task = tasksById[taskId];
+        if (!task) {
+            console.warn(`[mergeAIPlacements] taskId ${taskId} 없음, 제거`);
+            return null;
+        }
         return {
             day: p.day,
             start: p.start,
@@ -215,7 +242,7 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
             type: 'task',
             taskId: taskId
         };
-    });
+    }).filter(Boolean); // null 제거
     
     // breaks를 break activities로 변환
     const breakActs = (breaks || []).map(b => ({
@@ -226,12 +253,93 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
         type: 'break'
     }));
     
+    // busy를 lifestyle/event 타입으로 변환 (source 정보 유지)
+    const busyActivities = (busy || []).map(b => ({
+        ...b,
+        type: b.source === 'event' ? 'appointment' : 'lifestyle'
+    }));
+    
     // busy + scheduledTasks + breaks 병합
+    // 중복 체크: 같은 day + 같은 제목은 busy 우선
+    const normalizeTitle = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '');
+    const busyTitleMap = new Map(); // day -> Set(제목들)
+    for (const b of busyActivities) {
+        if (!busyTitleMap.has(b.day)) {
+            busyTitleMap.set(b.day, new Set());
+        }
+        const normalized = normalizeTitle(b.title);
+        busyTitleMap.get(b.day).add(normalized);
+        console.log(`[mergeAIPlacements] busy 등록: ${b.title} → day ${b.day} (정규화: "${normalized}")`);
+    }
+    
+    // scheduledTasks 중 busy와 중복되는 것 필터링
+    console.log(`[mergeAIPlacements] scheduledTasks 검사 시작: ${scheduledTasks.length}개`);
+    for (const st of scheduledTasks) {
+        const busyTitles = busyTitleMap.get(st.day);
+        const stTitle = normalizeTitle(st.title);
+        console.log(`[mergeAIPlacements] 검사: ${st.title} (day ${st.day}, 정규화: "${stTitle}")`);
+        if (busyTitles) {
+            console.log(`[mergeAIPlacements] day ${st.day}의 busy 제목들:`, Array.from(busyTitles));
+            if (busyTitles.has(stTitle)) {
+                console.log(`[mergeAIPlacements] busy와 중복 매칭됨: "${stTitle}"`);
+            }
+        }
+    }
+    
+    const filteredScheduledTasks = scheduledTasks.filter(st => {
+        const busyTitles = busyTitleMap.get(st.day);
+        if (!busyTitles || busyTitles.size === 0) {
+            return true; // busy가 없으면 통과
+        }
+        const stTitle = normalizeTitle(st.title);
+        if (busyTitles.has(stTitle)) {
+            console.log(`[mergeAIPlacements] busy와 중복 제거: ${st.title} (day ${st.day}, ${st.start}-${st.end}, 정규화: "${stTitle}")`);
+            return false;
+        }
+        return true;
+    });
+    
+    console.log(`[mergeAIPlacements] scheduledTasks: ${scheduledTasks.length}개 → 필터링 후: ${filteredScheduledTasks.length}개`);
+    
+    // day 8 상세 로깅 (디버깅용)
+    const day8Busy = busyActivities.filter(b => b.day === 8);
+    const day8Scheduled = filteredScheduledTasks.filter(s => s.day === 8);
+    if (day8Busy.length > 0 || day8Scheduled.length > 0) {
+        console.log('[mergeAIPlacements] day 8 병합 전 상태:', {
+            busy: day8Busy.map(b => ({ title: b.title, start: b.start, end: b.end, type: b.type })),
+            scheduled: day8Scheduled.map(s => ({ title: s.title, start: s.start, end: s.end, type: s.type }))
+        });
+    }
+    
+    // 디버깅: filteredScheduledTasks에 "회의"가 포함되어 있는지 확인
+    const meetingScheduled = filteredScheduledTasks.filter(s => s.title && s.title.includes('회의'));
+    if (meetingScheduled.length > 0) {
+        console.warn(`[mergeAIPlacements] filteredScheduledTasks에 "회의" 포함: ${meetingScheduled.length}개`, meetingScheduled.map(s => ({
+            title: s.title,
+            day: s.day,
+            start: s.start,
+            end: s.end,
+            type: s.type
+        })));
+    }
+    
     const allActivities = [
-        ...busy.map(b => ({ ...b, type: 'lifestyle' })),
-        ...scheduledTasks,
+        ...busyActivities,
+        ...filteredScheduledTasks,
         ...breakActs
     ];
+    
+    // 디버깅: allActivities의 day 2에 "회의"가 포함되어 있는지 확인
+    const day2Activities = allActivities.filter(a => a.day === 2 && a.title && a.title.includes('회의'));
+    if (day2Activities.length > 0) {
+        console.warn(`[mergeAIPlacements] allActivities day 2에 "회의" 포함:`, day2Activities.map(a => ({
+            title: a.title,
+            start: a.start,
+            end: a.end,
+            type: a.type,
+            source: a.source
+        })));
+    }
     
     // day별로 그룹화하여 정규화
     const byDay = {};
@@ -246,6 +354,20 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
         byDay[act.day].activities.push(act);
     }
     
+    // 디버깅: byDay의 day 2에 "회의"가 포함되어 있는지 확인
+    if (byDay[2]) {
+        const day2Acts = byDay[2].activities.filter(a => a.title && a.title.includes('회의'));
+        if (day2Acts.length > 0) {
+            console.warn(`[mergeAIPlacements] byDay day 2에 "회의" 포함:`, day2Acts.map(a => ({
+                title: a.title,
+                start: a.start,
+                end: a.end,
+                type: a.type,
+                source: a.source
+            })));
+        }
+    }
+    
     // activities 시간순 정렬
     const toMin = (s) => {
         const [h, m] = String(s || '00:00').split(':').map(x => parseInt(x || '0', 10));
@@ -253,14 +375,40 @@ function mergeAIPlacements({ baseDate, busy, placements, breaks, tasksById, free
     };
     
         let schedule = Object.values(byDay)
-            .map(dayObj => ({
-                ...dayObj,
-                activities: dayObj.activities.sort((a, b) => toMin(a.start) - toMin(b.start))
-            }))
+            .map(dayObj => {
+                // activities 시간순 정렬
+                const sorted = dayObj.activities.sort((a, b) => toMin(a.start) - toMin(b.start));
+                
+                // 연속 작업 사이 간격 추가 (최소 10분)
+                for (let i = 0; i < sorted.length - 1; i++) {
+                    const current = sorted[i];
+                    const next = sorted[i + 1];
+                    
+                    // 같은 타입의 연속 작업이면 간격 체크
+                    if (current.type === 'task' && next.type === 'task' && current.day === next.day) {
+                        const currentEnd = toMin(current.end);
+                        const nextStart = toMin(next.start);
+                        const gap = nextStart - currentEnd;
+                        
+                        // 간격이 10분 미만이면 다음 작업 시작 시간을 10분 늦춤
+                        if (gap >= 0 && gap < 10) {
+                            const adjustedStart = minutesToTime(currentEnd + 10);
+                            console.log(`[mergeAIPlacements] 간격 추가: ${next.title} 시작 시간 조정 ${next.start} → ${adjustedStart} (day ${current.day})`);
+                            sorted[i + 1].start = adjustedStart;
+                        }
+                    }
+                }
+                
+                return {
+                    ...dayObj,
+                    activities: sorted
+                };
+            })
             .sort((a, b) => a.day - b.day);
         
-        // 안전망: 긴급·중요 작업이 빠졌을 때 자동으로 채워넣기
-        schedule = greedyFillUrgentGaps(schedule, freeWindows, tasksById, now, baseRelDay, weekendPolicy);
+        // 안전망 비활성화: AI 응답 신뢰 (greedyFillUrgentGaps 제거)
+        // AI가 이미 최적 배치를 했으므로, 추가 배치는 중복을 만들 수 있음
+        // schedule = greedyFillUrgentGaps(schedule, freeWindows, tasksById, now, baseRelDay, weekendPolicy);
         
         return schedule;
     }

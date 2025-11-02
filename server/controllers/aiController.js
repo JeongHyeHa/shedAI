@@ -170,9 +170,14 @@ class AIController {
                 return {
                     title: t?.title || '제목없음',
                     deadline: dl || null,
+                    deadlineTime: t?.deadlineTime || null,
+                    startTime: t?.startTime || null, // deadlineTime 별칭
+                    type: t?.type || 'task',
                     importance: t?.importance || '중',
                     difficulty: t?.difficulty || '중',
                     description: t?.description || '',
+                    estimatedMinutes: t?.estimatedMinutes || t?.durationMin || null,
+                    durationMin: t?.durationMin || t?.estimatedMinutes || null,
                     ...(Number.isFinite(t?.relativeDay) ? { relativeDay: t.relativeDay } : {})
                 };
             };
@@ -198,9 +203,14 @@ class AIController {
                         return {
                             title: t?.title || '제목없음',
                             deadline: dl || null,
+                            deadlineTime: t?.deadlineTime || null,
+                            startTime: t?.startTime || null, // deadlineTime 별칭
+                            type: t?.type || 'task',
                             importance: t?.importance || '중',
                             difficulty: t?.difficulty || '중',
                             description: t?.description || '',
+                            estimatedMinutes: t?.estimatedMinutes || t?.durationMin || null,
+                            durationMin: t?.durationMin || t?.estimatedMinutes || null,
                             // relativeDay가 있으면 유지 (없어도 aiService에서 안전하게 처리)
                             ...(Number.isFinite(t?.relativeDay) ? { relativeDay: t.relativeDay } : {})
                         };
