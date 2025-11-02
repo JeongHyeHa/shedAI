@@ -991,7 +991,11 @@ const tryParseLooseKoreanDate = (s, today) => {
 const isExamLike = (t='') => /(오픽|토익|토플|텝스|토스|면접|자격증|시험|테스트|평가)/i.test(t);
 
 const safeParseDateString = (text, today) => {
-  try { return parseDateString(text, today); } catch { return null; }
+  try {
+    const result = parseDateString(text, today);
+    // parseDateString이 이제 { date, hasTime, time } 형태로 반환
+    return result?.date || result;
+  } catch { return null; }
 };
 
 // YYYY.MM.DD / YYYY-MM-DD / M월 D일 + (오전|오후) HH(:mm)? "시" 조합까지 처리
@@ -1034,77 +1038,59 @@ export const parseTaskFromFreeText = (text, nowLike = new Date()) => {
   if (!text || typeof text !== 'string') return null;
   const s = text.replace(/\s+/g, ' ').trim();
 
-  // 0) 날짜+시간 한 번에 잡기 (가장 우선)
-  let dtFull = tryParseKoreanDateTime(s, today);
-
-  // 1) 기존 parseDateString 시도 (시간 포함 가능)
-  if (!dtFull) {
-    dtFull = safeParseDateString(s, today);
-    if (dtFull && isNaN(dtFull.getTime())) dtFull = null;
+  // === 새로운 parseDateString 사용: { date, hasTime, time } 형태로 반환 ===
+  let parsed = null;
+  try {
+    parsed = parseDateString(s, today);
+  } catch (e) {
+    console.warn('[parseTaskFromFreeText] parseDateString 오류:', e);
   }
 
-  // 2) 날짜만 / 상대 표현만 잡히는 경우 기존 로직 유지
-  let deadlineDate = dtFull;
-  if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) {
-    const rawCandidates = s.match(/(\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}[.\-\/]\d{1,2})/g) || [];
-    for (const cand of rawCandidates) {
-      const dt = tryParseLooseKoreanDate(cand, today);
-      if (dt instanceof Date && !isNaN(dt.getTime())) { deadlineDate = dt; break; }
-    }
-  }
-  if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) {
-    const rel = s.match(/(\d+)\s*(일|주)\s*(후|뒤)/);
-    if (rel) {
-      const n = +rel[1], unit = rel[2];
-      const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      base.setDate(base.getDate() + (unit === '주' ? n*7 : n));
-      deadlineDate = base;
-    }
-  }
-  if (!(deadlineDate instanceof Date) || isNaN(deadlineDate.getTime())) return null;
-
-  // --- 시각 감지: dtFull가 유효하고 시간이 자정이 아닌 경우 우선 사용
+  let deadlineDate = null;
   let deadlineTime = null;
-  if (dtFull instanceof Date && !isNaN(dtFull.getTime())) {
-    const hh0 = dtFull.getHours();
-    const mm0 = dtFull.getMinutes();
-    if (!(hh0 === 0 && mm0 === 0)) {
-      deadlineTime = `${String(hh0).padStart(2,'0')}:${String(mm0).padStart(2,'0')}`;
+
+  if (parsed && parsed.date) {
+    deadlineDate = parsed.date;
+    if (parsed.hasTime && parsed.time) {
+      deadlineTime = parsed.time;
     }
   }
-  // 보강: 한국어 시각 패턴(오전/오후 HH(:mm)?시, HH(:mm)?시, '반')에서 시간 추출
-  if (!deadlineTime) {
-    const mAMPM = s.match(/(오전|오후)\s*(\d{1,2})(?::?(\d{1,2}))?\s*시?/);
-    const mHalf = s.match(/(오전|오후)?\s*(\d{1,2})\s*시\s*반/);
-    // 역탐색 없이 문맥 검사로 대체: 일반 HH시 패턴은 앞이 '오전|오후'면 스킵
-    let mHHMM = null;
-    {
-      const reHH = /(\d{1,2})(?::(\d{1,2}))?\s*시\b/;
-      const m = s.match(reHH);
-      if (m) {
-        const idx = (m.index != null) ? m.index : s.indexOf(m[0]);
-        const pre = s.slice(Math.max(0, idx - 2), idx);
-        if (!/오전$|오후$/.test(pre)) mHHMM = m;
+
+  // fallback: 기존 로직 유지 (날짜를 못 찾은 경우)
+  if (!deadlineDate || isNaN(deadlineDate.getTime())) {
+    // 0) 날짜+시간 한 번에 잡기
+    let dtFull = tryParseKoreanDateTime(s, today);
+
+    if (!dtFull) {
+      const rawCandidates = s.match(/(\d{4}\s*[.\-\/]\s*\d{1,2}\s*[.\-\/]\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일|\d{1,2}[.\-\/]\d{1,2})/g) || [];
+      for (const cand of rawCandidates) {
+        const dt = tryParseLooseKoreanDate(cand, today);
+        if (dt instanceof Date && !isNaN(dt.getTime())) {
+          deadlineDate = dt;
+          break;
+        }
+      }
+    } else {
+      deadlineDate = dtFull;
+      const hh0 = dtFull.getHours();
+      const mm0 = dtFull.getMinutes();
+      if (!(hh0 === 0 && mm0 === 0)) {
+        deadlineTime = `${String(hh0).padStart(2,'0')}:${String(mm0).padStart(2,'0')}`;
       }
     }
-    if (mAMPM) {
-      let h = parseInt(mAMPM[2], 10) || 0;
-      const min = parseInt(mAMPM[3] || '0', 10) || 0;
-      if (mAMPM[1] === '오후' && h < 12) h += 12;
-      if (mAMPM[1] === '오전' && h === 12) h = 0;
-      deadlineTime = `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
-    } else if (mHalf) {
-      let h = parseInt(mHalf[2], 10) || 0;
-      if (mHalf[1] === '오후' && h < 12) h += 12;
-      if (mHalf[1] === '오전' && h === 12) h = 0;
-      deadlineTime = `${String(h).padStart(2,'0')}:30`;
-    } else if (mHHMM) {
-      let h = parseInt(mHHMM[1], 10) || 0;
-      const min = parseInt(mHHMM[2] || '0', 10) || 0;
-      // 12시는 그대로 유지 (오전/오후 수식 없으면 그대로)
-      deadlineTime = `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
+
+    if (!deadlineDate || isNaN(deadlineDate.getTime())) {
+      const rel = s.match(/(\d+)\s*(일|주)\s*(후|뒤)/);
+      if (rel) {
+        const n = +rel[1], unit = rel[2];
+        const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        base.setDate(base.getDate() + (unit === '주' ? n*7 : n));
+        deadlineDate = base;
+      }
     }
   }
+
+  if (!deadlineDate || isNaN(deadlineDate.getTime())) return null;
 
   // 제목 생성
   let title = '';

@@ -1354,9 +1354,9 @@ function CalendarPage() {
       for (const pattern of patterns) {
         processed = processed.replaceAll(pattern, (match) => {
           const parsed = parseDateString(match, today);
-          if (!parsed) return match;
+          if (!parsed || !parsed.date) return match;
     
-          const day = convertToRelativeDay(parsed, today);
+          const day = convertToRelativeDay(parsed.date, today);
           return `${match} (day:${day})`;
         });
       }
