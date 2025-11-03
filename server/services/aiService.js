@@ -354,31 +354,60 @@ class AIService {
             
             // === freeWindows 계산 ===
             // 수정: 개선된 calculateFreeWindows 사용 (겹침 병합, 경계 클램핑, nowFloor 지원)
+            // free windows: 검증용(raw)과 프롬프트용(split) 분리
             let freeWindows = {};
+            let freeWindowsRaw = {};
             try {
                 // 오늘(첫 번째 day)의 지난 시간 제외 옵션
                 const firstDay = allowedDays[0];
                 const isToday = firstDay === baseRelDay;
                 
-                freeWindows = calculateFreeWindows(busy, allowedDays, '23:00', {
+                freeWindowsRaw = calculateFreeWindows(busy, allowedDays, '23:59', {
                     workdayStart: '00:00',
-                    nowFloor: isToday,  // 오늘이면 지난 시간 제외
+                    nowFloor: isToday,  // 오늘이면 지난 시간 제외 (완화: 아래 스냅으로 보완)
                     baseNow: now,
                     minMinutes: 30
                 });
                 
                 // 큰 free window를 2시간 단위로 분할 (최대한 활용)
-                freeWindows = splitLargeFreeWindows(freeWindows, 120, 60); // 2시간 단위, 최소 1시간
+                freeWindows = splitLargeFreeWindows(freeWindowsRaw, 120, 60); // 2시간 단위, 최소 1시간 (프롬프트용)
             } catch (fwError) {
                 console.error('[새 아키텍처] freeWindows 계산 실패:', fwError);
                 console.error('busy:', busy);
                 console.error('allowedDays:', allowedDays);
                 // 빈 freeWindows로 계속 진행 (검증은 스킵됨)
+                freeWindowsRaw = {};
                 freeWindows = {};
             }
             
+            // 오늘 배치 완화: 오늘 배치 제안은 now+5분 이후로 스냅
+            try {
+                const padMinutes = 5;
+                const toMin = (s) => {
+                    const [h, m] = String(s || '00:00').split(':').map(x => parseInt(x || '0', 10));
+                    return (h || 0) * 60 + (m || 0);
+                };
+                const toTime = (m) => minutesToTime(m);
+                if (Array.isArray(placements)) {
+                    const nowMin = now.getHours() * 60 + now.getMinutes() + padMinutes;
+                    for (const p of placements) {
+                        if (!p || (p.day !== baseRelDay)) continue;
+                        const dur = toMin(p.end) - toMin(p.start);
+                        const pStart = toMin(p.start);
+                        if (pStart < nowMin) {
+                            const newStart = nowMin;
+                            const newEnd = newStart + Math.max(dur, 0);
+                            p.start = toTime(newStart);
+                            p.end = toTime(newEnd);
+                        }
+                    }
+                }
+            } catch (snapErr) {
+                console.warn('[새 아키텍처] 오늘 배치 스냅 중 경고:', snapErr?.message);
+            }
+            
             // 사용자 메시지만 최근 6개 유지
-            const userMessages = (messages || []).filter(m => m && m.role === 'user').slice(-6);
+            let userMessages = (messages || []).filter(m => m && m.role === 'user').slice(-6);
             
             // === 새 아키텍처: 프롬프트 재작성 (간소화) ===
             // AI에는 규칙 힌트만, 보장은 서버에서
@@ -429,6 +458,39 @@ class AIService {
             const morningPreference = /(오전|아침|새벽|일찍|평일.*오전).*(작업|공부|할일|일정)/i.test(clean);
             const eveningPreference = /(오후|저녁|밤|늦|21시|9시.*이후|오후.*9시).*(작업|공부|할일|일정|빈.*시간)/i.test(clean);
             
+            // 피드백을 명확한 사용자 메시지로 변환하여 추가
+            const feedbackMessages = [];
+            if (morningPreference) {
+                feedbackMessages.push({
+                    role: 'user',
+                    content: '요청사항: 오전 시간대(00:00-12:00)에 작업을 배치해주세요. 오전 시간대 free_windows가 있으면 우선적으로 활용해주세요.'
+                });
+            }
+            if (eveningPreference) {
+                feedbackMessages.push({
+                    role: 'user',
+                    content: '요청사항: 오후 9시(21:00) 이후 시간대도 적극 활용해주세요. free_windows에서 21:00-23:59 구간이 있는 날에는 **반드시 해당 시간대에도 배치**해주세요. 단, 다른 시간대(오전, 오후)의 free_windows도 함께 활용하여 하루 전체를 효율적으로 채워주세요.'
+                });
+            }
+            if (weekendOptOut.test(clean)) {
+                feedbackMessages.push({
+                    role: 'user',
+                    content: '요청사항: 주말(day:6 토요일, day:7 일요일)에는 할 일을 배치하지 말아주세요.'
+                });
+            } else if (weekendOptIn.test(clean) || weekendPolicy === 'allow') {
+                // 주말 허용 시에도 명시적으로 전달 (피드백이 없어도)
+                feedbackMessages.push({
+                    role: 'user',
+                    content: '요청사항: 주말(day:6 토요일, day:7 일요일)에도 작업 배치가 가능합니다. 주말의 free_windows가 있으면 적극적으로 활용해주세요.'
+                });
+            }
+            
+            // 피드백 메시지를 userMessages 앞에 추가 (AI가 명확히 읽을 수 있도록)
+            if (feedbackMessages.length > 0) {
+                userMessages = [...feedbackMessages, ...userMessages];
+                console.log(`[피드백 반영] ${feedbackMessages.length}개의 피드백 메시지를 userMessages에 추가했습니다.`);
+            }
+            
             // 프롬프트에 주말 정책 반영
             const weekendInstruction = weekendPolicy === 'rest' 
                 ? '사용자가 주말에는 쉬고 싶다고 했습니다. 주말(day:6 토요일, day:7 일요일)에는 할 일을 배치하지 마세요.'
@@ -458,18 +520,19 @@ class AIService {
 **반드시 준수할 규칙:**
 1) 배치는 오직 제공된 free_windows 내부에서만
 2) **마감일 엄수**: 각 작업은 반드시 deadline_day를 넘기지 마세요 (deadline_day보다 큰 day에 배치 절대 금지)
-3) **중요도+난이도 모두 상인 작업 (priority='상' AND difficulty='상')**: 반드시 **마감일까지 매일, 비슷한 시간에 배치**하세요. 예를 들어 "오픽 시험 준비"가 priority='상', difficulty='상'이면 deadline_day까지 **매일 매일 같은 시간대(예: 19:00-21:00)에 배치**해야 합니다. 하루도 빠뜨리지 마세요!
+3) **중요도+난이도 모두 상인 작업 (priority='상' AND difficulty='상')**: 반드시 **마감일까지 매일 매일(평일+주말 모두 포함), 비슷한 시간에 배치**하세요. 예를 들어 "오픽 시험 준비"가 priority='상', difficulty='상'이면 deadline_day까지 **평일과 주말을 구분하지 말고 매일 같은 시간대(예: 19:00-21:00)에 배치**해야 합니다. 주말(토요일 day:6, 일요일 day:7)에도 free_windows가 있으면 **반드시 배치**하세요. 하루도 빠뜨리지 마세요!
 4) **우선순위 기반 배치**: 
    - **긴급 작업 (deadline_day <= ${baseRelDay + 3})**: 반드시 **매일 일정 시간 투자**하도록 배치하세요. 같은 작업을 여러 날에 걸쳐 매일 배치하여 마감일까지 꾸준히 진행하세요.
    - **매우 긴급 (deadline_day <= ${baseRelDay + 2})**: 당일부터 매일 배치, 하루 2시간 이상 배치
    - **긴급 (deadline_day <= ${baseRelDay + 4})**: 당일 또는 다음날부터 매일 배치, 하루 1시간 이상 배치
 5) **중요도/난이도 상 작업**: (priority='상' 또는 difficulty='상')인 작업은 **마감일까지 여러 날에 걸쳐 충분히 배치**하세요. 특히 (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${baseRelDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하고, **여러 날에 분산 배치**하세요.
 6) **마감일 임박 + 집중 작업**: 마감일이 얼마 안 남았고(deadline_day <= ${baseRelDay + 2}), 집중해서 빠르게 끝낼 수 있는 작업은 **긴 시간(2-3시간 블록)**을 투자하여 배치하세요. 한 번에 몰아서 끝내는 것이 효율적입니다.
-7) **빈 시간 최대한 활용**: free_windows에 제공된 **모든 빈 시간을 반드시 활용**하세요. 빈 시간이 많으면 같은 작업을 여러 번 배치하거나, 다른 작업들을 가능한 많은 빈 시간에 배치하세요. **빈 시간을 최대한 알뜰하게 채우는 것**이 목표입니다. 빈 시간을 놓치지 마세요!
-8) 같은 날에 동일 작업은 **여러 번 분할하여 배치 가능**합니다. 특히 긴급하거나 중요한 작업은 같은 날에 여러 번 배치하세요.
-9) 겹치기 금지, 생활패턴/고정일정 침범 금지
-10) **연속 작업 방지**: 같은 작업이나 다른 작업을 연속으로 배치할 때는 최소 30분 간격을 두세요 (예: 17:00-18:00 작업 후 다음 작업은 18:30 이후). **쉬는 시간을 반드시 포함**하세요.
-11) **주말 정책**: ${weekendInstruction}
+7) **빈 시간 적극 활용 (매우 중요)**: free_windows에 제공된 **모든 빈 시간을 최대한 활용**하세요. 하루에 **빈 시간이 60분 이상 남으면 반드시 채워야** 합니다. 같은 작업을 **하루에 여러 블록으로 분할 배치**하거나, 여러 작업을 **병렬 배치**하여 빈 시간을 최대한 줄이세요.
+8) **같은 작업 하루 여러 번 배치**: **특히 중요도+난이도 상 작업**은 같은 날에 **여러 시간대에 분산 배치**하세요. 예를 들어 "오픽 시험 준비"가 하루에 4시간 필요하면 **오전 2시간, 오후 2시간**으로 나누어 배치하세요. free_windows에 공간이 있으면 **하나의 긴 블록보다 여러 개의 짧은 블록으로 분산**하는 것이 좋습니다.
+9) **free_windows 활용 전략**: 각 day의 free_windows 목록을 확인하고, **가능한 모든 시간대에 배치**하세요. 예: free_windows가 [11:00-13:00, 14:00-17:00, 19:00-23:00]이면, 최소한 2-3개 구간에 배치하세요.
+10) 겹치기 금지, 생활패턴/고정일정 침범 금지
+11) **휴식 간격 필수**: 같은 작업이나 다른 작업을 연속으로 배치할 때는 **최소 30분** 간격을 두세요 (예: 17:00-19:00 작업 후 다음 작업은 19:30 이후). **쉬는 시간을 반드시 포함**하세요.
+12) **주말 정책**: ${weekendInstruction}  주말이 허용이면 **주말의 빈 시간도 적극 활용**하여 여러 블록을 배치하세요. 특히 priority='상' AND difficulty='상' 작업은 **주말에도 매일, 필요 시 하루 여러 블록**을 배치하세요.
 
 **입력 (tasks만 배치하세요):**
 \`\`\`json
@@ -571,41 +634,136 @@ class AIService {
             try {
                 console.log('AI 원본 응답 길이:', content.length);
                 
-                // 1) 코드블록에서 JSON 추출 (```json ... ``` 또는 ``` ... ```)
-                let bestJson = null;
+                // 1) 코드블록과 전체 본문에서 모든 JSON 후보 수집
+                const candidates = [];
+                const tryParse = (candidate) => {
+                    if (!candidate) return null;
+                    const trimmed = candidate.trim();
+                    try {
+                        const parsed = JSON.parse(trimmed);
+                        return { json: trimmed, parsed, length: trimmed.length };
+                    } catch (_) {
+                        return null;
+                    }
+                };
+
+                // 코드블록에서 수집
                 const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/g;
                 let match;
-                let maxLength = 0;
-                
                 while ((match = codeBlockRegex.exec(content)) !== null) {
-                    const jsonCandidate = match[1].trim();
-                    if (jsonCandidate.length > maxLength) {
-                        bestJson = jsonCandidate;
-                        maxLength = jsonCandidate.length;
+                    const result = tryParse(match[1]);
+                    if (result) candidates.push(result);
+                }
+
+                // 전체 본문 파싱 시도 (파싱 실패해도 schedule 포함이면 후보로 추가)
+                const fullResult = tryParse(content);
+                if (fullResult) candidates.push(fullResult);
+                
+                // 본문에서 모든 JSON 객체 탐색
+                let start = 0;
+                while (start < content.length) {
+                    const jsonStart = content.indexOf('{', start);
+                    if (jsonStart === -1) break;
+                    
+                    let braceCount = 0;
+                    let jsonEnd = -1;
+                    let inString = false;
+                    let escapeNext = false;
+                    
+                    for (let i = jsonStart; i < content.length; i++) {
+                        const char = content[i];
+                        if (escapeNext) { escapeNext = false; continue; }
+                        if (char === '\\') { escapeNext = true; continue; }
+                        if (char === '"' && !escapeNext) { inString = !inString; }
+                        if (!inString) {
+                            if (char === '{') braceCount++;
+                            else if (char === '}') {
+                                braceCount--;
+                                if (braceCount === 0) { jsonEnd = i; break; }
+                            }
+                        }
+                    }
+                    if (jsonEnd !== -1) {
+                        const jsonString = content.substring(jsonStart, jsonEnd + 1);
+                        const result = tryParse(jsonString);
+                        if (result) candidates.push(result);
+                    }
+                    start = jsonStart + 1;
+                }
+
+                // 디버깅: candidates 상태 로깅
+                console.log(`[JSON 파싱] 후보 수집 완료: ${candidates.length}개`);
+                candidates.forEach((c, i) => {
+                    const hasSchedule = c.parsed?.schedule || c.json.includes('"schedule"');
+                    console.log(`[JSON 파싱] 후보 ${i+1}: ${c.length}자, schedule 포함: ${hasSchedule}, 파싱 성공: ${!!c.parsed}`);
+                });
+                
+                // 2) schedule 키워드가 포함된 후보를 우선 선택 (파싱 실패해도 문자열 검색으로 체크)
+                const scheduleCandidates = candidates.filter(c => {
+                    if (c.parsed && c.parsed.schedule) return true;
+                    if (c.json.includes('"schedule"')) return true;
+                    return false;
+                });
+                
+                let bestCandidate = null;
+                if (scheduleCandidates.length > 0) {
+                    // schedule이 포함된 것 중 가장 긴 것 선택 (본문 전체가 최우선)
+                    scheduleCandidates.sort((a, b) => {
+                        // 본문 전체(또는 길이가 content.length와 비슷)를 최우선
+                        if (a.length === content.length) return -1;
+                        if (b.length === content.length) return 1;
+                        return b.length - a.length;
+                    });
+                    bestCandidate = scheduleCandidates[0];
+                    console.log(`[JSON 파싱] ✅ schedule 포함 JSON 선택: ${bestCandidate.length}자 (총 ${scheduleCandidates.length}개 후보 중)`);
+                } else if (candidates.length > 0) {
+                    // schedule이 없으면 가장 긴 것 선택
+                    bestCandidate = candidates.sort((a, b) => b.length - a.length)[0];
+                    console.log(`[JSON 파싱] ⚠️ 가장 긴 JSON 선택: ${bestCandidate.length}자 (schedule 없음)`);
+                    // 경고: schedule이 없는 것이 선택됨
+                    console.warn(`[JSON 파싱] ⚠️ AI 응답 전체(${content.length}자)에 schedule이 있는지 확인 필요`);
+                    if (content.includes('"schedule"')) {
+                        console.warn(`[JSON 파싱] ⚠️ AI 응답 본문에 "schedule" 키워드 발견! 파싱 실패로 인한 누락 가능성`);
+                        // 본문 전체를 강제로 사용 시도
+                        bestCandidate = { json: content, parsed: null, length: content.length };
+                        console.warn(`[JSON 파싱] ⚠️ 본문 전체를 강제로 사용 시도: ${content.length}자`);
                     }
                 }
                 
-                // 2) 코드블록이 없으면 직접 JSON 파싱 시도
-                if (!bestJson) {
-                    try {
-                        const directParse = JSON.parse(content.trim());
-                        bestJson = content.trim();
-                    } catch (e) {
-                        // 여러 JSON 객체가 있을 수 있으므로 가장 큰 것 찾기
-                        // { 로 시작하는 모든 JSON 객체 찾기
-                        let start = 0;
-                        while (start < content.length) {
-                            const jsonStart = content.indexOf('{', start);
-                            if (jsonStart === -1) break;
-                            
-                            // 이 위치에서 시작하는 JSON 객체의 끝 찾기 (문자열 처리 개선)
-                            let braceCount = 0;
-                            let jsonEnd = -1;
-                            let inString = false;
-                            let escapeNext = false;
-                            
-                            for (let i = jsonStart; i < content.length; i++) {
-                                const char = content[i];
+                if (!bestCandidate) {
+                    throw new Error('유효한 JSON 객체를 찾을 수 없습니다.');
+                }
+                
+                const bestJson = bestCandidate.json;
+                let parsed = bestCandidate.parsed;
+                
+                console.log('추출된 JSON 길이:', bestJson.length);
+                
+                // 이미 파싱된 것을 사용하지만, 안전을 위해 재파싱 시도 (parsed가 없을 때만)
+                try {
+                    if (!parsed) {
+                        parsed = JSON.parse(bestJson);
+                    }
+                } catch (jsonError) {
+                    // parsed가 이미 있으면 에러 무시 (이미 유효한 파싱 결과)
+                    if (bestCandidate.parsed) {
+                        parsed = bestCandidate.parsed;
+                        console.log('[JSON 파싱] 재파싱 실패했지만 기존 파싱 결과 사용');
+                    } else {
+                        console.error('JSON.parse 실패:', jsonError.message);
+                        console.error('문제가 있는 JSON 부분:', bestJson.substring(Math.max(0, bestJson.length - 200)));
+                        
+                        // JSON이 불완전한 경우, 마지막 완전한 객체를 찾아서 파싱 시도
+                        const lines = bestJson.split('\n');
+                        let validJson = '';
+                        let braceCount = 0;
+                        let inString = false;
+                        let escapeNext = false;
+                        
+                        for (let i = 0; i < lines.length; i++) {
+                            const line = lines[i];
+                            for (let j = 0; j < line.length; j++) {
+                                const char = line[j];
                                 
                                 if (escapeNext) {
                                     escapeNext = false;
@@ -623,101 +781,38 @@ class AIService {
                                 
                                 if (!inString) {
                                     if (char === '{') braceCount++;
-                                    else if (char === '}') {
-                                        braceCount--;
-                                        if (braceCount === 0) {
-                                            jsonEnd = i;
-                                            break;
-                                        }
-                                    }
+                                    if (char === '}') braceCount--;
+                                }
+                                
+                                validJson += char;
+                                
+                                // 완전한 JSON 객체를 찾았으면 중단
+                                if (braceCount === 0 && validJson.trim().length > 0) {
+                                    break;
                                 }
                             }
                             
-                            if (jsonEnd !== -1) {
-                                const jsonString = content.substring(jsonStart, jsonEnd + 1);
-                                try {
-                                    JSON.parse(jsonString); // 유효성 검증
-                                    if (jsonString.length > maxLength) {
-                                        bestJson = jsonString;
-                                        maxLength = jsonString.length;
-                                    }
-                                } catch (e) {
-                                    // 유효하지 않은 JSON, 무시
-                                }
-                            }
-                            
-                            start = jsonStart + 1;
-                        }
-                    }
-                }
-                
-                if (!bestJson) {
-                    throw new Error('유효한 JSON 객체를 찾을 수 없습니다.');
-                }
-                
-                console.log('추출된 JSON 길이:', bestJson.length);
-                
-                // JSON 파싱
-                let parsed;
-                try {
-                    parsed = JSON.parse(bestJson);
-                } catch (jsonError) {
-                    console.error('JSON.parse 실패:', jsonError.message);
-                    console.error('문제가 있는 JSON 부분:', bestJson.substring(Math.max(0, bestJson.length - 200)));
-                    
-                    // JSON이 불완전한 경우, 마지막 완전한 객체를 찾아서 파싱 시도
-                    const lines = bestJson.split('\n');
-                    let validJson = '';
-                    let braceCount = 0;
-                    let inString = false;
-                    let escapeNext = false;
-                    
-                    for (let i = 0; i < lines.length; i++) {
-                        const line = lines[i];
-                        for (let j = 0; j < line.length; j++) {
-                            const char = line[j];
-                            
-                            if (escapeNext) {
-                                escapeNext = false;
-                                continue;
-                            }
-                            
-                            if (char === '\\') {
-                                escapeNext = true;
-                                continue;
-                            }
-                            
-                            if (char === '"' && !escapeNext) {
-                                inString = !inString;
-                            }
-                            
-                            if (!inString) {
-                                if (char === '{') braceCount++;
-                                if (char === '}') braceCount--;
-                            }
-                            
-                            validJson += char;
-                            
-                            // 완전한 JSON 객체를 찾았으면 중단
                             if (braceCount === 0 && validJson.trim().length > 0) {
                                 break;
                             }
+                            
+                            if (i < lines.length - 1) {
+                                validJson += '\n';
+                            }
                         }
                         
-                        if (braceCount === 0 && validJson.trim().length > 0) {
-                            break;
-                        }
-                        
-                        if (i < lines.length - 1) {
-                            validJson += '\n';
+                        console.log('수정된 JSON 길이:', validJson.length);
+                        try {
+                            parsed = JSON.parse(validJson);
+                        } catch (e) {
+                            throw new Error('JSON 파싱에 완전히 실패했습니다: ' + e.message);
                         }
                     }
-                    
-                    console.log('수정된 JSON 길이:', validJson.length);
-                    parsed = JSON.parse(validJson);
                 }
                 
                 // === 새 아키텍처: placements 구조 파싱 ===
+                // 정책: AI가 완성된 schedule을 제공하면 이를 최우선으로 신뢰합니다.
+                // (schedule → placements 변환을 먼저 시도하고, 없으면 placements 필드 사용)
                 
                 // placements 키 정규화 (snake_case → camelCase)
                 const normalizePlacement = (p) => ({
@@ -735,102 +830,80 @@ class AIService {
                 let explanation = '';
                 let notes = [];
                 
-                // AI 응답 파싱: placements 배열 또는 schedule 구조
-                if (Array.isArray(parsed.placements)) {
-                    placements = (parsed.placements || []).map(normalizePlacement);
-                    breaks = parsed.breaks || [];
-                    unplaced = parsed.unplaced || [];
-                    explanation = parsed.explanation || parsed.reason || '';
-                    notes = Array.isArray(parsed.notes) ? parsed.notes : (parsed.notes ? [parsed.notes] : []);
-                } else if (Array.isArray(parsed)) {
-                    // AI가 placements 배열만 반환한 경우
-                    placements = (parsed || []).map(normalizePlacement);
-                    breaks = [];
-                    unplaced = [];
-                    explanation = '';
-                    notes = [];
-                } else {
-                    // 레거시 호환: schedule/scheduleData 구조를 placements로 변환
-                    // 수정: scheduleData도 지원
-                    const dayArrays = Array.isArray(parsed.schedule) ? parsed.schedule
-                                   : Array.isArray(parsed.scheduleData) ? parsed.scheduleData
-                                   : null;
-                    
-                    if (dayArrays) {
-                        // 레거시 호환: schedule/scheduleData 구조를 placements로 변환
-                        
-                        // busy와 중복 체크를 위한 헬퍼 함수
-                        // AI는 busy를 피해서 task만 배치하므로, 제목만 매칭하면 됨 (시간 무관)
-                        const isOverlappingWithBusy = (day, start, end, title) => {
-                            const normalizeTitle = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '');
-                            
-                            return busy.some(b => {
-                                if (b.day !== day) return false;
-                                
-                                // 같은 day에서 제목이 완전히 일치하면 중복 (시간 무관)
-                                // AI는 busy를 피해서 배치하므로, 같은 제목이면 busy에 이미 있는 것
-                                const bTitle = normalizeTitle(b.title);
-                                const actTitle = normalizeTitle(title);
-                                if (bTitle && actTitle && bTitle === actTitle) {
-                                    return true;
+                // 1) schedule이 있으면 최우선 사용 (schedule → placements 변환)
+                let usedScheduleFirst = false;
+                let dayArrays = Array.isArray(parsed?.schedule) ? parsed.schedule
+                               : Array.isArray(parsed?.scheduleData) ? parsed.scheduleData
+                               : null;
+                if (!dayArrays && parsed && typeof parsed === 'object' && Array.isArray(parsed.activities) && Number.isFinite(parsed.day)) {
+                    dayArrays = [parsed];
+                }
+                if (dayArrays) {
+                    console.log('[파싱 정책] schedule 우선 사용: schedule → placements 변환');
+                    usedScheduleFirst = true;
+                    // busy와 중복 체크를 위한 헬퍼 함수
+                    const isOverlappingWithBusy = (day, start, end, title) => {
+                        const normalizeTitle = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '');
+                        return busy.some(b => {
+                            if (b.day !== day) return false;
+                            const bTitle = normalizeTitle(b.title);
+                            const actTitle = normalizeTitle(title);
+                            if (bTitle && actTitle && bTitle === actTitle) {
+                                return true;
+                            }
+                            return false;
+                        });
+                    };
+                    for (const dayObj of dayArrays) {
+                        if (!dayObj || !Array.isArray(dayObj.activities)) continue;
+                        for (const act of dayObj.activities) {
+                            if (act.type !== 'task') continue;
+                            let taskId = act.taskId || act.id;
+                            if (!taskId && act.title) {
+                                for (const [tid, task] of Object.entries(tasksById)) {
+                                    if (task.title === act.title) { taskId = tid; break; }
                                 }
-                                
-                                return false;
-                            });
-                        };
-                        
-                        for (const dayObj of dayArrays) {
-                            if (!dayObj || !Array.isArray(dayObj.activities)) continue;
-                            
-                            for (const act of dayObj.activities) {
-                                // task 타입만 placements로 변환 (lifestyle은 무시)
-                                // AI는 lifestyle 정보를 반환하지만, 우리는 이미 busy로 알고 있으므로 무시
-                                if (act.type !== 'task') {
-                                    continue; // lifestyle/appointment는 무시
-                                }
-                                
-                                // taskId가 없으면 title로 tasksById에서 찾기
-                                let taskId = act.taskId || act.id;
-                                if (!taskId && act.title) {
-                                    // tasksById에서 title로 찾기
-                                    for (const [tid, task] of Object.entries(tasksById)) {
-                                        if (task.title === act.title) {
-                                            taskId = tid;
-                                            break;
-                                        }
-                                    }
-                                    // 못 찾으면 제거 (제공되지 않은 task는 배치하지 않음)
-                                    if (!taskId) {
-                                        console.log(`[레거시 호환] tasksForAI에 없는 task 제거: ${act.title} (day ${dayObj.day}, ${act.start}-${act.end})`);
-                                        continue; // 제공되지 않은 task는 건너뛰기
-                                    }
-                                }
-                                
-                                // taskId가 tasksById에 없으면 제거
-                                if (!taskId || !tasksById[taskId]) {
-                                    console.log(`[레거시 호환] 유효하지 않은 taskId 제거: ${taskId || '없음'} (${act.title})`);
+                                if (!taskId) {
+                                    console.log(`[schedule 우선] tasksForAI에 없는 task 제거: ${act.title} (day ${dayObj.day}, ${act.start}-${act.end})`);
                                     continue;
                                 }
-                                
-                                // busy(고정 일정)와 중복 체크
-                                // AI는 busy를 피해서 배치하므로, 같은 제목이면 busy에 이미 있는 것
-                                if (isOverlappingWithBusy(dayObj.day, act.start, act.end, act.title)) {
-                                    console.log(`[레거시 호환] busy와 중복되는 placement 제거: ${act.title} (day ${dayObj.day}, ${act.start}-${act.end})`);
-                                    continue; // 중복이면 건너뛰기
-                                }
-                                
-                                placements.push(normalizePlacement({
-                                    taskId: taskId,
-                                    day: dayObj.day,
-                                    start: act.start,
-                                    end: act.end,
-                                    reason: act.reason || ''
-                                }));
                             }
+                            if (!taskId || !tasksById[taskId]) {
+                                console.log(`[schedule 우선] 유효하지 않은 taskId 제거: ${taskId || '없음'} (${act.title})`);
+                                continue;
+                            }
+                            if (isOverlappingWithBusy(dayObj.day, act.start, act.end, act.title)) {
+                                console.log(`[schedule 우선] busy와 중복되는 placement 제거: ${act.title} (day ${dayObj.day}, ${act.start}-${act.end})`);
+                                continue;
+                            }
+                            placements.push(normalizePlacement({
+                                taskId,
+                                day: dayObj.day,
+                                start: act.start,
+                                end: act.end,
+                                reason: act.reason || ''
+                            }));
                         }
                     }
-                    
-                    explanation = parsed.explanation || '';
+                    explanation = parsed.explanation || parsed.reason || '';
+                    notes = Array.isArray(parsed.notes) ? parsed.notes : (parsed.notes ? [parsed.notes] : []);
+                }
+                
+                // 2) schedule이 없거나 변환 결과가 비어있으면 placements 필드 사용
+                if (!usedScheduleFirst || placements.length === 0) {
+                    if (Array.isArray(parsed?.placements)) {
+                        if (placements.length === 0) {
+                            placements = (parsed.placements || []).map(normalizePlacement);
+                        }
+                        breaks = parsed.breaks || breaks;
+                        unplaced = parsed.unplaced || unplaced;
+                        explanation = explanation || parsed.explanation || parsed.reason || '';
+                        notes = notes.length ? notes : (Array.isArray(parsed.notes) ? parsed.notes : (parsed.notes ? [parsed.notes] : []));
+                    } else if (Array.isArray(parsed)) {
+                        if (placements.length === 0) {
+                            placements = (parsed || []).map(normalizePlacement);
+                        }
+                    }
                 }
                 
                 // placements 배열 로깅
@@ -867,13 +940,40 @@ class AIService {
                     console.warn(`[새 아키텍처] placements에 "회의" 포함: ${meetingPlacements.length}개`, meetingPlacements);
                 }
                 
+                // 오늘 배치 완화: merge 전에 오늘 시작 시간을 now+5로 스냅
+                try {
+                    const padMinutes = 5;
+                    const toMin = (s) => {
+                        const [h, m] = String(s || '00:00').split(':').map(x => parseInt(x || '0', 10));
+                        return (h || 0) * 60 + (m || 0);
+                    };
+                    const toTime = (m) => minutesToTime(m);
+                    if (Array.isArray(placements)) {
+                        const nowMin = now.getHours() * 60 + now.getMinutes() + padMinutes;
+                        for (const p of placements) {
+                            if (!p || (p.day !== baseRelDay)) continue;
+                            const dur = toMin(p.end) - toMin(p.start);
+                            const pStart = toMin(p.start);
+                            if (pStart < nowMin) {
+                                const newStart = nowMin;
+                                const newEnd = newStart + Math.max(dur, 0);
+                                p.start = toTime(newStart);
+                                p.end = toTime(newEnd);
+                            }
+                        }
+                    }
+                } catch (snapErr) {
+                    console.warn('[새 아키텍처] 오늘 배치 스냅(사전) 중 경고:', snapErr?.message);
+                }
+
                 let finalSchedule = this.mergeAIPlacements({
                     baseDate: now,
                     busy,
                     placements,
                     breaks,
                     tasksById,
-                    freeWindows,
+                    // 검증은 raw free windows로 수행 (분할 전, 연속 구간 허용)
+                    freeWindows: freeWindowsRaw,
                     weekendPolicy: weekendPolicy // 주말 정책 전달
                 });
                 

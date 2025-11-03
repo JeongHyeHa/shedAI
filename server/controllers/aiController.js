@@ -327,6 +327,22 @@ class AIController {
         }
     }
 
+    // GPT-4o 이미지 처리 (OCR/정보 추출)
+    async processImage(req, res) {
+        try {
+            const { image, prompt } = req.body || {};
+            if (!image) {
+                return res.status(400).json({ ok: false, message: 'image(Base64 또는 URL)가 필요합니다.' });
+            }
+
+            const text = await aiService.processImage(image, prompt);
+            return res.json({ ok: true, text });
+        } catch (error) {
+            console.error('이미지 처리 컨트롤러 에러:', error);
+            return res.status(500).json({ ok: false, message: '이미지 처리에 실패했습니다.' });
+        }
+    }
+
     // 생활패턴 저장 (userId 기준으로 통일)
     async saveLifestylePatterns(req, res) {
         try {

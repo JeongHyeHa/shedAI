@@ -919,7 +919,7 @@ function CalendarPage() {
       addAIMessage("스케줄 생성에 실패했습니다. 다시 시도해주세요.");
     } finally {
       setIsLoading(false);
-      notify('✅ 스케줄 설계가 완료되었습니다!');
+      notify('스케줄 설계가 완료되었습니다!');
     }
   }, [user?.uid, today, generateSchedule, updateSchedule, conversationContext, addAIMessage, startLoading, setIsLoading]);
   // ============================================================

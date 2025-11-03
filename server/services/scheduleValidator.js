@@ -32,6 +32,19 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
     const ok = [];
     const fix = [];
     
+    // deadline_day 계산 헬퍼 (task._original.deadline 또는 task.deadline 기반)
+    const calcDeadlineDay = (task) => {
+        const d = (task && task._original && task._original.deadline) || task?.deadline;
+        if (!d) return 999;
+        const deadlineDate = d instanceof Date ? d : new Date(d);
+        if (isNaN(deadlineDate.getTime())) return 999;
+        const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const deadlineMidnight = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
+        const msDiff = deadlineMidnight.getTime() - todayMidnight.getTime();
+        const diffDays = Math.floor(msDiff / (1000 * 60 * 60 * 24));
+        return baseRelDay + diffDays;
+    };
+
     // 1) 검증: 올바른 placements 분리
     for (const p of placements) {
         const taskId = p.task_id || p.taskId;
@@ -42,7 +55,9 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
         }
         
         const original = task._original || task;
-        const deadlineDay = task.deadline_day || original.deadline_day || 999;
+        const deadlineDay = Number.isFinite(task.deadline_day) ? task.deadline_day
+                           : Number.isFinite(original.deadline_day) ? original.deadline_day
+                           : calcDeadlineDay(task);
         const minBlockMinutes = task.min_block_minutes || original.min_block_minutes || 60;
         const dur = minutes(p.end) - minutes(p.start);
         
@@ -52,7 +67,13 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
         }
         
         // 검증 조건
-        const within = freeWindows[p.day]?.some(w => inWindow(p, w)) || false;
+        // 오늘(day === baseRelDay)은 경계 오차를 소폭 허용 (grace 분)
+        const grace = (p.day === baseRelDay) ? 10 : 0;
+        const within = freeWindows[p.day]?.some(w => {
+            const startOk = minutes(p.start) >= (minutes(w.start) - grace);
+            const endOk = minutes(p.end) <= (minutes(w.end) + grace);
+            return startOk && endOk;
+        }) || false;
         const beforeDeadline = p.day <= deadlineDay;
         const longEnough = dur >= minBlockMinutes;
         const noWeekendConflict = !isWeekend(p.day) || allowWeekend(task, weekendPolicy);
@@ -80,18 +101,17 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
         if (within && beforeDeadline && longEnough && noWeekendConflict && noBusyConflict) {
             ok.push(p);
         } else {
-            // 마감일 위반만 재배치 (다른 것은 제거)
+            // 요구사항: 마감일 초과는 재배치하지 않고 제거
             if (!beforeDeadline) {
-                // 마감일 위반: 재배치 필요
-                console.log(`[validateAndRepair] 마감일 위반, 재배치 필요: ${task.title} (day ${p.day} > deadline ${deadlineDay})`);
-                fix.push({ placement: p, task, taskId });
-            } else {
-                // 마감일 외 다른 문제: 제거만 함
-                console.log(`[validateAndRepair] 유효하지 않은 placement 제거: ${task.title}`, {
-                    within, beforeDeadline, longEnough, noWeekendConflict, noBusyConflict,
-                    day: p.day, start: p.start, end: p.end
-                });
+                console.log(`[validateAndRepair] 마감일 초과로 제거: ${task.title} (day ${p.day} > deadline ${deadlineDay})`);
+                // do not push to fix
+                continue;
             }
+            // 그 외 문제는 제거만
+            console.log(`[validateAndRepair] 유효하지 않은 placement 제거: ${task.title}`, {
+                within, beforeDeadline, longEnough, noWeekendConflict, noBusyConflict,
+                day: p.day, start: p.start, end: p.end
+            });
         }
     }
     
@@ -101,8 +121,16 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
     for (const { placement: p, task, taskId } of fix) {
         const original = task._original || task;
         const deadlineDay = task.deadline_day || 999;
-        const minBlockMinutes = task.min_block_minutes || 60;
-        const preferAround = minutes(task.prefer_around || '19:00');
+        // 재배치 시에는 최소 2시간 확보 (요청 반영)
+        const minBlockMinutes = Math.max(120, task.min_block_minutes || original.min_block_minutes || 60);
+        // 기존에 배치된 동일 task의 중심 시간을 평균내어 선호 중심을 계산
+        const existingCenters = ok
+            .filter(x => (x.task_id || x.taskId) === taskId)
+            .map(x => (minutes(x.start) + minutes(x.end)) / 2);
+        const defaultPrefer = minutes(task.prefer_around || '19:00');
+        const preferCenter = existingCenters.length > 0
+            ? Math.round(existingCenters.reduce((a, b) => a + b, 0) / existingCenters.length)
+            : defaultPrefer;
         
         // 가능한 windows 찾기
         const candidates = [];
@@ -119,16 +147,15 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
                 const available = winEnd - winStart;
                 
                 if (available >= minBlockMinutes) {
-                    // 선호 시간대 근처에 배치
-                    let bestStart = Math.max(winStart, Math.min(winEnd - minBlockMinutes, preferAround - minBlockMinutes / 2));
-                    bestStart = Math.max(winStart, Math.min(winEnd - minBlockMinutes, bestStart));
+                    // 선호 중심(preferCenter)에 맞춰 2시간 블록을 가운데 정렬 시도
+                    let bestStart = Math.max(winStart, Math.min(winEnd - minBlockMinutes, preferCenter - Math.floor(minBlockMinutes / 2)));
                     
                     candidates.push({
                         day: dayNum,
                         window: w,
                         start: bestStart,
                         end: bestStart + minBlockMinutes,
-                        distance: Math.abs(preferAround - (bestStart + minBlockMinutes / 2))
+                        distance: Math.abs(preferCenter - (bestStart + minBlockMinutes / 2))
                     });
                 }
             }
@@ -156,7 +183,7 @@ function validateAndRepair(placements, freeWindows, tasksById, now, baseRelDay, 
             
             if (!conflicts) {
                 ok.push(repaired);
-                console.log(`[validateAndRepair] 재배치 성공: ${task.title} → day ${best.day}, ${repaired.start}-${repaired.end}`);
+                console.log(`[validateAndRepair] 재배치 성공(2시간 기준): ${task.title} → day ${best.day}, ${repaired.start}-${repaired.end}`);
                 
                 // 사용한 구간 차감 (간단화: 해당 window를 사용한 만큼 축소)
                 const winIdx = usedWindows[best.day].indexOf(best.window);
