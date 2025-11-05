@@ -29,6 +29,11 @@ export function useScheduleData() {
         // 빈 스케줄 데이터 처리
         if (scheduleArr.length === 0) {
           setAllEvents([]);
+          setLastSchedule(null); // 빈 스케줄은 null로 설정
+          // 빈 스케줄이면 로컬스토리지도 제거
+          try { 
+            localStorage.removeItem('shedAI:lastSchedule'); 
+          } catch {}
           return;
         }
 
@@ -37,6 +42,11 @@ export function useScheduleData() {
         
         if (!hasActivities) {
           setAllEvents([]);
+          setLastSchedule(null); // 빈 스케줄은 null로 설정
+          // 빈 스케줄이면 로컬스토리지도 제거
+          try { 
+            localStorage.removeItem('shedAI:lastSchedule'); 
+          } catch {}
           return;
         }
 
@@ -50,46 +60,17 @@ export function useScheduleData() {
         }));
         setAllEvents(events);
         
-        // 로컬 백업 저장 (정규화된 형태로)
+        // 로컬 백업 저장 (정규화된 형태로) - 유효한 스케줄만 저장
         try { 
           localStorage.setItem('shedAI:lastSchedule', JSON.stringify({ schedule: scheduleArr })); 
         } catch {}
       } else {
-        // Firestore에 없으면 로컬 백업에서 복원
-        try {
-          const raw = localStorage.getItem('shedAI:lastSchedule');
-          if (raw) {
-            const wrapped = JSON.parse(raw);
-            const scheduleArr = normalizeSchedule(wrapped);
-            
-            // 로컬 백업도 빈 스케줄 체크
-            if (scheduleArr.length === 0) {
-              console.log('[ScheduleData] 로컬 백업도 빈 스케줄 - 이벤트 없음');
-              setAllEvents([]);
-              return;
-            }
-            
-            // activities 상태 확인
-            const hasActivities = hasAnyActivities(scheduleArr);
-            
-            if (!hasActivities) {
-              console.warn('[ScheduleData] 로컬 백업도 activities가 비어 있음');
-              setAllEvents([]);
-              return;
-            }
-            
-            const events = convertScheduleToEvents(scheduleArr, today).map(event => ({
-              ...event,
-              extendedProps: {
-                ...event.extendedProps,
-                isDone: false,
-              }
-            }));
-            setAllEvents(events);
-          }
-        } catch (error) {
-          console.error('[ScheduleData] 로컬 백업 복원 실패:', error);
-        }
+        // Firestore에 없으면 null로 설정하고 로컬스토리지도 제거
+        setLastSchedule(null);
+        setAllEvents([]);
+        try { 
+          localStorage.removeItem('shedAI:lastSchedule'); 
+        } catch {}
       }
     } catch (error) {
       console.error('[ScheduleData] 사용자 데이터 로드 실패:', error);

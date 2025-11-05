@@ -246,48 +246,23 @@ class FirestoreService {
         }
     }
 
-    // 피드백 저장 (구조화된 형태)
+    // 피드백 저장 (통일된 형식, patterns 제거)
     async saveFeedback(userId, feedbackText, rating, metadata = {}) {
         try {
             const feedbackRef = db.collection('users').doc(userId).collection('feedbacks');
             
-            // 피드백에서 패턴 추출
-            const lowerText = (feedbackText || '').toLowerCase();
-            const patterns = {
-                weekendRest: /(주말|토요일|일요일).*(쉬|안|못|금지|배치.*말|안.*해|쉴|휴식)/.test(lowerText),
-                morningPreference: /(오전|아침|새벽|일찍|평일.*오전).*(작업|공부|할일|일정)/i.test(lowerText),
-                eveningPreference: /(오후|저녁|밤|늦|21시|9시.*이후|오후.*9시).*(작업|공부|할일|일정|빈.*시간)/i.test(lowerText),
-                timePreference: lowerText.match(/(\d+)시.*이후|오후\s*(\d+)시/i) ? true : false
-            };
-            
-            // 구조화된 피드백 문서 생성
+            // 통일된 형식으로 저장 (patterns 제거)
             const feedbackDoc = {
-                // 기본 정보
-                feedbackText: feedbackText,
-                rating: typeof rating === 'number' ? rating : null,
-                
-                // 메타데이터
-                type: metadata.type || 'general', // 'general', 'schedule_preference', 'time_preference', etc.
-                scheduleId: metadata.scheduleId || null,
-                sessionId: metadata.sessionId || null,
-                
-                // 추출된 패턴
-                patterns: patterns,
-                
-                // 추가 메타데이터
-                metadata: {
-                    userAgent: metadata.userAgent || null,
-                    source: metadata.source || 'manual', // 'manual', 'chat', 'ui'
-                    ...metadata.additionalData
-                },
-                
-                // 타임스탬프
+                userMessage: typeof feedbackText === 'string' ? feedbackText : String(feedbackText),
+                type: 'feedback',
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                // 선택적 메타데이터
+                scheduleId: metadata.scheduleId || null,
+                sessionId: metadata.sessionId || null
             };
             
             const docRef = await feedbackRef.add(feedbackDoc);
-            console.log(`[Firestore] 피드백 저장 완료: ${docRef.id} (타입: ${feedbackDoc.type})`);
+            console.log(`[Firestore] 피드백 저장 완료: ${docRef.id}`);
             return docRef.id;
         } catch (error) {
             console.error('[Firestore] 피드백 저장 실패:', error);
@@ -462,27 +437,14 @@ class FirestoreService {
             const feedbacks = await this.getFeedbacks(userId, { limit: 20 });
             
             // 최근 피드백에서 패턴 집계
-            const patterns = {
+            // patterns는 더 이상 저장하지 않으므로 빈 객체 반환
+            return {
                 weekendRest: false,
                 morningPreference: false,
                 eveningPreference: false,
                 timePreference: null,
                 lastUpdated: null
             };
-            
-            if (feedbacks.length > 0) {
-                // 최신 피드백의 패턴 사용
-                const latest = feedbacks[0];
-                if (latest.patterns) {
-                    patterns.weekendRest = latest.patterns.weekendRest || false;
-                    patterns.morningPreference = latest.patterns.morningPreference || false;
-                    patterns.eveningPreference = latest.patterns.eveningPreference || false;
-                    patterns.timePreference = latest.patterns.timePreference || false;
-                }
-                patterns.lastUpdated = latest.createdAt;
-            }
-            
-            return patterns;
         } catch (e) {
             console.error('[Firestore] 피드백 패턴 조회 실패:', e);
             return {

@@ -13,17 +13,9 @@ export function useFeedbackManagement() {
     if (!text.trim() || !user?.uid) return;
 
     try {
-      // 피드백을 Firebase에 저장
-      await firestoreService.saveConversationalFeedback(user.uid, {
-        text: text,
-        type: 'feedback',
-        timestamp: new Date()
-      });
-
-      // AI 피드백 분석 요청
       const response = await apiService.submitFeedback(
         user.uid,
-        null, // scheduleId는 null로 설정
+        null, 
         text
       );
 
@@ -38,7 +30,6 @@ export function useFeedbackManagement() {
         throw new Error(response.message || '피드백 처리에 실패했습니다.');
       }
     } catch (error) {
-      console.error('피드백 제출 실패:', error);
       alert('피드백 제출에 실패했습니다: ' + error.message);
     }
   }, [feedbackInput, user?.uid]);

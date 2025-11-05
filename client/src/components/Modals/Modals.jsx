@@ -4,6 +4,7 @@ import Chatbot from '../Chatbot/Chatbot';         // 챗봇 모달 컴포넌트
 import TaskFormModal from './TaskFormModal';      // 할 일 입력 모달 컴포넌트
 import LifestyleModal from './LifestyleModal';    // 생활패턴 입력 모달 컴포넌트
 import TaskManagementModal from './TaskManagementModal';  // 할 일 관리 모달 컴포넌트
+import FeedbackManagerModal from './FeedbackManagerModal';  // 피드백 관리 모달 컴포넌트
 import { UI_CONSTANTS } from '../../constants/ui';
 
 const Modals = ({
@@ -55,6 +56,11 @@ const Modals = ({
   setShowTaskManagementModal, // 할 일 관리 모달 열려있는지 여부 변경 함수
   onEditTask,               // 할 일 수정 함수
   onSaveAndRegenerate,      // 스케줄 재생성 함수
+  
+  // 피드백 관리 모달 관련 속성들
+  showFeedbackManagementModal,  // 피드백 관리 모달 열려있는지 여부
+  setShowFeedbackManagementModal, // 피드백 관리 모달 열려있는지 여부 변경 함수
+  onSelectFeedback,          // 피드백 선택 시 실행할 함수
 }) => {
   // 챗 봇: 할 일 모달이 열려있고, 모드가 챗봇일 때만 표시
   // 할 일 간단 입력 폼: 할 일 모달이 열려있고, 모드가 간단 입력 폼일 때만 표시
@@ -80,6 +86,7 @@ const Modals = ({
         onModeChange={onModeChange}
         onSwitchToForm={() => setTaskInputMode(UI_CONSTANTS.TASK_INPUT_MODES.FORM)}
         onTaskManagementClick={() => setShowTaskManagementModal(true)}
+        onFeedbackManagementClick={() => setShowFeedbackManagementModal(true)}
       />
 
       {/* 할 일 간단 입력 폼 모달 */}
@@ -120,6 +127,13 @@ const Modals = ({
         onClose={() => setShowTaskManagementModal(false)}
         onEditTask={onEditTask}
         onSaveAndRegenerate={onSaveAndRegenerate}
+      />
+      
+      {/* 피드백 관리 모달 */}
+      <FeedbackManagerModal
+        isOpen={showFeedbackManagementModal}
+        onClose={() => setShowFeedbackManagementModal(false)}
+        onSelectFeedback={onSelectFeedback}
       />
     </>
   );

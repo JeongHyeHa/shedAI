@@ -107,10 +107,9 @@ export default function MonthlyReport() {
         setAiAdvice(response.advice);
         setAiAdviceTimestamp(currentTime);
         
-        // AI 조언을 Firestore에 저장
+        // AI 조언을 별도 컬렉션에 저장
         try {
-          await firestoreService.saveFeedback(user.uid, {
-            type: 'ai_advice',
+          await firestoreService.saveAIAdvice(user.uid, {
             advice: response.advice,
             activityAnalysis: activityAnalysis,
             generatedAt: currentTime,
@@ -173,15 +172,13 @@ export default function MonthlyReport() {
     if (!user?.uid) return;
     (async () => {
       try {
-        // 최근 AI 조언 로드
-        const feedbacks = await firestoreService.getFeedbacks(user.uid);
-        const latestAdvice = feedbacks
-          .filter(f => f.type === 'ai_advice')
-          .sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt))[0];
+        // 별도 컬렉션에서 최근 AI 조언 로드
+        const aiAdvices = await firestoreService.getAIAdvices(user.uid, 1);
         
-        if (latestAdvice) {
+        if (aiAdvices && aiAdvices.length > 0) {
+          const latestAdvice = aiAdvices[0];
           setAiAdvice(latestAdvice.advice);
-          setAiAdviceTimestamp(latestAdvice.generatedAt);
+          setAiAdviceTimestamp(latestAdvice.generatedAt || latestAdvice.createdAt);
           console.log('저장된 AI 조언을 로드했습니다.');
         }
       } catch (error) {

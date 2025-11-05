@@ -65,15 +65,28 @@ export function useLifestyleManagement() {
     setLifestyleInput("");
   }, [lifestyleInput, lifestyleList]);
 
-  // 생활패턴 삭제 (UI에서만 제거, DB 저장 안함)
-  const handleDeleteLifestyle = useCallback((index) => {
+  // 생활패턴 삭제 (UI와 DB에서 모두 삭제)
+  const handleDeleteLifestyle = useCallback(async (index) => {
     console.log('handleDeleteLifestyle 호출됨, 인덱스:', index);
+    if (!user?.uid) return;
     
-    const updatedPatterns = lifestyleList.filter((_, i) => i !== index);
-    setLifestyleList(updatedPatterns);
-  }, [lifestyleList]);
+    const patternToDelete = lifestyleList[index];
+    if (!patternToDelete) return;
+    
+    try {
+      // DB에서 삭제
+      await firestoreService.deleteLifestylePattern(user.uid, patternToDelete);
+      
+      // UI에서 제거
+      const updatedPatterns = lifestyleList.filter((_, i) => i !== index);
+      setLifestyleList(updatedPatterns);
+    } catch (error) {
+      console.error('생활패턴 삭제 실패:', error);
+      alert('생활패턴 삭제에 실패했습니다: ' + error.message);
+    }
+  }, [lifestyleList, user?.uid]);
 
-  // 모든 생활패턴 삭제 (DB 먼저 삭제, 그 다음 UI 업데이트)
+  // 모든 생활패턴 삭제 (DB에서 완전히 삭제, 그 다음 UI 업데이트)
   const handleClearAllLifestyles = useCallback(async () => {
     console.log('handleClearAllLifestyles 호출됨');
     if (!user?.uid) {
@@ -88,7 +101,8 @@ export function useLifestyleManagement() {
       setIsClearing(true); // 로딩 시작
       
       try {
-        await firestoreService.saveLifestylePatterns(user.uid, []);
+        // DB에서 완전히 삭제
+        await firestoreService.deleteAllLifestylePatterns(user.uid);
         setLifestyleList([]);
         
       } catch (error) {

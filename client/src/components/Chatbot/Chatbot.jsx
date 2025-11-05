@@ -21,7 +21,8 @@ const Chatbot = ({
   chatbotMode = 'task',// 챗봇 모드 ('task' 또는 'feedback')
   onModeChange,        // 모드를 변경할 때 실행할 함수
   onSwitchToForm,      // 간단 입력 폼으로 전환할 때 실행할 함수
-  onTaskManagementClick // 할 일 관리 버튼 클릭 시 실행할 함수
+  onTaskManagementClick, // 할 일 관리 버튼 클릭 시 실행할 함수
+  onFeedbackManagementClick // 피드백 관리 버튼 클릭 시 실행할 함수
 }) => {
   const chatContainerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -197,6 +198,15 @@ const Chatbot = ({
                 간단 입력
               </button>
             </div>
+          )}
+          {chatbotMode === 'feedback' && onFeedbackManagementClick && (
+            <button 
+              className="chatbot-feedback-management-btn" 
+              onClick={onFeedbackManagementClick} 
+              title="피드백 관리"
+            >
+              관리
+            </button>
           )}
         </div>
       </div>

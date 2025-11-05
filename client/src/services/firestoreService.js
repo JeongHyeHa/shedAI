@@ -173,6 +173,57 @@ class FirestoreService {
     }
   }
 
+  // 개별 생활 패턴 삭제 (DB에서 완전히 삭제)
+  async deleteLifestylePattern(userId, patternText) {
+    try {
+      const patternsRef = collection(this.db, 'users', userId, 'lifestylePatterns');
+      const q = query(patternsRef, where('isActive', '==', true));
+      const querySnapshot = await getDocs(q);
+      
+      // patternText와 일치하는 문서 찾아서 삭제
+      const deletePromises = [];
+      for (const doc of querySnapshot.docs) {
+        const data = doc.data();
+        const docPatternText = data.patternText || '';
+        
+        // 텍스트가 정확히 일치하거나, 객체 형태인 경우 변환해서 비교
+        if (docPatternText === patternText || 
+            (data.days && data.start && data.end && data.title && 
+             `${data.title} (${data.start}-${data.end}, 요일: ${data.days.join(', ')})` === patternText)) {
+          deletePromises.push(deleteDoc(doc.ref));
+        }
+      }
+      
+      if (deletePromises.length > 0) {
+        await Promise.all(deletePromises);
+        console.log(`[Firestore] ${deletePromises.length}개의 생활 패턴이 삭제되었습니다.`);
+      }
+      
+      return deletePromises.length > 0;
+    } catch (error) {
+      console.error('생활 패턴 삭제 실패:', error);
+      throw error;
+    }
+  }
+
+  // 모든 생활 패턴 삭제 (DB에서 완전히 삭제)
+  async deleteAllLifestylePatterns(userId) {
+    try {
+      const patternsRef = collection(this.db, 'users', userId, 'lifestylePatterns');
+      const q = query(patternsRef, where('isActive', '==', true));
+      const querySnapshot = await getDocs(q);
+      
+      const deletePromises = querySnapshot.docs.map(doc => deleteDoc(doc.ref));
+      await Promise.all(deletePromises);
+      
+      console.log(`[Firestore] ${deletePromises.length}개의 생활 패턴이 모두 삭제되었습니다.`);
+      return true;
+    } catch (error) {
+      console.error('생활 패턴 전체 삭제 실패:', error);
+      throw error;
+    }
+  }
+
   // 할 일 저장
   async saveTask(userId, taskData) {
     try {
@@ -293,11 +344,14 @@ class FirestoreService {
     }
   }
 
-  // 피드백 조회
+  // 피드백 조회 (피드백만, AI 조언 제외)
   async getFeedbacks(userId) {
     try {
       const feedbacksRef = collection(this.db, 'users', userId, 'feedbacks');
-      const feedbacksSnapshot = await getDocs(feedbacksRef);
+      // type이 'ai_advice'가 아닌 것만 조회
+      const feedbacksSnapshot = await getDocs(
+        query(feedbacksRef, where('type', '!=', 'ai_advice'), orderBy('createdAt', 'desc'))
+      );
       
       return feedbacksSnapshot.docs.map(doc => ({
         id: doc.id,
@@ -305,6 +359,57 @@ class FirestoreService {
       }));
     } catch (error) {
       console.error('피드백 조회 실패:', error);
+      throw error;
+    }
+  }
+
+  // 피드백 삭제
+  async deleteFeedback(userId, feedbackId) {
+    try {
+      const feedbackRef = doc(this.db, 'users', userId, 'feedbacks', feedbackId);
+      await deleteDoc(feedbackRef);
+      return true;
+    } catch (error) {
+      console.error('피드백 삭제 실패:', error);
+      throw error;
+    }
+  }
+
+  // AI 조언 저장 (별도 컬렉션)
+  async saveAIAdvice(userId, adviceData) {
+    try {
+      const aiAdvicesRef = collection(this.db, 'users', userId, 'aiAdvices');
+      
+      const docRef = await addDoc(aiAdvicesRef, {
+        advice: adviceData.advice || adviceData.text || '',
+        activityAnalysis: adviceData.activityAnalysis || null,
+        month: adviceData.month || null,
+        year: adviceData.year || null,
+        createdAt: serverTimestamp(),
+        generatedAt: serverTimestamp()
+      });
+      
+      return docRef.id;
+    } catch (error) {
+      console.error('AI 조언 저장 실패:', error);
+      throw error;
+    }
+  }
+
+  // AI 조언 조회
+  async getAIAdvices(userId, limitCount = 10) {
+    try {
+      const aiAdvicesRef = collection(this.db, 'users', userId, 'aiAdvices');
+      const aiAdvicesSnapshot = await getDocs(
+        query(aiAdvicesRef, orderBy('createdAt', 'desc'), limit(limitCount))
+      );
+      
+      return aiAdvicesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+    } catch (error) {
+      console.error('AI 조언 조회 실패:', error);
       throw error;
     }
   }
@@ -363,12 +468,34 @@ class FirestoreService {
         return false;
       };
       
-      const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(10));
-      const qs = await getDocs(q);
-      for (const doc of qs.docs) {
-        const data = doc.data();
-        if (hasRealSchedule(data?.scheduleData)) {
-          return data;
+      // hasSchedule: true인 세션만 조회 (초기화된 스케줄 제외)
+      // 인덱스가 없을 수 있으므로 try-catch로 fallback 처리
+      try {
+        const q = query(
+          sessionsRef, 
+          where('hasSchedule', '==', true),
+          orderBy('createdAtMs', 'desc'), 
+          limit(10)
+        );
+        const qs = await getDocs(q);
+        for (const doc of qs.docs) {
+          const data = doc.data();
+          // hasSchedule이 true이면서 실제 스케줄 데이터가 있는 경우만 반환
+          if (data.hasSchedule === true && hasRealSchedule(data?.scheduleData)) {
+            return data;
+          }
+        }
+      } catch (indexError) {
+        // 인덱스 에러가 발생하면 모든 세션을 가져와서 필터링 (fallback)
+        console.warn('[getLastSchedule] 인덱스 에러, fallback 로직 사용:', indexError);
+        const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(20));
+        const qs = await getDocs(q);
+        for (const doc of qs.docs) {
+          const data = doc.data();
+          // hasSchedule이 true이면서 실제 스케줄 데이터가 있는 경우만 반환
+          if (data.hasSchedule === true && hasRealSchedule(data?.scheduleData)) {
+            return data;
+          }
         }
       }
       
@@ -451,15 +578,22 @@ class FirestoreService {
     }
   }
 
-  // 피드백 저장 (기존 방식)
-  async saveFeedback(userId, feedbackData) {
+  // 피드백 저장 (통일된 형식)
+  async saveFeedback(userId, feedbackText, metadata = {}) {
     try {
       const feedbacksRef = collection(this.db, 'users', userId, 'feedbacks');
       
-      const docRef = await addDoc(feedbacksRef, {
-        ...feedbackData,
-        createdAt: serverTimestamp()
-      });
+      // 통일된 형식으로 저장
+      const feedbackDoc = {
+        userMessage: typeof feedbackText === 'string' ? feedbackText : String(feedbackText),
+        type: 'feedback',
+        createdAt: serverTimestamp(),
+        // 선택적 메타데이터
+        scheduleId: metadata.scheduleId || null,
+        sessionId: metadata.sessionId || null
+      };
+      
+      const docRef = await addDoc(feedbacksRef, feedbackDoc);
       return docRef.id;
     } catch (error) {
       console.error('피드백 저장 실패:', error);
@@ -467,16 +601,27 @@ class FirestoreService {
     }
   }
 
-  // 대화형 피드백 저장
+  // 대화형 피드백 저장 (통일된 형식으로 변경)
   async saveConversationalFeedback(userId, userMessage, aiResponse, context = {}) {
     try {
       const feedbacksRef = collection(this.db, 'users', userId, 'feedbacks');
       
+      // userMessage가 문자열인지 객체인지 확인
+      let messageText = '';
+      if (typeof userMessage === 'string') {
+        messageText = userMessage;
+      } else if (userMessage && typeof userMessage === 'object') {
+        // 객체인 경우 text 필드 추출
+        messageText = userMessage.text || userMessage.userMessage || String(userMessage);
+      } else {
+        messageText = String(userMessage || '');
+      }
+      
+      // 통일된 형식으로 저장
       const docRef = await addDoc(feedbacksRef, {
-        type: 'conversational',
-        userMessage,
+        userMessage: messageText,
+        type: 'feedback',
         aiResponse: aiResponse || null,
-        context: context || null,
         createdAt: serverTimestamp()
       });
       
@@ -487,43 +632,74 @@ class FirestoreService {
     }
   }
 
-  // 최근 피드백 조회
+  // 최근 피드백 조회 (AI 조언 제외)
   async getRecentFeedbacks(userId, limitCount = 5) {
     try {
       const feedbacksRef = collection(this.db, 'users', userId, 'feedbacks');
-      const q = query(
-        feedbacksRef,
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
-      );
       
-      const querySnapshot = await getDocs(q);
-      return querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      // 인덱스가 없을 수 있으므로 try-catch로 fallback 처리
+      try {
+        const q = query(
+          feedbacksRef,
+          where('type', '!=', 'ai_advice'), // AI 조언 제외
+          orderBy('createdAt', 'desc'),
+          limit(limitCount)
+        );
+        
+        const querySnapshot = await getDocs(q);
+        return querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+      } catch (indexError) {
+        // 인덱스 에러가 발생하면 모든 피드백을 가져와서 필터링 (fallback)
+        console.warn('[getRecentFeedbacks] 인덱스 에러, fallback 로직 사용:', indexError);
+        const q = query(feedbacksRef, orderBy('createdAt', 'desc'), limit(limitCount * 2));
+        const querySnapshot = await getDocs(q);
+        
+        // 클라이언트 측에서 AI 조언 필터링
+        return querySnapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(feedback => feedback.type !== 'ai_advice')
+          .slice(0, limitCount);
+      }
     } catch (error) {
       console.error('최근 피드백 조회 실패:', error);
       return [];
     }
   }
 
-  // 모든 피드백 히스토리 조회 (AI 기억용)
+  // 전체 피드백 히스토리 조회 (AI 조언 제외)
   async getAllFeedbackHistory(userId) {
     try {
       const feedbacksRef = collection(this.db, 'users', userId, 'feedbacks');
-      const q = query(
-        feedbacksRef,
-        orderBy('createdAt', 'desc')
-      );
       
-      const querySnapshot = await getDocs(q);
-      return querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      // 인덱스가 없을 수 있으므로 try-catch로 fallback 처리
+      try {
+        const q = query(
+          feedbacksRef,
+          where('type', '!=', 'ai_advice'), // AI 조언 제외
+          orderBy('createdAt', 'desc')
+        );
+        
+        const querySnapshot = await getDocs(q);
+        return querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+      } catch (indexError) {
+        // 인덱스 에러가 발생하면 모든 피드백을 가져와서 필터링 (fallback)
+        console.warn('[getAllFeedbackHistory] 인덱스 에러, fallback 로직 사용:', indexError);
+        const q = query(feedbacksRef, orderBy('createdAt', 'desc'));
+        const querySnapshot = await getDocs(q);
+        
+        // 클라이언트 측에서 AI 조언 필터링
+        return querySnapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(feedback => feedback.type !== 'ai_advice');
+      }
     } catch (error) {
-      console.error('피드백 히스토리 조회 실패:', error);
+      console.error('전체 피드백 히스토리 조회 실패:', error);
       return [];
     }
   }

@@ -858,6 +858,7 @@ function CalendarPage() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showLifestyleModal, setShowLifestyleModal] = useState(false);
   const [showTaskManagementModal, setShowTaskManagementModal] = useState(false);
+  const [showFeedbackManagementModal, setShowFeedbackManagementModal] = useState(false);
   const [currentScheduleSessionId, setCurrentScheduleSessionId] = useState(null);
   const [chatbotMode, setChatbotMode] = useState(UI_CONSTANTS.CHATBOT_MODES.TASK);
   const [taskInputMode, setTaskInputMode] = useState(UI_CONSTANTS.TASK_INPUT_MODES.CHATBOT);
@@ -1617,16 +1618,19 @@ function CalendarPage() {
       try {
         await firestoreService.deleteLatestSchedule(user.uid);
         try { localStorage.removeItem('shedAI:lastSchedule'); } catch {}
+        
+        setLastSchedule(null);
+        setAllEvents([]);
+        calendarRef.current?.getApi().removeAllEvents();
+        clearMessages();
+        setCurrentScheduleSessionId(null);
+        
+        // 초기화 완료 알림
+        alert('캘린더가 초기화되었습니다.');
+        addAIMessage("캘린더가 초기화되었습니다. 새로운 일정을 추가해주세요.");
       } catch (e) {
-        console.error('스케줄 삭제 처리 실패:', e);
+        alert('캘린더 초기화에 실패했습니다. 다시 시도해주세요.');
       }
-
-      setLastSchedule(null);
-      setAllEvents([]);
-      calendarRef.current?.getApi().removeAllEvents();
-      clearMessages();
-      setCurrentScheduleSessionId(null);
-      addAIMessage("캘린더가 초기화되었습니다. 새로운 일정을 추가해주세요.");
     }
   };
 
@@ -1933,6 +1937,15 @@ function CalendarPage() {
         onEditTask={handleEditTask}
         onSaveAndRegenerate={handleTaskManagementSave}
         onTaskRefresh={() => {
+        }}
+        
+        // Feedback Management Modal Props
+        showFeedbackManagementModal={showFeedbackManagementModal}
+        setShowFeedbackManagementModal={setShowFeedbackManagementModal}
+        onSelectFeedback={(feedbackText) => {
+          setCurrentMessage(feedbackText);
+          setShowTaskModal(true);
+          setChatbotMode(UI_CONSTANTS.CHATBOT_MODES.FEEDBACK);
         }}
       />
     </div>
