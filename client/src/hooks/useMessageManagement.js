@@ -29,8 +29,35 @@ export const useMessageManagement = () => {
     }
   }, [user?.uid]);
 
+  // 단순 알림 메시지인지 확인 (conversationContext에 저장하지 않음)
+  const isNotificationMessage = (text) => {
+    if (!text || typeof text !== 'string') return false;
+    // "스케줄 설계 이유:"로 시작하는 메시지는 실제 AI 응답이므로 저장해야 함
+    if (text.trim().startsWith('스케줄 설계 이유:')) return false;
+    const notificationPatterns = [
+      /^스케줄이 생성되었습니다!?$/,
+      /^스케줄을 생성했습니다!?$/,
+      /^캘린더가 초기화되었습니다/,
+      /^로그인이 필요합니다/,
+      /^스케줄 생성에 실패했습니다/,
+      /^스케줄을 생성하는 중입니다/,
+      /^DB 데이터를 기반으로 스케줄을 재생성합니다/,
+      /^피드백을 반영하여 스케줄을 조정합니다/,
+      /^할 일이 수정되었습니다/,
+      /^할 일 수정에 실패했습니다/,
+      /^저장할 생활패턴이 없습니다/,
+      /^요청이 시간 초과되었습니다/,
+      /^요청 실패/,
+      /^현재 제공할 AI 조언이 없습니다/,
+      /^AI 조언을 불러오는데 실패했습니다/,
+      /^저장 및 스케줄 생성에 실패했습니다/,
+      /^스케줄 재생성에 실패했습니다/
+    ];
+    return notificationPatterns.some(pattern => pattern.test(text.trim()));
+  };
+
   // AI 메시지 추가
-  const addAIMessage = useCallback(async (text, userMessage = null) => {
+  const addAIMessage = useCallback(async (text, userMessage = null, saveToContext = null) => {
     if (!user?.uid) return;
     
     const newMessage = {
@@ -39,13 +66,19 @@ export const useMessageManagement = () => {
       timestamp: new Date()
     };
     
-    const newContext = [
-      ...conversationContext,
-      { role: 'assistant', content: text }
-    ];
+    // saveToContext가 명시적으로 지정되지 않은 경우, 알림 메시지인지 자동 판단
+    const shouldSaveToContext = saveToContext !== null 
+      ? saveToContext 
+      : !isNotificationMessage(text);
+    
+    const newContext = shouldSaveToContext
+      ? [...conversationContext, { role: 'assistant', content: text }]
+      : conversationContext;
     
     setMessages(prev => [...prev, newMessage]);
-    setConversationContext(newContext);
+    if (shouldSaveToContext) {
+      setConversationContext(newContext);
+    }
     
     // 대화형 피드백으로 저장 (사용자 메시지가 있는 경우)
     if (userMessage) {
@@ -61,23 +94,24 @@ export const useMessageManagement = () => {
       }
     }
     
-    // Firebase에 대화 컨텍스트 저장 (활성 스케줄 세션만 업데이트)
-    try {
-      const updated = await firestoreService.updateActiveScheduleSession(user.uid, {
-        conversationContext: newContext,
-        lastMessage: text
-      });
-      if (!updated) {
-        // 활성 세션이 없는 경우에 한해 보조 세션으로 보관 (isActive: false)
-        await firestoreService.saveScheduleSession(user.uid, {
+    // conversationContext에 저장할 메시지인 경우에만 Firestore에 저장
+    if (shouldSaveToContext) {
+      try {
+        const updated = await firestoreService.updateActiveScheduleSession(user.uid, {
           conversationContext: newContext,
-          lastMessage: text,
-          hasSchedule: false,
-          isActive: false
+          lastMessage: text
         });
+        if (!updated) {
+          await firestoreService.saveScheduleSession(user.uid, {
+            conversationContext: newContext,
+            lastMessage: text,
+            hasSchedule: false,
+            isActive: false
+          });
+        }
+      } catch (error) {
+        console.error('AI 메시지 저장 실패:', error);
       }
-    } catch (error) {
-      console.error('AI 메시지 저장 실패:', error);
     }
   }, [user?.uid, conversationContext]);
   

@@ -120,15 +120,10 @@ class FirestoreService {
     try {
       const patternsRef = collection(this.db, 'users', userId, 'lifestylePatterns');
       
-      // 기존 패턴들을 비활성화로 업데이트
+      // 기존 패턴들을 완전히 삭제 (isActive로 false 하지 않고 아예 삭제)
       const existingPatterns = await getDocs(patternsRef);
-      const updatePromises = existingPatterns.docs.map(doc => 
-        updateDoc(doc.ref, {
-          isActive: false,
-          updatedAt: serverTimestamp()
-        })
-      );
-      await Promise.all(updatePromises);
+      const deletePromises = existingPatterns.docs.map(doc => deleteDoc(doc.ref));
+      await Promise.all(deletePromises);
       
       // 새 패턴들 저장 (문자열로 저장)
       const promises = patterns.map(pattern => {
@@ -173,12 +168,12 @@ class FirestoreService {
     }
   }
 
-  // 개별 생활 패턴 삭제 (DB에서 완전히 삭제)
+  // 개별 생활 패턴 삭제 (DB에서 완전히 삭제, isActive 필터 없이 모든 문서 확인)
   async deleteLifestylePattern(userId, patternText) {
     try {
       const patternsRef = collection(this.db, 'users', userId, 'lifestylePatterns');
-      const q = query(patternsRef, where('isActive', '==', true));
-      const querySnapshot = await getDocs(q);
+      // isActive 필터 없이 모든 문서 확인 (이전에 비활성화된 문서도 삭제 가능)
+      const querySnapshot = await getDocs(patternsRef);
       
       // patternText와 일치하는 문서 찾아서 삭제
       const deletePromises = [];
@@ -206,12 +201,12 @@ class FirestoreService {
     }
   }
 
-  // 모든 생활 패턴 삭제 (DB에서 완전히 삭제)
+  // 모든 생활 패턴 삭제 (DB에서 완전히 삭제, isActive 필터 없이 모든 문서 삭제)
   async deleteAllLifestylePatterns(userId) {
     try {
       const patternsRef = collection(this.db, 'users', userId, 'lifestylePatterns');
-      const q = query(patternsRef, where('isActive', '==', true));
-      const querySnapshot = await getDocs(q);
+      // isActive 필터 없이 모든 문서 삭제
+      const querySnapshot = await getDocs(patternsRef);
       
       const deletePromises = querySnapshot.docs.map(doc => deleteDoc(doc.ref));
       await Promise.all(deletePromises);
@@ -486,17 +481,27 @@ class FirestoreService {
           }
         }
       } catch (indexError) {
-        // 인덱스 에러가 발생하면 모든 세션을 가져와서 필터링 (fallback)
-        console.warn('[getLastSchedule] 인덱스 에러, fallback 로직 사용:', indexError);
-        const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(20));
+        // 인덱스 에러가 발생하면 최근 세션만 빠르게 확인 (fallback)
+        // 초기화 후에는 스케줄이 없으므로 최소한의 조회만 수행
+        // 개발 환경에서만 로그 출력 (프로덕션에서는 조용히 처리)
+        const isDev = (typeof import.meta !== 'undefined' && import.meta.env?.MODE !== 'production') ||
+                      (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production');
+        if (isDev) {
+          console.debug('[getLastSchedule] 인덱스 없음, fallback 사용 (정상 동작)');
+        }
+        
+        // 최근 세션만 빠르게 확인 (초기화 후에는 대부분 스케줄이 없음)
+        const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(5));
         const qs = await getDocs(q);
+        
+        // 첫 번째 유효한 스케줄만 확인하고 즉시 반환
         for (const doc of qs.docs) {
           const data = doc.data();
-          // hasSchedule이 true이면서 실제 스케줄 데이터가 있는 경우만 반환
           if (data.hasSchedule === true && hasRealSchedule(data?.scheduleData)) {
             return data;
           }
         }
+        // 유효한 스케줄이 없으면 즉시 null 반환 (추가 조회 불필요)
       }
       
       // 유효한 스케줄이 없으면 null 반환
@@ -507,7 +512,7 @@ class FirestoreService {
     }
   }
 
-  // 최신 스케줄을 "삭제" 처리 (hasSchedule=false, isActive=false)
+  // 최신 스케줄을 "삭제" 처리 (hasSchedule=false, isActive=false, scheduleData=[])
   async deleteLatestSchedule(userId) {
     try {
       const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
@@ -518,7 +523,13 @@ class FirestoreService {
       const target = qs.docs.find(d => d.data()?.hasSchedule === true);
       if (!target) return false;
 
-      await updateDoc(target.ref, { hasSchedule: false, isActive: false, updatedAt: serverTimestamp() });
+      // scheduleData도 빈 배열로 초기화하여 완전히 삭제
+      await updateDoc(target.ref, { 
+        hasSchedule: false, 
+        isActive: false, 
+        scheduleData: [], // 스케줄 데이터도 완전히 삭제
+        updatedAt: serverTimestamp() 
+      });
       return true;
     } catch (error) {
       console.error('최신 스케줄 삭제 처리 실패:', error);
@@ -652,8 +663,13 @@ class FirestoreService {
           ...doc.data()
         }));
       } catch (indexError) {
-        // 인덱스 에러가 발생하면 모든 피드백을 가져와서 필터링 (fallback)
-        console.warn('[getRecentFeedbacks] 인덱스 에러, fallback 로직 사용:', indexError);
+        // 인덱스 에러가 발생하면 최근 피드백만 가져와서 필터링 (fallback)
+        // 개발 환경에서만 로그 출력
+        const isDev = (typeof import.meta !== 'undefined' && import.meta.env?.MODE !== 'production') ||
+                      (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production');
+        if (isDev) {
+          console.debug('[getRecentFeedbacks] 인덱스 없음, fallback 사용 (정상 동작)');
+        }
         const q = query(feedbacksRef, orderBy('createdAt', 'desc'), limit(limitCount * 2));
         const querySnapshot = await getDocs(q);
         
@@ -689,7 +705,12 @@ class FirestoreService {
         }));
       } catch (indexError) {
         // 인덱스 에러가 발생하면 모든 피드백을 가져와서 필터링 (fallback)
-        console.warn('[getAllFeedbackHistory] 인덱스 에러, fallback 로직 사용:', indexError);
+        // 개발 환경에서만 로그 출력
+        const isDev = (typeof import.meta !== 'undefined' && import.meta.env?.MODE !== 'production') ||
+                      (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production');
+        if (isDev) {
+          console.debug('[getAllFeedbackHistory] 인덱스 없음, fallback 사용 (정상 동작)');
+        }
         const q = query(feedbacksRef, orderBy('createdAt', 'desc'));
         const querySnapshot = await getDocs(q);
         

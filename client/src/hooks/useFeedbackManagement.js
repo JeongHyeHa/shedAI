@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import firestoreService from '../services/firestoreService';
 import apiService from '../services/apiService';
 
 export function useFeedbackManagement() {
