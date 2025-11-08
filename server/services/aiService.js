@@ -135,11 +135,11 @@ class AIService {
                 // 1) existingTasks의 deadline 확인
                 if (existingTasks && existingTasks.length > 0) {
                     for (const task of existingTasks) {
-                        if (task.deadline) {
+                    if (task.deadline) {
                             const deadlineDate = task.deadline instanceof Date ? task.deadline : new Date(task.deadline);
                             if (!isNaN(deadlineDate.getTime())) {
                                 const deadlineMidnight = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
-                                const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                        const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
                                 const diffTime = deadlineMidnight.getTime() - nowMidnight.getTime();
                                 const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
                                 const taskDeadlineDay = baseRelDay + diffDays;
@@ -310,9 +310,23 @@ class AIService {
                     }
                 }
                 
+                console.log('[🔍 디버깅] 스케줄 범위 재확장 체크:', {
+                    baseRelDay,
+                    currentScheduleLength: scheduleLength,
+                    maxDeadlineDayFromTasks,
+                    requiredScheduleLength: maxDeadlineDayFromTasks - baseRelDay + 1
+                });
+                
                 // 스케줄 범위 재확장 (기존 범위보다 크면 확장)
                 const newScheduleLength = Math.max(scheduleLength || 14, maxDeadlineDayFromTasks - baseRelDay + 1);
                 if (newScheduleLength > (scheduleLength || 14)) {
+                    console.log('[🔍 디버깅] 스케줄 범위 재확장 실행:', {
+                        oldLength: scheduleLength,
+                        newLength: newScheduleLength,
+                        taskDaysBefore: taskDays.length,
+                        lifestyleDaysBefore: lifestyleDays.length
+                    });
+                    
                     taskDays = Array.from({ length: newScheduleLength }, (_, i) => baseRelDay + i);
                     lifestyleDays = Array.from({ length: newScheduleLength }, (_, i) => baseRelDay + i);
                     scheduleLength = newScheduleLength; // scheduleLength 업데이트
@@ -320,6 +334,20 @@ class AIService {
                     allowedDays = [...new Set([...taskDays, ...lifestyleDays])].sort((a,b)=>a-b);
                     // busy도 재확장된 allowedDays를 기반으로 다시 생성
                     busy = convertLifestyleToBusy(lifestylePatterns, now, allowedDays);
+                    
+                    console.log('[🔍 디버깅] 스케줄 범위 재확장 완료:', {
+                        scheduleLength,
+                        taskDaysLength: taskDays.length,
+                        lifestyleDaysLength: lifestyleDays.length,
+                        allowedDaysLength: allowedDays.length,
+                        allowedDaysRange: allowedDays.length > 0 ? `${allowedDays[0]}~${allowedDays[allowedDays.length - 1]}` : 'empty'
+                    });
+                } else {
+                    console.log('[🔍 디버깅] 스케줄 범위 재확장 불필요:', {
+                        currentLength: scheduleLength,
+                        requiredLength: maxDeadlineDayFromTasks - baseRelDay + 1,
+                        reason: newScheduleLength <= scheduleLength ? '이미 충분함' : '조건 불만족'
+                    });
                 }
             }
             
@@ -329,15 +357,15 @@ class AIService {
             // === 새 아키텍처: 프롬프트 재작성 (간소화) ===
             // AI가 모든 작업을 자유롭게 배치하도록 함 (빈 시간 목록 제거)
             
-            // AI에 넘길 tasks (간소화된 스키마) 
+            // AI에 넘길 tasks (간소화된 스키마)
             const tasksForAIJSON = tasksForAI.map(t => {
                 const taskObj = {
-                    id: t.id,
-                    title: t.title,
-                    deadline_day: t.deadline_day,
-                    priority: t.priority,
-                    difficulty: t.difficulty,
-                    min_block_minutes: t.min_block_minutes,
+                id: t.id,
+                title: t.title,
+                deadline_day: t.deadline_day,
+                priority: t.priority,
+                difficulty: t.difficulty,
+                min_block_minutes: t.min_block_minutes,
                     type: t.type || 'task' // type 정보 추가 (appointment인 경우 특별 처리)
                 };
                 
@@ -462,6 +490,13 @@ class AIService {
 
 **현재 날짜: ${year}년 ${month}월 ${date}일 (${currentDayName})**
 **기준 day: ${anchorDay}**
+**스케줄 생성 범위: day ${baseRelDay}부터 day ${baseRelDay + scheduleLength - 1}까지 (총 ${scheduleLength}일)**
+
+⚠️ **매우 중요 (절대 위반 금지)**: 
+- 반드시 day ${baseRelDay}부터 day ${baseRelDay + scheduleLength - 1}까지 **모든 day에 대해** 스케줄을 생성하세요.
+- day ${baseRelDay + scheduleLength - 1}까지 생성하지 않고 중간에 멈추는 것은 **절대 금지**입니다.
+- 예: day ${baseRelDay}부터 day ${baseRelDay + scheduleLength - 1}까지 생성해야 하는데, day ${baseRelDay + scheduleLength - 2}까지만 생성하는 것은 **심각한 오류**입니다.
+- **반드시 day ${baseRelDay + scheduleLength - 1}까지 포함하여 생성하세요.**
 
 **중요:**
 - **생활 패턴은 생성 기간 내의 해당 요일에 반복 배치되어야 합니다.**
@@ -553,43 +588,44 @@ class AIService {
 - ⚠️ **중요**: deadline_day=8, deadline_time="14:00"인 작업을 day 10에 배치하거나, 14:00가 아닌 다른 시간에 배치하는 것은 **심각한 오류**입니다. 반드시 day 8, 14:00에 배치하세요.
 
 **출력 (반드시 이 형식만 사용):**
+⚠️ **매우 중요 (절대 위반 금지)**: 
+- 반드시 day ${baseRelDay}부터 day ${baseRelDay + scheduleLength - 1}까지 **모든 day에 대해** scheduleData를 생성하세요.
+- day ${baseRelDay + scheduleLength - 1}까지 생성하지 않고 중간에 멈추는 것은 **절대 금지**입니다.
+- **반드시 ${scheduleLength}개의 day 객체를 생성하세요.** (day ${baseRelDay}, day ${baseRelDay + 1}, ..., day ${baseRelDay + scheduleLength - 1})
+- day ${baseRelDay + scheduleLength - 1}를 생성하지 않으면 **심각한 오류**입니다.
+
 \`\`\`json
 {
   "scheduleData": [
     {
-      "day": 5,
-      "weekday": "금요일",
+      "day": ${baseRelDay},
+      "weekday": "토요일",
       "activities": [
         {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
           "type": "lifestyle"
-        },
-        {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
-          "start": "19:00",
-          "end": "21:00",
-          "title": "오픽 시험 준비",
-          "type": "task"
         }
       ]
     },
     {
-      "day": 7,
+      "day": ${baseRelDay + 1},
       "weekday": "일요일",
       "activities": [
         {
-          "start": "12:00",
-          "end": "13:00",
-          "title": "브런치",
+          "start": "21:00",
+          "end": "07:00",
+          "title": "취침",
           "type": "lifestyle"
-        },
+        }
+      ]
+    },
+    ... (day ${baseRelDay + 2}부터 day ${baseRelDay + scheduleLength - 2}까지 **모든 day를 반드시 포함**하세요. 일부 day만 생성하는 것은 절대 금지입니다.) ...,
+    {
+      "day": ${baseRelDay + scheduleLength - 1},
+      "weekday": "금요일",
+      "activities": [
         {
           "start": "21:00",
           "end": "07:00",
@@ -606,6 +642,12 @@ class AIService {
 }
 \`\`\`
 
+⚠️ **최종 확인 (생성 전 반드시 확인하세요)**: 
+- scheduleData 배열에 **정확히 ${scheduleLength}개의 day 객체**가 있는지 확인하세요.
+- day ${baseRelDay}부터 day ${baseRelDay + scheduleLength - 1}까지 **모든 day가 포함**되어 있는지 확인하세요.
+- day ${baseRelDay + scheduleLength - 1}가 **반드시 포함**되어 있는지 확인하세요.
+- day ${baseRelDay + scheduleLength - 1}가 없으면 **생성 실패**입니다. 반드시 다시 생성하세요.
+
 **⚠️ 매우 중요:**
 - **생활 패턴은 반드시 type: "lifestyle"이어야 합니다.**
 - **생활 패턴은 해당 요일마다 반복되어야 합니다. 한 번만 배치하는 것은 절대 금지입니다.**
@@ -614,6 +656,7 @@ class AIService {
 
 **중요:**
 - 반드시 "scheduleData" 키를 사용하세요. "scheduleData"는 day별 객체 배열입니다.
+- **반드시 day ${baseRelDay}부터 day ${baseRelDay + scheduleLength - 1}까지 모든 day에 대해 스케줄을 생성하세요.** 일부 day만 생성하는 것은 절대 금지입니다.
 - 각 day 객체는 "day", "weekday", "activities" 필드를 포함해야 합니다.
 - 각 activity는 "start", "end", "title", "type" 필드를 포함해야 합니다.
 - **"notes"는 스케줄 생성 이유와 배치 전략을 구체적으로 설명하는 문자열 배열입니다.**
@@ -634,11 +677,26 @@ class AIService {
             // 타이밍 로그 시작
             const T0 = Date.now();
             
+            // max_tokens 계산: 스케줄 길이에 따라 동적으로 조정
+            // 기본: 14일 = 2500, 추가 일수당 약 150토큰 (더 여유있게)
+            const baseTokens = 2500;
+            const extraDays = Math.max(0, scheduleLength - 14);
+            const calculatedMaxTokens = baseTokens + (extraDays * 150);
+            const maxTokens = Math.min(calculatedMaxTokens, 8000); // 최대 8000토큰 (gpt-4o-mini 제한)
+            
+            console.log('[🔍 디버깅] max_tokens 계산:', {
+                scheduleLength,
+                baseTokens,
+                extraDays,
+                calculatedMaxTokens,
+                maxTokens
+            });
+            
             const payload = {
                 model: 'gpt-4o-mini',
                 messages: enhancedMessages,
                 temperature: 0.3, // 약간 높여서 더 자연스러운 notes 생성
-                max_tokens: 3000, // 충분한 여유 확보 (14일치 스케줄 + notes 포함)
+                max_tokens: maxTokens, // 스케줄 길이에 따라 동적으로 조정
                 response_format: { type: 'json_object' }
             };
             
@@ -717,6 +775,27 @@ class AIService {
                     dayMap.set(dayObj.day, dayObj);
                 }
             }
+            
+            // AI 응답 검증: day 범위 확인
+            const generatedDays = Array.from(dayMap.keys()).sort((a, b) => a - b);
+            const expectedStartDay = baseRelDay;
+            const expectedEndDay = baseRelDay + scheduleLength - 1;
+            const actualStartDay = generatedDays.length > 0 ? generatedDays[0] : null;
+            const actualEndDay = generatedDays.length > 0 ? generatedDays[generatedDays.length - 1] : null;
+            
+            console.log('[🔍 디버깅] AI 응답 검증:', {
+                expectedRange: `day ${expectedStartDay}~${expectedEndDay} (총 ${scheduleLength}일)`,
+                actualRange: actualStartDay !== null ? `day ${actualStartDay}~${actualEndDay} (총 ${generatedDays.length}일)` : '없음',
+                generatedDays: generatedDays,
+                missingDays: Array.from({ length: scheduleLength }, (_, i) => baseRelDay + i).filter(d => !dayMap.has(d))
+            });
+            
+            // 경고: day 범위가 부족하면 경고 로그
+            if (actualEndDay < expectedEndDay) {
+                const missingDays = Array.from({ length: expectedEndDay - actualEndDay }, (_, i) => actualEndDay + 1 + i);
+                console.warn(`[⚠️ 경고] AI 응답이 불완전합니다! day ${expectedEndDay}까지 생성해야 하는데 day ${actualEndDay}까지만 생성했습니다. 누락된 day: ${missingDays.join(', ')}`);
+            }
+            
             dayArrays = Array.from(dayMap.values()).sort((a, b) => a.day - b.day);
                         
             const explanation = parsed.explanation || parsed.reason || '';
