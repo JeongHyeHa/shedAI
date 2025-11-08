@@ -74,6 +74,7 @@ class AIController {
             prompt,
             promptContext,
             lifestylePatterns,
+            lifestylePatternsOriginal: lifestylePatternsOriginalFromClient,
             sessionId,
             nowOverride,
             anchorDay,
@@ -127,26 +128,91 @@ class AIController {
             if (!sessionIdFinal) console.warn('[generateSchedule] Missing sessionId …');
 
             // 라이프스타일 패턴 파싱/로드
+            // 원본 텍스트를 유지하면서 구조화된 데이터도 생성
+            let lifestylePatternsOriginal = []; // 원본 텍스트 배열
+            
+            // 1) 클라이언트에서 전달된 원본 텍스트 우선 사용
+            if (lifestylePatternsOriginalFromClient && Array.isArray(lifestylePatternsOriginalFromClient)) {
+                lifestylePatternsOriginal = lifestylePatternsOriginalFromClient
+                    .map(p => typeof p === 'string' ? p.trim() : null)
+                    .filter(p => p && p.length > 0);
+            }
+            
+            // 2) lifestylePatterns 배열에서 원본 텍스트 추출 시도
+            if (lifestylePatternsOriginal.length === 0 && lifestylePatterns && Array.isArray(lifestylePatterns)) {
+                lifestylePatternsOriginal = lifestylePatterns
+                    .map(pattern => {
+                        if (typeof pattern === 'string') {
+                            return pattern.trim();
+                        } else if (pattern && typeof pattern === 'object' && pattern.patternText) {
+                            return pattern.patternText.trim();
+                        }
+                        return null;
+                    })
+                    .filter(p => p && p.length > 0);
+            }
+            
+            // 3) 원본 텍스트가 없으면 lifestylePatterns 테이블에서 가져오기
+            if (lifestylePatternsOriginal.length === 0 && userId) {
+                try {
+                    const firestoreService = require('../services/firestoreService');
+                    const stored = await firestoreService.getLifestylePatterns(userId);
+                    if (Array.isArray(stored) && stored.length > 0) {
+                        lifestylePatternsOriginal = stored.filter(p => typeof p === 'string' && p.trim().length > 0);
+                    }
+                } catch (e) {
+                    console.warn('생활패턴 원본 텍스트 로드 실패:', e.message);
+                }
+            }
+            
             if (lifestylePatterns && Array.isArray(lifestylePatterns)) {
+                
+                // 구조화된 데이터 생성 (빈 시간 계산용)
                 parsedLifestylePatterns = lifestylePatterns
-                    .map(pattern => (typeof pattern === 'object' ? pattern :
-                        (typeof pattern === 'string' ? utils.parseLifestylePattern(pattern) : null)))
+                    .map(pattern => {
+                        if (typeof pattern === 'string') {
+                            return utils.parseLifestylePattern(pattern);
+                        } else if (pattern && typeof pattern === 'object') {
+                            // 이미 구조화된 경우 그대로 사용
+                            if (pattern.days && pattern.start != null && pattern.end != null) {
+                                return pattern;
+                            }
+                            // patternText가 있으면 파싱
+                            if (pattern.patternText) {
+                                return utils.parseLifestylePattern(pattern.patternText);
+                            }
+                        }
+                        return null;
+                    })
                     .filter(Boolean);
             } else if (typeof lifestylePatterns === 'string' && lifestylePatterns.trim()) {
                 const patterns = lifestylePatterns
                     .split(/\r?\n|[;,]+/)
                     .map(s => s.trim())
                     .filter(Boolean);
+                lifestylePatternsOriginal = patterns;
                 parsedLifestylePatterns = patterns
                     .map(pattern => utils.parseLifestylePattern(pattern))
                     .filter(Boolean);
             } else if (userId) {
+                // 클라이언트에서 lifestylePatterns를 전달하지 않은 경우에만 DB에서 가져오기
                 try {
                     const firestoreService = require('../services/firestoreService');
+                    
+                    // lifestylePatterns 컬렉션에서 가져오기
                     const stored = await firestoreService.getLifestylePatterns(userId);
-                    if (Array.isArray(stored)) {
+                    if (Array.isArray(stored) && stored.length > 0) {
+                        lifestylePatternsOriginal = stored.filter(p => typeof p === 'string' && p.trim().length > 0);
                         parsedLifestylePatterns = stored
-                            .map(p => (typeof p === 'string' ? utils.parseLifestylePattern(p) : p))
+                            .map(p => {
+                                if (typeof p === 'string') {
+                                    return utils.parseLifestylePattern(p);
+                                } else if (p && typeof p === 'object' && p.patternText) {
+                                    lifestylePatternsOriginal.push(p.patternText);
+                                    return utils.parseLifestylePattern(p.patternText);
+                                }
+                                return p;
+                            })
                             .filter(Boolean);
                     }
                 } catch (e) {
@@ -155,9 +221,7 @@ class AIController {
             }
 
             // 기존 할 일 준비
-            console.log('[AI Controller] 클라이언트에서 전달된 할 일:', existingTasks.length, '개');
             const normFromClient = t => {
-                // 어떤 형식이 와도 YYYY-MM-DD로 보정
                 let dl = t?.deadline;
                 if (dl?.toDate) dl = dl.toDate();
                 const d = (dl instanceof Date) ? dl : (dl ? new Date(dl) : null);
@@ -182,9 +246,7 @@ class AIController {
                 };
             };
             existingTasks = existingTasks.map(normFromClient);
-            
-            console.log('[AI Controller] 클라이언트에서 전달된 할 일:', existingTasks.length, '개');
-            
+                        
             if (existingTasks.length === 0 && userId) {
                 try {
                     const firestoreService = require('../services/firestoreService');
@@ -226,8 +288,6 @@ class AIController {
                         seen.add(k);
                         return true;
                     });
-                    
-                    console.log('[AI Controller] 병합된 할 일:', existingTasks.length, '개');
                 } catch (error) {
                     console.warn('할 일 병합 조회 실패:', error.message);
                 }
@@ -251,6 +311,21 @@ class AIController {
                 }
             }
             
+            // opts 객체 초기화 (userFeedback 정의 후)
+            const opts = {
+                nowOverride,
+                anchorDay,
+                userFeedback: userFeedback || ''
+            };
+            
+            // 원본 텍스트를 opts에 추가하여 aiService로 전달
+            if (lifestylePatternsOriginal.length > 0) {
+                opts.lifestylePatternsOriginal = lifestylePatternsOriginal;
+                console.log('[🔍 디버깅] aiController에서 lifestylePatternsOriginal 전달:', lifestylePatternsOriginal);
+            } else {
+                console.warn('[🔍 디버깅] aiController에서 lifestylePatternsOriginal이 비어있음');
+            }
+            
             // 피드백을 messages에 추가
             if (userFeedback) {
                 // 마지막 user 메시지에 피드백 추가
@@ -263,14 +338,11 @@ class AIController {
             }
             
             // AI 서비스 호출
-            console.log('[AI Controller] AI 서비스로 전달할 할 일:', existingTasks.length, '개');
-            console.log('[AI Controller] AI 서비스 호출 시작 - 메시지:', messageArray.length, '개, 생활패턴:', parsedLifestylePatterns.length, '개');
-            
             const result = await aiService.generateSchedule(
                 messageArray,
                 parsedLifestylePatterns,
                 existingTasks,
-                { nowOverride, anchorDay, userFeedback }
+                opts
             );
             
              try {

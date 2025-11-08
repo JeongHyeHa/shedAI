@@ -1,26 +1,22 @@
 {
-  "scheduleData": [
+  "schedule": [
     {
       "day": 6,
       "weekday": "토요일",
       "activities": [
         {
-          "start": "12:00",
-          "end": "13:00",
-          "title": "브런치",
-          "type": "lifestyle"
+          "start": "15:00",
+          "end": "17:00",
+          "title": "자유시간",
+          "type": "lifestyle",
+          "category": "Leisure"
         },
         {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
-        },
-        {
-          "start": "22:00",
-          "end": "00:00",
-          "title": "자유시간",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
         }
       ]
     },
@@ -29,22 +25,18 @@
       "weekday": "일요일",
       "activities": [
         {
-          "start": "12:00",
-          "end": "13:00",
-          "title": "브런치",
-          "type": "lifestyle"
+          "start": "15:00",
+          "end": "17:00",
+          "title": "자유시간",
+          "type": "lifestyle",
+          "category": "Leisure"
         },
         {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
-        },
-        {
-          "start": "22:00",
-          "end": "00:00",
-          "title": "자유시간",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
         }
       ]
     },
@@ -53,16 +45,18 @@
       "weekday": "월요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     },
@@ -71,16 +65,18 @@
       "weekday": "화요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     },
@@ -89,16 +85,25 @@
       "weekday": "수요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
+        },
+        {
+          "start": "14:00",
+          "end": "15:00",
+          "title": "회의",
+          "type": "task",
+          "category": "Admin"
         }
       ]
     },
@@ -107,16 +112,18 @@
       "weekday": "목요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     },
@@ -125,16 +132,18 @@
       "weekday": "금요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     },
@@ -143,22 +152,18 @@
       "weekday": "토요일",
       "activities": [
         {
-          "start": "12:00",
-          "end": "13:00",
-          "title": "브런치",
-          "type": "lifestyle"
+          "start": "15:00",
+          "end": "17:00",
+          "title": "자유시간",
+          "type": "lifestyle",
+          "category": "Leisure"
         },
         {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
-        },
-        {
-          "start": "22:00",
-          "end": "00:00",
-          "title": "자유시간",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
         }
       ]
     },
@@ -167,22 +172,18 @@
       "weekday": "일요일",
       "activities": [
         {
-          "start": "12:00",
-          "end": "13:00",
-          "title": "브런치",
-          "type": "lifestyle"
+          "start": "15:00",
+          "end": "17:00",
+          "title": "자유시간",
+          "type": "lifestyle",
+          "category": "Leisure"
         },
         {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
-        },
-        {
-          "start": "22:00",
-          "end": "00:00",
-          "title": "자유시간",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
         }
       ]
     },
@@ -191,16 +192,18 @@
       "weekday": "월요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     },
@@ -209,16 +212,18 @@
       "weekday": "화요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     },
@@ -227,16 +232,18 @@
       "weekday": "수요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     },
@@ -245,16 +252,18 @@
       "weekday": "목요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     },
@@ -263,21 +272,37 @@
       "weekday": "금요일",
       "activities": [
         {
-          "start": "08:00",
-          "end": "17:00",
-          "title": "회사",
-          "type": "lifestyle"
-        },
-        {
           "start": "21:00",
           "end": "07:00",
           "title": "취침",
-          "type": "lifestyle"
+          "type": "lifestyle",
+          "category": "Sleep"
+        },
+        {
+          "start": "08:00",
+          "end": "17:00",
+          "title": "회사",
+          "type": "lifestyle",
+          "category": "Work"
         }
       ]
     }
   ],
+  "taxonomy": [
+    { "name": "Leisure", "description": "여가 및 자유시간 활동" },
+    { "name": "Sleep", "description": "수면 및 휴식 시간" },
+    { "name": "Work", "description": "업무 및 회사 관련 활동" },
+    { "name": "Admin", "description": "관리 및 회의 관련 활동" }
+  ],
+  "activityAnalysis": {
+    "Leisure": 10,
+    "Sleep": 40,
+    "Work": 40,
+    "Admin": 10
+  },
   "notes": [
-    "기존 스케줄을 유지하며, 주말과 평일의 생활 패턴을 반영했습니다."
+    "회의는 11월 10일에 예정되어 있어 수요일에 배치했습니다.",
+    "주말에는 자유시간을 활용하여 여가 활동을 배치했습니다.",
+    "생활 패턴을 기반으로 매일 취침 시간을 유지했습니다."
   ]
 }

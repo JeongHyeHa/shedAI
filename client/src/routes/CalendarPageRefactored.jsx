@@ -52,6 +52,7 @@ async function generateAndApplySchedule({
   today,
   conversationContext,
   parsedLifestylePatterns,
+  lifestylePatternsOriginal,  // 원본 텍스트 배열 추가
   messagesBasePrompt,
   tasksForAI,
   updateSchedule,
@@ -67,7 +68,11 @@ async function generateAndApplySchedule({
     messages,
     parsedLifestylePatterns,
     tasksForAI.existingTasksForAI,
-    { userId, sessionId: `sess_${userId || 'anon'}` }
+    { 
+      userId, 
+      sessionId: `sess_${userId || 'anon'}`,
+      ...(lifestylePatternsOriginal ? { lifestylePatternsOriginal } : {})  // 원본 텍스트 배열 전달
+    }
   );
   
   const normalized = apiResp?.schedule ? apiResp : { schedule: apiResp };
@@ -333,6 +338,14 @@ function CalendarPage() {
     if (!user?.uid) { addAIMessage("로그인이 필요합니다."); return; }
     startLoading();
     try {
+      // 원본 텍스트 가져오기 (lifestylePatterns 테이블에서)
+      const savedLifestylePatterns = await firestoreService.getLifestylePatterns(user.uid);
+      const lifestylePatternsOriginal = Array.isArray(savedLifestylePatterns) && typeof savedLifestylePatterns[0] === 'string'
+        ? savedLifestylePatterns  // 원본 텍스트 배열
+        : savedLifestylePatterns.map(p => 
+            typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
+          );
+      
       const USE_FIRESTORE = String(process.env.REACT_APP_USE_FIRESTORE || 'true') === 'true';
       const tasksForAI = await buildTasksForAI(
         user.uid,
@@ -346,6 +359,7 @@ function CalendarPage() {
         today,
         conversationContext,
         parsedLifestylePatterns,
+        lifestylePatternsOriginal: lifestylePatternsOriginal,  // 원본 텍스트 배열 전달
         messagesBasePrompt: promptBase,
         tasksForAI,
         updateSchedule,
@@ -382,6 +396,7 @@ function CalendarPage() {
       ? parseLifestyleLines(patternsForAI.join('\n'))
       : patternsForAI;
     
+    // 원본 텍스트는 runSchedule 내부에서 가져오므로 여기서는 전달하지 않음
     await runSchedule(prompt, parsedPatterns);
   }, [lifestyleList, addAIMessage, user?.uid, runSchedule]);
 
@@ -420,6 +435,13 @@ function CalendarPage() {
         ? parseLifestyleLines(savedLifestylePatterns.join('\n'))
         : savedLifestylePatterns;
       
+      // 원본 텍스트 추출 (서버에 전달하기 위해)
+      const lifestylePatternsOriginal = Array.isArray(savedLifestylePatterns) && typeof savedLifestylePatterns[0] === 'string'
+        ? savedLifestylePatterns  // 원본 텍스트 배열
+        : savedLifestylePatterns.map(p => 
+            typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
+        );
+      
       const USE_FIRESTORE = String(process.env.REACT_APP_USE_FIRESTORE || 'true') === 'true';
       const { existingTasksForAI, taskText } = await buildTasksForAI(
         user.uid,
@@ -428,11 +450,7 @@ function CalendarPage() {
       );
       
       // 3. 생활패턴을 원본 텍스트로 사용 (AI가 직접 파싱하도록)
-      const lifestyleText = Array.isArray(savedLifestylePatterns) && typeof savedLifestylePatterns[0] === 'string'
-        ? savedLifestylePatterns.join("\n")  // 원본 텍스트 그대로 사용
-        : savedLifestylePatterns.map(p => 
-            typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
-        ).join("\n");
+      const lifestyleText = lifestylePatternsOriginal.join("\n");
       
       
       // 5. 스케줄 생성 (직접 호출로 변경)
@@ -455,10 +473,24 @@ function CalendarPage() {
         scheduleMessages,
         parsedPatterns, 
         existingTasksForAI,
-        { userId: user.uid, sessionId }
+        { 
+          userId: user.uid, 
+          sessionId,
+          lifestylePatternsOriginal: lifestylePatternsOriginal  // 원본 텍스트 배열 전달
+        }
       );
-      // 응답 통일: 배열/객체 모두 허용
-      const normalized = apiResp?.schedule ? apiResp : { schedule: apiResp };
+      
+      // 응답 통일: 배열/객체 모두 허용 (notes, explanation 등도 함께 보존)
+      const normalized = apiResp?.schedule 
+        ? apiResp 
+        : { 
+            schedule: apiResp,
+            notes: apiResp?.notes,
+            explanation: apiResp?.explanation,
+            taxonomy: apiResp?.taxonomy,
+            activityAnalysis: apiResp?.activityAnalysis,
+            unplaced: apiResp?.unplaced
+          };
       
       const processedSchedule = postprocessSchedule({
         raw: normalized.schedule,
@@ -481,26 +513,23 @@ function CalendarPage() {
       api?.removeAllEvents();
       updateSchedule({ schedule: withTasks });
       
-      // explanation 또는 notes 중 하나라도 있으면 표시
-      const hasExplanation = apiResp?.explanation && String(apiResp.explanation).trim();
-      const hasNotes = apiResp?.notes && (
-        (Array.isArray(apiResp.notes) && apiResp.notes.length > 0) ||
-        (typeof apiResp.notes === 'string' && apiResp.notes.trim())
+      addAIMessage("스케줄 생성이 완료되었습니다!");
+      alert('스케줄이 생성되었습니다!');
+      
+      const hasExplanation = normalized?.explanation && String(normalized.explanation).trim();
+      const hasNotes = normalized?.notes && (
+        (Array.isArray(normalized.notes) && normalized.notes.length > 0) ||
+        (typeof normalized.notes === 'string' && normalized.notes.trim())
       );
       
       if (hasExplanation) {
-        const explanationText = String(apiResp.explanation).replace(/\n/g, "<br>");
+        const explanationText = String(normalized.explanation).replace(/\n/g, "<br>");
         addAIMessage(`스케줄 설계 이유:<br>${explanationText}`, null, true);
-        alert('스케줄이 생성되었습니다!');
       } else if (hasNotes) {
-        const notesText = Array.isArray(apiResp.notes)
-          ? apiResp.notes.join("<br>")
-          : String(apiResp.notes).replace(/\n/g, "<br>");
+        const notesText = Array.isArray(normalized.notes)
+          ? normalized.notes.join("<br>")
+          : String(normalized.notes).replace(/\n/g, "<br>");
         addAIMessage(`스케줄 설계 이유:<br>${notesText}`, null, true);
-        alert('스케줄이 생성되었습니다!');
-      } else {
-        addAIMessage("스케줄이 생성되었습니다!");
-        alert('스케줄이 생성되었습니다!');
       }
 
       // lifestyleContext에 저장할 때는 원본 텍스트(savedLifestylePatterns)를 사용해야 함
@@ -541,6 +570,13 @@ function CalendarPage() {
         ? parseLifestyleLines(savedLifestylePatterns.join('\n'))
         : savedLifestylePatterns;
       
+      // 원본 텍스트 추출 (서버에 전달하기 위해)
+      const lifestylePatternsOriginal = Array.isArray(savedLifestylePatterns) && typeof savedLifestylePatterns[0] === 'string'
+        ? savedLifestylePatterns  // 원본 텍스트 배열
+        : savedLifestylePatterns.map(p => 
+            typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
+        );
+      
       const USE_FIRESTORE = String(process.env.REACT_APP_USE_FIRESTORE || 'true') === 'true';
       const { existingTasksForAI, taskText } = await buildTasksForAI(
         user.uid,
@@ -549,19 +585,7 @@ function CalendarPage() {
       );
       
       // 원본 텍스트를 그대로 사용하여 AI가 직접 파싱하도록 함
-      let lifestyleText = '';
-      if (Array.isArray(lifestyleList) && typeof lifestyleList[0] === 'string') {
-        lifestyleText = lifestyleList.join("\n");
-          } else {
-        const lifestylePatternsForAI = await firestoreService.getLifestylePatterns(user.uid);
-        if (Array.isArray(lifestylePatternsForAI) && typeof lifestylePatternsForAI[0] === 'string') {
-          lifestyleText = lifestylePatternsForAI.join("\n"); 
-        } else {
-          lifestyleText = lifestylePatternsForAI.map(p => 
-            typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
-          ).join("\n");
-        }
-      }
+      const lifestyleText = lifestylePatternsOriginal.join("\n");
       
       const promptBase = lastSchedule 
         ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule, existingTasksForAI)
@@ -582,6 +606,9 @@ function CalendarPage() {
           parsedPatterns, 
           existingTasksForAI,                       
           {
+            userId: user.uid,
+            sessionId: getOrCreateSessionId(user.uid),
+            lifestylePatternsOriginal: lifestylePatternsOriginal,  // 원본 텍스트 배열 전달
             nowOverride: toYMDLocal(new Date()) + 'T00:00:00',
             anchorDay: today.getDay() === 0 ? 7 : today.getDay()
           }
@@ -877,21 +904,25 @@ function CalendarPage() {
     // 생활패턴을 원본 텍스트로 사용 (AI가 직접 파싱하도록)
     let lifestyleText = '';
     let patternsForAI = [];
+    let lifestylePatternsOriginal = [];
     
     if (Array.isArray(lifestyleList) && typeof lifestyleList[0] === 'string') {
       lifestyleText = lifestyleList.join('\n');
+      lifestylePatternsOriginal = lifestyleList;  // 원본 텍스트 배열
       patternsForAI = parseLifestyleLines(lifestyleText);
     } else {
       const lifestylePatternsForAI = await firestoreService.getLifestylePatterns(user.uid);
       
       if (Array.isArray(lifestylePatternsForAI) && typeof lifestylePatternsForAI[0] === 'string') {
         lifestyleText = lifestylePatternsForAI.join('\n');
+        lifestylePatternsOriginal = lifestylePatternsForAI;  // 원본 텍스트 배열
         patternsForAI = parseLifestyleLines(lifestyleText);
       } else {
         patternsForAI = lifestylePatternsForAI;
-        lifestyleText = patternsForAI.map(p => 
+        lifestylePatternsOriginal = lifestylePatternsForAI.map(p => 
           typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
-        ).join('\n');
+        );
+        lifestyleText = lifestylePatternsOriginal.join('\n');
       }
     }
     
@@ -902,6 +933,12 @@ function CalendarPage() {
       USE_FIRESTORE ? firestoreService : null,
       { fetchLocalTasks: (window?.shedAI && window.shedAI.fetchLocalTasks) ? window.shedAI.fetchLocalTasks : null }
     );
+
+    // promptBase 생성 (lastSchedule이 있으면 피드백 프롬프트, 없으면 새 스케줄 프롬프트)
+    const lastSchedule = user?.uid ? await firestoreService.getLastSchedule(user.uid) : null;
+    const promptBase = lastSchedule 
+      ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule, existingTasksForAI)
+      : buildShedAIPrompt(lifestyleText, taskText, today, existingTasksForAI);
 
     let timeoutId;
     let controller;
@@ -925,11 +962,23 @@ function CalendarPage() {
         { 
           userId: user?.uid ?? 'anon', 
           sessionId,
+          lifestylePatternsOriginal: lifestylePatternsOriginal,  // 원본 텍스트 배열 전달
           promptContext: `${promptBase}\n\n[현재 할 일 목록]\n${taskText || '할 일 없음'}`,  
           signal: controller.signal  
         }
       );
-      const newSchedule = apiResp?.schedule ? apiResp : { schedule: apiResp };
+      
+      // 응답 통일: 배열/객체 모두 허용 (notes, explanation 등도 함께 보존)
+      const newSchedule = apiResp?.schedule 
+        ? apiResp 
+        : { 
+            schedule: apiResp,
+            notes: apiResp?.notes,
+            explanation: apiResp?.explanation,
+            taxonomy: apiResp?.taxonomy,
+            activityAnalysis: apiResp?.activityAnalysis,
+            unplaced: apiResp?.unplaced
+          };
       
       clearTimeout(timeoutId);
 
@@ -976,24 +1025,22 @@ function CalendarPage() {
       }
       
       // explanation 또는 notes 중 하나라도 있으면 표시
-      const hasExplanation = newSchedule?.explanation && newSchedule.explanation.trim();
+      addAIMessage("스케줄 생성이 완료되었습니다!");
+      alert('스케줄이 생성되었습니다!');
+      const hasExplanation = newSchedule?.explanation && String(newSchedule.explanation).trim();
       const hasNotes = newSchedule?.notes && (
-        Array.isArray(newSchedule.notes) && newSchedule.notes.length > 0
-      ) || (typeof newSchedule.notes === 'string' && newSchedule.notes.trim());
+        (Array.isArray(newSchedule.notes) && newSchedule.notes.length > 0) ||
+        (typeof newSchedule.notes === 'string' && newSchedule.notes.trim())
+      );
       
       if (hasExplanation) {
-        const explanationText = newSchedule.explanation.replace(/\n/g, "<br>");
+        const explanationText = String(newSchedule.explanation).replace(/\n/g, "<br>");
         addAIMessage(`스케줄 설계 이유:<br>${explanationText}`, null, true);
-        alert('스케줄이 생성되었습니다!');
       } else if (hasNotes) {
         const notesText = Array.isArray(newSchedule.notes)
           ? newSchedule.notes.join("<br>")
-          : newSchedule.notes.replace(/\n/g, "<br>");
+          : String(newSchedule.notes).replace(/\n/g, "<br>");
         addAIMessage(`스케줄 설계 이유:<br>${notesText}`, null, true);
-        alert('스케줄이 생성되었습니다!');
-      } else {
-        addAIMessage("스케줄을 생성했습니다!");
-        alert('스케줄이 생성되었습니다!');
       }
     } catch (e) {
       try { controller?.abort(); } catch {}

@@ -343,18 +343,33 @@ class FirestoreService {
   async getFeedbacks(userId) {
     try {
       const feedbacksRef = collection(this.db, 'users', userId, 'feedbacks');
-      // type이 'ai_advice'가 아닌 것만 조회
-      const feedbacksSnapshot = await getDocs(
-        query(feedbacksRef, where('type', '!=', 'ai_advice'), orderBy('createdAt', 'desc'))
-      );
       
-      return feedbacksSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      // 인덱스가 없을 수 있으므로 try-catch로 fallback 처리
+      try {
+        const q = query(
+          feedbacksRef,
+          where('type', '!=', 'ai_advice'),
+          orderBy('createdAt', 'desc')
+        );
+        const feedbacksSnapshot = await getDocs(q);
+        
+        return feedbacksSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+      } catch (indexError) {
+        // 인덱스 에러가 발생하면 모든 피드백을 가져와서 필터링 (fallback)
+        const q = query(feedbacksRef, orderBy('createdAt', 'desc'));
+        const feedbacksSnapshot = await getDocs(q);
+        
+        // 클라이언트 측에서 AI 조언 필터링
+        return feedbacksSnapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter(feedback => feedback.type !== 'ai_advice');
+      }
     } catch (error) {
       console.error('피드백 조회 실패:', error);
-      throw error;
+      return []; // 에러 발생 시 빈 배열 반환
     }
   }
 
@@ -426,6 +441,11 @@ class FirestoreService {
       };
       const willActivate = hasRealSchedule(sessionData?.scheduleData);
       
+      // 실제 스케줄이 없거나 hasSchedule이 false인 세션은 저장하지 않음 (최종 스케줄만 저장)
+      if (!willActivate || sessionData?.hasSchedule === false) {
+        return null;
+      }
+      
       if (willActivate) {
         await this.deactivateScheduleSessions(userId);
       }
@@ -447,65 +467,40 @@ class FirestoreService {
     }
   }
 
-  // 최근 스케줄 조회: 빈 스케줄은 무시하고 유효한 스케줄만 반환
+  // 최근 스케줄 조회: 가장 최신 세션 하나만 조회하여 유효한 스케줄만 반환
   async getLastSchedule(userId) {
     try {
       const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
-      
-      // 실제 스케줄 존재 여부 판단 헬퍼
-      const hasRealSchedule = (sd) => {
-        if (!sd) return false;
-        if (Array.isArray(sd)) return sd.length > 0;
-        if (Array.isArray(sd?.days)) {
-          return sd.days.some(d => Array.isArray(d.activities) && d.activities.length > 0);
-        }
-        if (Array.isArray(sd?.events)) return sd.events.length > 0;
-        return false;
-      };
-      
-      // hasSchedule: true인 세션만 조회 (초기화된 스케줄 제외)
-      // 인덱스가 없을 수 있으므로 try-catch로 fallback 처리
-      try {
+      const fetchLatestSession = async (orderByField) => {
         const q = query(
           sessionsRef, 
-          where('hasSchedule', '==', true),
-          orderBy('createdAtMs', 'desc'), 
-          limit(10)
+          orderBy(orderByField, 'desc'), 
+          limit(1)
         );
         const qs = await getDocs(q);
-        for (const doc of qs.docs) {
-          const data = doc.data();
-          // hasSchedule이 true이면서 실제 스케줄 데이터가 있는 경우만 반환
-          if (data.hasSchedule === true && hasRealSchedule(data?.scheduleData)) {
-            return data;
-          }
+        
+        if (qs.docs.length === 0) {
+          return null;
         }
+        
+        const data = qs.docs[0].data();
+        return data.hasSchedule === true ? data : null;
+      };
+      
+      // createdAtMs로 먼저 시도
+      try {
+        const result = await fetchLatestSession('createdAtMs');
+        if (result) return result;
       } catch (indexError) {
-        // 인덱스 에러가 발생하면 최근 세션만 빠르게 확인 (fallback)
-        // 초기화 후에는 스케줄이 없으므로 최소한의 조회만 수행
-        // 개발 환경에서만 로그 출력 (프로덕션에서는 조용히 처리)
-        const isDev = (typeof import.meta !== 'undefined' && import.meta.env?.MODE !== 'production') ||
-                      (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production');
-        if (isDev) {
-          console.debug('[getLastSchedule] 인덱스 없음, fallback 사용 (정상 동작)');
-        }
-        
-        // 최근 세션만 빠르게 확인 (초기화 후에는 대부분 스케줄이 없음)
-        const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(5));
-        const qs = await getDocs(q);
-        
-        // 첫 번째 유효한 스케줄만 확인하고 즉시 반환
-        for (const doc of qs.docs) {
-          const data = doc.data();
-          if (data.hasSchedule === true && hasRealSchedule(data?.scheduleData)) {
-            return data;
-          }
-        }
-        // 유효한 스케줄이 없으면 즉시 null 반환 (추가 조회 불필요)
+        // 인덱스 에러가 발생하면 createdAt으로 fallback
       }
       
-      // 유효한 스케줄이 없으면 null 반환
-      return null;
+      // createdAt으로 fallback
+      try {
+        return await fetchLatestSession('createdAt');
+      } catch (fallbackError) {
+        return null;
+      }
     } catch (error) {
       console.error('최근 스케줄 조회 실패:', error);
       return null;
@@ -560,20 +555,9 @@ class FirestoreService {
       const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(10));
       const qs = await getDocs(q);
       
-      // 실제 스케줄 존재 여부 판단 헬퍼
-      const hasRealSchedule = (sd) => {
-        if (!sd) return false;
-        if (Array.isArray(sd)) return sd.length > 0;
-        if (Array.isArray(sd?.days)) {
-          return sd.days.some(d => Array.isArray(d.activities) && d.activities.length > 0);
-        }
-        if (Array.isArray(sd?.events)) return sd.events.length > 0;
-        return false;
-      };
-      
       for (const doc of qs.docs) {
         const data = doc.data();
-        if (hasRealSchedule(data?.scheduleData)) {
+        if (data.hasSchedule === true) {
           await updateDoc(doc.ref, {
             activityAnalysis,
             updatedAt: serverTimestamp()
@@ -785,50 +769,7 @@ class FirestoreService {
     }
   }
 
-  // AI 조언 저장
-  async saveAIAdvice(userId, adviceData) {
-    try {
-      const adviceRef = collection(this.db, 'users', userId, 'aiAdvice');
-      
-      const docRef = await addDoc(adviceRef, {
-        ...adviceData,
-        isRead: false,
-        createdAt: serverTimestamp()
-      });
-      
-      return docRef.id;
-    } catch (error) {
-      console.error('AI 조언 저장 실패:', error);
-      throw error;
-    }
-  }
-
-  // AI 조언 조회
-  async getAIAdvice(userId, limitCount = 5) {
-    try {
-      const adviceRef = collection(this.db, 'users', userId, 'aiAdvice');
-      const q = query(
-        adviceRef,
-        orderBy('createdAt', 'desc'),
-        limit(limitCount)
-      );
-      
-      const querySnapshot = await getDocs(q);
-      return querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-    } catch (error) {
-      console.error('AI 조언 조회 실패:', error);
-      return [];
-    }
-  }
-
   // ===== Habits & Habit Logs =====
-  // Habits collection: users/{userId}/habits
-  // Habit document: { name, source ('pattern'|'task'|'custom'), isActive, createdAt, updatedAt }
-  // Habit logs subcollection: users/{userId}/habits/{habitId}/logs with docs keyed by YYYY-MM-DD: { date, done }
-
   async getHabits(userId) {
     try {
       const habitsRef = collection(this.db, 'users', userId, 'habits');

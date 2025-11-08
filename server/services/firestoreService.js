@@ -166,9 +166,6 @@ class FirestoreService {
         try {
             const tasksRef = db.collection('users').doc(userId).collection('tasks');
             const snapshot = await tasksRef.orderBy('createdAt', 'desc').get();
-            try {
-                console.debug('[FS][getAllTasks] projectId=', process.env.FIREBASE_PROJECT_ID, 'uid=', userId, 'size=', snapshot.size);
-            } catch {}
             return snapshot.docs.map(doc => {
                 const data = doc.data();
                 const deadline = (typeof data?.deadline === 'string')
@@ -402,6 +399,7 @@ class FirestoreService {
         if (Array.isArray(sd.events)) return sd.events.length > 0;
         return false;
     }
+
 
     // 피드백 목록 조회
     async getFeedbacks(userId, options = {}) {

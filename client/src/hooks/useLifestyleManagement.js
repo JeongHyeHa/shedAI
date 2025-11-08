@@ -37,9 +37,7 @@ export function useLifestyleManagement() {
 
   // 생활패턴 추가 (UI에만 표시, DB 저장 안함)
   const handleAddLifestyle = useCallback(() => {
-    console.log('handleAddLifestyle 호출됨, 입력:', lifestyleInput);
     if (!lifestyleInput.trim()) {
-      console.log('입력이 비어있음');
       return;
     }
     

@@ -206,35 +206,15 @@ export const useScheduleManagement = (setAllEvents) => {
     try {
       setIsLoading(true);
       
-      // A) 고정 시각 태스크 먼저 캘린더에 반영
+      // A) 고정 시각 태스크 준비 (나중에 함께 추가)
       const fixedEvents = tasksToFixedEvents(existingTasks);
-      if (fixedEvents.length) {
-        setAllEvents(prev => (Array.isArray(prev) ? [...prev, ...fixedEvents] : fixedEvents));
-      }
 
       // (A) 단순 일정 트리거면: AI 호출 없이 바로 처리
       let quickAddedEvent = null;
       if (isSimpleScheduleTrigger(messages)) {
         const ev = extractEventFromMessage(messages, baseDate);
 
-        // 1) 캘린더 이벤트 추가
-        setAllEvents((prev) => (Array.isArray(prev) ? [...prev, {
-          id: `evt_${Date.now()}`,
-          title: ev.title,
-          start: ev.start,
-          end: ev.end,
-          allDay: false,
-          extendedProps: { isDone: false, source: 'quick-add' },
-        }] : [{
-          id: `evt_${Date.now()}`,
-          title: ev.title,
-          start: ev.start,
-          end: ev.end,
-          allDay: false,
-          extendedProps: { isDone: false, source: 'quick-add' },
-        }]));
-
-        // 2) Task DB에도 기록 (deadline=이벤트 날짜 자정, deadlineTime=시작 HH:mm)
+        // Task DB에만 기록 (화면에는 나중에 추가)
         const ymd = toISODateLocal(ev.start);
         const hh = String(ev.start.getHours()).padStart(2, '0');
         const mm = String(ev.start.getMinutes()).padStart(2, '0');
@@ -267,22 +247,6 @@ export const useScheduleManagement = (setAllEvents) => {
         const isPromptLike = looksLikeSystemPrompt(lastUser);
         if (!quickAddedEvent && !isSimpleScheduleTrigger(messages) && looksTimed && !isPromptLike) {
           const ev = extractEventFromMessage([{ role: 'user', content: lastUser }], baseDate);
-
-          setAllEvents(prev => (Array.isArray(prev) ? [...prev, {
-            id: `evt_${Date.now()}`,
-            title: ev.title,
-            start: ev.start,
-            end: ev.end,
-            allDay: false,
-            extendedProps: { isDone: false, source: 'quick-add-implicit' },
-          }] : [{
-            id: `evt_${Date.now()}`,
-            title: ev.title,
-            start: ev.start,
-            end: ev.end,
-            allDay: false,
-            extendedProps: { isDone: false, source: 'quick-add-implicit' },
-          }]));
 
           const ymd = toISODateLocal(ev.start);
           const hh = String(ev.start.getHours()).padStart(2, '0');
@@ -393,27 +357,23 @@ export const useScheduleManagement = (setAllEvents) => {
         }
       }));
       
-      // B) AI 결과 병합 (고정 이벤트 유지)
-      // 퀵애드가 있었다면 결과에 고정 이벤트로 병합해 최종 반영
-      if (quickAddedEvent) {
-        setAllEvents(prev => (Array.isArray(prev) ? [...prev, {
-          id: `evt_${Date.now()}_fixed` ,
+      // B) 기존 이벤트 제거 후 AI 결과와 고정 이벤트를 함께 추가
+      // 모든 이벤트를 한 번에 추가하여 중간 상태가 표시되지 않도록 함
+      const allEventsToAdd = [
+        ...fixedEvents,
+        ...(quickAddedEvent ? [{
+          id: `evt_${Date.now()}_fixed`,
           title: quickAddedEvent.title,
           start: quickAddedEvent.start,
           end: quickAddedEvent.end,
           allDay: false,
           extendedProps: { isDone: false, source: 'quick-add-fixed' }
-        }, ...events] : [{
-          id: `evt_${Date.now()}_fixed` ,
-          title: quickAddedEvent.title,
-          start: quickAddedEvent.start,
-          end: quickAddedEvent.end,
-          allDay: false,
-          extendedProps: { isDone: false, source: 'quick-add-fixed' }
-        }, ...events]));
-      } else {
-        setAllEvents(prev => (Array.isArray(prev) ? [...prev, ...events] : events));
-      }
+        }] : []),
+        ...events
+      ];
+      
+      // 기존 이벤트를 모두 제거하고 새 이벤트를 한 번에 추가
+      setAllEvents(allEventsToAdd);
       
       // 훅에서는 저장하지 않고 스케줄만 리턴 (관심사 분리)
       return {
@@ -426,7 +386,13 @@ export const useScheduleManagement = (setAllEvents) => {
               allDay: false,
               extendedProps: { isDone: false, source: 'quick-add-fixed' }
             }, ...events]
-          : [...fixedEvents, ...events]
+          : [...fixedEvents, ...events],
+        // 서버 응답의 notes와 explanation 보존
+        notes: apiResponse?.notes,
+        explanation: apiResponse?.explanation,
+        taxonomy: apiResponse?.taxonomy,
+        activityAnalysis: apiResponse?.activityAnalysis,
+        unplaced: apiResponse?.unplaced
       };
     } catch (error) {
       console.error('스케줄 생성 실패:', error);

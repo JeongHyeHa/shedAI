@@ -102,12 +102,7 @@ export const useMessageManagement = () => {
           lastMessage: text
         });
         if (!updated) {
-          await firestoreService.saveScheduleSession(user.uid, {
-            conversationContext: newContext,
-            lastMessage: text,
-            hasSchedule: false,
-            isActive: false
-          });
+         
         }
       } catch (error) {
         console.error('AI 메시지 저장 실패:', error);
