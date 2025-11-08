@@ -953,7 +953,8 @@ export function convertScheduleToEvents(scheduleArray, nowLike = new Date()) {
           isRepeating: !!activity.isRepeating,
           description: activity.description,
           category: normalizedCategory,
-          confidence: activity.confidence ?? undefined
+          confidence: activity.confidence ?? undefined,
+          taskId: activity.taskId ?? null  // taskId 포함
         };
         
 
@@ -1695,7 +1696,6 @@ export function tasksToFixedEvents(tasks = []) {
         end,
         allDay: false,
         extendedProps: {
-          isDone: false,
           source: 'fixed-task',
           taskId: t.id || null,
         },

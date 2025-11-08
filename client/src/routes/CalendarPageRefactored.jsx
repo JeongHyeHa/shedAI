@@ -516,13 +516,7 @@ function CalendarPage() {
       updateSchedule({ schedule: withTasks });
       
       // 스케줄을 캘린더 이벤트로 변환하여 렌더링
-      const events = convertScheduleToEvents(withTasks, today).map(event => ({
-        ...event,
-        extendedProps: {
-          ...event.extendedProps,
-          isDone: false,
-        }
-      }));
+      const events = convertScheduleToEvents(withTasks, today);
       setAllEvents(events);
       
       addAIMessage("스케줄 생성이 완료되었습니다!");
@@ -637,13 +631,7 @@ function CalendarPage() {
         updateSchedule({ schedule: processedSchedule });
         
         // 스케줄을 캘린더 이벤트로 변환하여 렌더링
-        const events = convertScheduleToEvents(processedSchedule, today).map(event => ({
-          ...event,
-          extendedProps: {
-            ...event.extendedProps,
-            isDone: false,
-          }
-        }));
+        const events = convertScheduleToEvents(processedSchedule, today);
         setAllEvents(events);
         
         const scheduleSessionId = await saveScheduleSessionUnified({
@@ -1028,13 +1016,7 @@ function CalendarPage() {
       updateSchedule({ schedule: next });
       
       // 스케줄을 캘린더 이벤트로 변환하여 렌더링
-      const events = convertScheduleToEvents(next, today).map(event => ({
-        ...event,
-        extendedProps: {
-          ...event.extendedProps,
-          isDone: false,
-        }
-      }));
+      const events = convertScheduleToEvents(next, today);
       setAllEvents(events);
 
       const scheduleSessionId = await saveScheduleSessionUnified({
@@ -1330,17 +1312,13 @@ function CalendarPage() {
       }
     });
     
-    // 합쳐진 이벤트 반환 (완료 여부는 모든 중복 항목이 완료되었을 때만 완료)
-    return Array.from(eventMap.values()).map(({ event, duplicateIds, duplicates }) => {
-      // 모든 중복 항목이 완료되었는지 확인
-      const allDone = duplicates.every(e => e.extendedProps?.isDone === true);
-      
+    // 합쳐진 이벤트 반환
+    return Array.from(eventMap.values()).map(({ event, duplicateIds }) => {
       return {
         ...event,
         id: `merged_${duplicateIds.join('_')}`, // 고유 ID 생성
         extendedProps: {
           ...event.extendedProps,
-          isDone: allDone,
           duplicateIds: duplicateIds, // 원본 이벤트 ID들 저장
           isMerged: true // 합쳐진 이벤트임을 표시
         }
@@ -1349,107 +1327,11 @@ function CalendarPage() {
   }, []);
 
   const handleEventContent = (arg) => {
-    const viewType = calendarRef.current?.getApi().view.type;
-    const { isDone, duplicateIds, isMerged } = arg.event.extendedProps || {};
     const titleText = arg.event.title;
 
     const span = document.createElement("span");
     span.textContent = titleText;
     span.title = titleText;
-    if (isDone) span.style.textDecoration = "line-through";
-
-    // 월간 뷰에서 task 타입이면 체크박스 추가
-    if (viewType === "dayGridMonth" && arg.event.extendedProps?.type === "task") {
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = isDone ?? false;
-      checkbox.style.marginRight = "5px";
-      checkbox.style.cursor = "pointer";
-      
-      const onChange = () => {
-        const newIsDone = checkbox.checked;
-        
-        setAllEvents(prevEvents => {
-          if (isMerged && duplicateIds) {
-            // 합쳐진 이벤트: 모든 중복 항목의 완료 상태를 변경
-            return prevEvents.map(event => {
-              if (duplicateIds.includes(event.id)) {
-                return {
-                  ...event,
-                  extendedProps: {
-                    ...event.extendedProps,
-                    isDone: newIsDone
-                  }
-                };
-              }
-              return event;
-            });
-          } else {
-            // 일반 이벤트: 해당 이벤트만 변경
-            return prevEvents.map(event => {
-              if (event.id === arg.event.id) {
-                return {
-                  ...event,
-                  extendedProps: {
-                    ...event.extendedProps,
-                    isDone: newIsDone
-                  }
-                };
-              }
-              return event;
-            });
-          }
-        });
-      };
-      
-      // 기존 이벤트 리스너 제거 후 새로 추가 (누수 방지)
-      checkbox.onchange = null;
-      checkbox.addEventListener('change', onChange, { once: true });
-
-      const container = document.createElement("div");
-      container.style.display = "flex";
-      container.style.alignItems = "center";
-      container.appendChild(checkbox);
-      container.appendChild(span);
-      return { domNodes: [container] };
-    }
-
-    // 주간/일간 뷰에서 task 타입이면 체크박스 추가
-    if (viewType !== "dayGridMonth" && arg.event.extendedProps?.type === "task") {
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = isDone ?? false;
-      checkbox.style.marginRight = "5px";
-      checkbox.style.cursor = "pointer";
-      const onChange = () => {
-        arg.event.setExtendedProp("isDone", checkbox.checked);    
-        setAllEvents(prevEvents => {
-          return prevEvents.map(event => {
-            if (event.id === arg.event.id) {
-              return {
-                ...event,
-                extendedProps: {
-                  ...event.extendedProps,
-                  isDone: checkbox.checked
-                }
-              };
-            }
-            return event;
-          });
-        });
-      };
-      
-      // 기존 이벤트 리스너 제거 후 새로 추가 (누수 방지)
-      checkbox.onchange = null;
-      checkbox.addEventListener('change', onChange, { once: true });
-
-      const container = document.createElement("div");
-      container.style.display = "flex";
-      container.style.alignItems = "center";
-      container.appendChild(checkbox);
-      container.appendChild(span);
-      return { domNodes: [container] };
-    }
     
     return {domNodes:[span]}
   };
