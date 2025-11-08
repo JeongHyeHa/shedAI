@@ -405,11 +405,13 @@ class FirestoreService {
     async getFeedbacks(userId, options = {}) {
         try {
             const ref = db.collection('users').doc(userId).collection('feedbacks');
-            let query = ref.orderBy('createdAt', 'desc');
             
-            // 타입 필터링 (선택적)
+            // 타입 필터링이 있으면 where를 먼저 적용
+            let query;
             if (options.type) {
-                query = query.where('type', '==', options.type);
+                query = ref.where('type', '==', options.type).orderBy('createdAt', 'desc');
+            } else {
+                query = ref.orderBy('createdAt', 'desc');
             }
             
             // 개수 제한 (선택적, 기본 50개)
@@ -424,6 +426,30 @@ class FirestoreService {
                 createdAt: d.data().createdAt?.toDate ? d.data().createdAt.toDate() : d.data().createdAt
             }));
         } catch (e) {
+            // 인덱스 오류인 경우 클라이언트 측 필터링으로 폴백 (조용히 처리)
+            if (e.code === 9 || (e.message && e.message.includes('index'))) {
+                try {
+                    // 인덱스 없이 모든 피드백을 가져온 후 클라이언트 측에서 필터링
+                    const ref = db.collection('users').doc(userId).collection('feedbacks');
+                    const limit = options.limit || 100; // 폴백 시 더 많이 가져옴
+                    const snap = await ref.orderBy('createdAt', 'desc').limit(limit).get();
+                    let results = snap.docs.map(d => ({ 
+                        id: d.id, 
+                        ...d.data(),
+                        createdAt: d.data().createdAt?.toDate ? d.data().createdAt.toDate() : d.data().createdAt
+                    }));
+                    
+                    // 클라이언트 측에서 타입 필터링
+                    if (options.type) {
+                        results = results.filter(f => f.type === options.type);
+                    }
+                    
+                    return results;
+                } catch (fallbackError) {
+                    // 폴백 실패 시에도 조용히 처리
+                    return [];
+                }
+            }
             console.error('[Firestore] 피드백 목록 조회 실패:', e);
             return [];
         }

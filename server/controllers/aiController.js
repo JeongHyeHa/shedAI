@@ -295,15 +295,19 @@ class AIController {
 
             // 피드백 조회 및 반영
             let userFeedback = '';
+            let feedbackMessages = [];
             if (userId) {
                 try {
                     const firestoreService = require('../services/firestoreService');
-                    const feedbacks = await firestoreService.getFeedbacks(userId);
+                    // 피드백 제한 없이 모두 가져오기 (기본 limit: 50, 필요시 더 늘릴 수 있음)
+                    const feedbacks = await firestoreService.getFeedbacks(userId, { type: 'feedback', limit: 100 });
                     if (Array.isArray(feedbacks) && feedbacks.length > 0) {
-                        // 최근 피드백 5개만 사용 (너무 많으면 프롬프트가 길어짐)
-                        const recentFeedbacks = feedbacks.slice(0, 5).map(f => f.feedbackText || '').filter(Boolean);
-                        if (recentFeedbacks.length > 0) {
-                            userFeedback = `\n\n**사용자 피드백/선호도:**\n${recentFeedbacks.map((f, i) => `${i + 1}. ${f}`).join('\n')}`;
+                        feedbackMessages = feedbacks
+                            .map(f => f.userMessage || f.feedbackText || '')
+                            .filter(Boolean);
+                        
+                        if (feedbackMessages.length > 0) {
+                            userFeedback = `\n\n**⚠️ 매우 중요 - 사용자 피드백/선호도 (최우선 반영):**\n${feedbackMessages.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\n⚠️ **위 피드백을 최우선으로 반영하여 스케줄을 설계하세요. 피드백과 일반 규칙이 충돌하면 피드백을 우선하세요.**`;
                         }
                     }
                 } catch (e) {
@@ -321,17 +325,6 @@ class AIController {
             // 원본 텍스트를 opts에 추가하여 aiService로 전달
             if (lifestylePatternsOriginal.length > 0) {
                 opts.lifestylePatternsOriginal = lifestylePatternsOriginal;
-            }
-            
-            // 피드백을 messages에 추가
-            if (userFeedback) {
-                // 마지막 user 메시지에 피드백 추가
-                if (messageArray.length > 0 && messageArray[messageArray.length - 1].role === 'user') {
-                    messageArray[messageArray.length - 1].content += userFeedback;
-                } else {
-                    // user 메시지가 없으면 새로 추가
-                    messageArray.push({ role: 'user', content: `스케줄 생성 요청${userFeedback}` });
-                }
             }
             
             // AI 서비스 호출
@@ -446,9 +439,6 @@ class AIController {
             res.status(500).json({ ok:false, message:'할 일 생성에 실패했습니다.' });
         }
     }
-
-    // 로컬 스케줄 생성 (폴백) — 현재는 사용하지 않음. 필요 시 aiService.generateDummySchedule 사용.
-    // generateLocalSchedule(messages, lifestylePatterns) { return []; }
 
     // 할 일 조회
     async getTasks(req, res) {
@@ -742,89 +732,6 @@ class AIController {
         }
     }
 
-    // 로컬 폴백 스케줄 생성 메서드
-    generateLocalSchedule(messages, lifestylePatterns) {
-        try {
-            console.log('로컬 스케줄 생성 시작');
-            
-            // 기본 스케줄 구조 생성
-            const baseSchedule = [];
-            const today = new Date();
-            
-            // 7일간의 기본 스케줄 생성
-            for (let i = 1; i <= 7; i++) {
-                const dayDate = new Date(today);
-                dayDate.setDate(today.getDate() + i - 1);
-                
-                const weekdayNames = ['월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'];
-                const weekday = weekdayNames[dayDate.getDay() === 0 ? 6 : dayDate.getDay() - 1];
-                
-                const activities = [];
-                
-                // 생활패턴에서 해당 요일에 맞는 활동 추가
-                if (lifestylePatterns && Array.isArray(lifestylePatterns)) {
-                    lifestylePatterns.forEach(pattern => {
-                        if (pattern && typeof pattern === 'object' && Array.isArray(pattern.days)) {
-                            const isWeekday = i >= 1 && i <= 5;
-                            const isWeekend = i >= 6 && i <= 7;
-                            
-                            // 요일 매칭
-                            if (pattern.days.includes(i) || 
-                                (isWeekday && pattern.days.includes(1)) || // 평일 패턴
-                                (isWeekend && pattern.days.includes(6))) { // 주말 패턴
-                                
-                                activities.push({
-                                    start: pattern.start || '09:00',
-                                    end: pattern.end || '10:00',
-                                    title: pattern.title || '활동',
-                                    type: 'lifestyle'
-                                });
-                            }
-                        }
-                    });
-                }
-                
-                // 기본 활동 추가 (활동이 없는 경우)
-                if (activities.length === 0) {
-                    activities.push({
-                        start: '09:00',
-                        end: '10:00',
-                        title: '기본 활동',
-                        type: 'lifestyle'
-                    });
-                }
-                
-                baseSchedule.push({
-                    day: i,
-                    weekday: weekday,
-                    activities: activities
-                });
-            }
-            
-            return {
-                schedule: baseSchedule,
-                explanation: '로컬 폴백으로 생성된 기본 스케줄입니다.',
-                activityAnalysis: {
-                    work: 30,
-                    study: 20,
-                    exercise: 10,
-                    reading: 10,
-                    hobby: 15,
-                    others: 15
-                },
-                notes: ['AI 서비스 오류로 인해 기본 스케줄을 생성했습니다.']
-            };
-            
-        } catch (error) {
-            console.error('로컬 스케줄 생성 실패:', error);
-            return {
-                schedule: [],
-                explanation: '스케줄 생성에 실패했습니다.',
-                activityAnalysis: {},
-                notes: ['스케줄 생성 중 오류가 발생했습니다.']
-            };
-        }
-    }
 }
 
 module.exports = new AIController();
