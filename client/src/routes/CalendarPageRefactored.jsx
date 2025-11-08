@@ -1299,9 +1299,58 @@ function CalendarPage() {
     return { domNodes: [span] };
   };
 
+  // 월간 뷰에서 같은 날짜+제목의 할 일을 하나로 합치는 함수
+  const dedupeEventsForMonthView = useCallback((events) => {
+    const eventMap = new Map(); // key: "YYYY-MM-DD:제목" -> { event, duplicateIds: [], duplicates: [] }
+    
+    events.forEach(event => {
+      const eventType = (event.extendedProps?.type || '').toLowerCase();
+      if (eventType !== 'task') return; // task 타입만 처리
+      
+      const startDate = event.start;
+      if (!startDate) return;
+      
+      const date = new Date(startDate);
+      const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const title = (event.title || '').trim();
+      const key = `${dateKey}:${title}`;
+      
+      if (eventMap.has(key)) {
+        // 중복 항목 발견: 기존 항목에 추가
+        const existing = eventMap.get(key);
+        existing.duplicateIds.push(event.id);
+        existing.duplicates.push(event);
+      } else {
+        // 새로운 항목
+        eventMap.set(key, {
+          event: { ...event },
+          duplicateIds: [event.id],
+          duplicates: [event]
+        });
+      }
+    });
+    
+    // 합쳐진 이벤트 반환 (완료 여부는 모든 중복 항목이 완료되었을 때만 완료)
+    return Array.from(eventMap.values()).map(({ event, duplicateIds, duplicates }) => {
+      // 모든 중복 항목이 완료되었는지 확인
+      const allDone = duplicates.every(e => e.extendedProps?.isDone === true);
+      
+      return {
+        ...event,
+        id: `merged_${duplicateIds.join('_')}`, // 고유 ID 생성
+        extendedProps: {
+          ...event.extendedProps,
+          isDone: allDone,
+          duplicateIds: duplicateIds, // 원본 이벤트 ID들 저장
+          isMerged: true // 합쳐진 이벤트임을 표시
+        }
+      };
+    });
+  }, []);
+
   const handleEventContent = (arg) => {
     const viewType = calendarRef.current?.getApi().view.type;
-    const { isDone } = arg.event.extendedProps || {};
+    const { isDone, duplicateIds, isMerged } = arg.event.extendedProps || {};
     const titleText = arg.event.title;
 
     const span = document.createElement("span");
@@ -1309,16 +1358,69 @@ function CalendarPage() {
     span.title = titleText;
     if (isDone) span.style.textDecoration = "line-through";
 
-    // FullCalendar 기본 +more 기능 사용 (커스텀 로직 제거)
-    if (viewType === "dayGridMonth") {
-      return { domNodes: [span] };
+    // 월간 뷰에서 task 타입이면 체크박스 추가
+    if (viewType === "dayGridMonth" && arg.event.extendedProps?.type === "task") {
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = isDone ?? false;
+      checkbox.style.marginRight = "5px";
+      checkbox.style.cursor = "pointer";
+      
+      const onChange = () => {
+        const newIsDone = checkbox.checked;
+        
+        setAllEvents(prevEvents => {
+          if (isMerged && duplicateIds) {
+            // 합쳐진 이벤트: 모든 중복 항목의 완료 상태를 변경
+            return prevEvents.map(event => {
+              if (duplicateIds.includes(event.id)) {
+                return {
+                  ...event,
+                  extendedProps: {
+                    ...event.extendedProps,
+                    isDone: newIsDone
+                  }
+                };
+              }
+              return event;
+            });
+          } else {
+            // 일반 이벤트: 해당 이벤트만 변경
+            return prevEvents.map(event => {
+              if (event.id === arg.event.id) {
+                return {
+                  ...event,
+                  extendedProps: {
+                    ...event.extendedProps,
+                    isDone: newIsDone
+                  }
+                };
+              }
+              return event;
+            });
+          }
+        });
+      };
+      
+      // 기존 이벤트 리스너 제거 후 새로 추가 (누수 방지)
+      checkbox.onchange = null;
+      checkbox.addEventListener('change', onChange, { once: true });
+
+      const container = document.createElement("div");
+      container.style.display = "flex";
+      container.style.alignItems = "center";
+      container.appendChild(checkbox);
+      container.appendChild(span);
+      return { domNodes: [container] };
     }
 
+    // 주간/일간 뷰에서 task 타입이면 체크박스 추가
     if (viewType !== "dayGridMonth" && arg.event.extendedProps?.type === "task") {
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.checked = isDone ?? false;
       checkbox.style.marginRight = "5px";
+      checkbox.style.cursor = "pointer";
       const onChange = () => {
         arg.event.setExtendedProp("isDone", checkbox.checked);    
         setAllEvents(prevEvents => {
@@ -1342,6 +1444,8 @@ function CalendarPage() {
       checkbox.addEventListener('change', onChange, { once: true });
 
       const container = document.createElement("div");
+      container.style.display = "flex";
+      container.style.alignItems = "center";
       container.appendChild(checkbox);
       container.appendChild(span);
       return { domNodes: [container] };
@@ -1358,7 +1462,14 @@ function CalendarPage() {
         ref={calendarRef}
         events={
           currentView === 'dayGridMonth'
-            ? allEvents.filter(e => (e?.extendedProps?.type || '').toLowerCase() !== 'lifestyle')
+            ? (() => {
+                // lifestyle 제외하고 task 중복 제거
+                const filtered = allEvents.filter(e => (e?.extendedProps?.type || '').toLowerCase() !== 'lifestyle');
+                const tasks = filtered.filter(e => (e?.extendedProps?.type || '').toLowerCase() === 'task');
+                const nonTasks = filtered.filter(e => (e?.extendedProps?.type || '').toLowerCase() !== 'task');
+                const dedupedTasks = dedupeEventsForMonthView(tasks);
+                return [...nonTasks, ...dedupedTasks];
+              })()
             : allEvents
         }
         onEventMount={handleEventMount}
