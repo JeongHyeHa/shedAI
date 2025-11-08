@@ -195,6 +195,7 @@ const normTitle = (s='') => s.replace(/\s+/g, ' ').trim();
 function CalendarPage() {
   const calendarRef = useRef(null);
   const sessionIdRef = useRef(null);
+  const previousViewRef = useRef(null); // 이전 뷰를 기억하기 위한 ref
   const today = resetToStartOfDay(new Date());
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -1263,14 +1264,32 @@ function CalendarPage() {
 
   const handleViewDidMount = (arg) => {
     // 현재 뷰 상태 업데이트
-    const viewType = calendarRef.current?.getApi().view.type;
+    const calendarApi = calendarRef.current?.getApi();
+    if (!calendarApi) return;
+    
+    const viewType = calendarApi.view.type;
     if (viewType) {
+      // 이전 뷰와 다르면 today로 초기화
+      if (previousViewRef.current && previousViewRef.current !== viewType) {
+        calendarApi.today(); // today로 이동
+      }
+      previousViewRef.current = viewType;
       setCurrentView(viewType);
     }
   };
 
   const handleDatesSet = (arg) => {
-    setCurrentView(arg.view.type); // 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay' 등
+    const viewType = arg.view.type; // 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay' 등
+    
+    // 이전 뷰와 다르면 today로 초기화
+    if (previousViewRef.current && previousViewRef.current !== viewType) {
+      const calendarApi = calendarRef.current?.getApi();
+      if (calendarApi) {
+        calendarApi.today(); // today로 이동
+      }
+    }
+    previousViewRef.current = viewType;
+    setCurrentView(viewType);
   };
 
   const handleDayHeaderContent = (args) => {
