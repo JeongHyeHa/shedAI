@@ -127,12 +127,41 @@ class AIService {
                 }
                 lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
             } else {
-                // 일반 작업: 오늘부터 7일간, 생활패턴은 7일치
-                taskDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
-                lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
+                // 일반 작업: 오늘부터 14일간, 생활패턴은 14일치
+                // 하지만 작업의 마감일이 14일을 넘으면 그만큼 범위 확장
+                let maxDeadlineDay = baseRelDay + 13; // 기본 14일
+                
+                // 모든 작업의 deadline_day 확인하여 최대값 구하기
+                // 1) existingTasks의 deadline 확인
+                if (existingTasks && existingTasks.length > 0) {
+                    for (const task of existingTasks) {
+                        if (task.deadline) {
+                            const deadlineDate = task.deadline instanceof Date ? task.deadline : new Date(task.deadline);
+                            if (!isNaN(deadlineDate.getTime())) {
+                                const deadlineMidnight = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
+                                const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                                const diffTime = deadlineMidnight.getTime() - nowMidnight.getTime();
+                                const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                                const taskDeadlineDay = baseRelDay + diffDays;
+                                
+                                // deadline_day가 기본 범위를 넘으면 범위 확장
+                                if (taskDeadlineDay > maxDeadlineDay) {
+                                    maxDeadlineDay = taskDeadlineDay;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                const scheduleLength = Math.max(14, maxDeadlineDay - baseRelDay + 1); // 최소 14일, 최대 마감일까지
+                taskDays = Array.from({ length: scheduleLength }, (_, i) => baseRelDay + i);
+                lifestyleDays = Array.from({ length: scheduleLength }, (_, i) => baseRelDay + i);
             }
             
-            const allowedDays = [...new Set([...taskDays, ...lifestyleDays])].sort((a,b)=>a-b);
+            // scheduleLength를 변수로 저장 (나중에 tasksForAI 생성 후 재확장에 사용)
+            let scheduleLength = taskDays.length;
+            
+            let allowedDays = [...new Set([...taskDays, ...lifestyleDays])].sort((a,b)=>a-b);
             const anchorDay = opts.anchorDay ?? (allowedDays.length ? allowedDays[0] : (dayOfWeek===0?7:dayOfWeek));
             
             // 날짜 및 사용자 입력 분석 완료
@@ -267,23 +296,62 @@ class AIService {
                 
                 return taskForAI;
             });
+            
+            // tasksForAI 생성 후, deadline_day 최대값 확인하여 스케줄 범위 재확장
+            if (tasksForAI && tasksForAI.length > 0) {
+                let maxDeadlineDayFromTasks = baseRelDay + 13; // 기본 14일
+                
+                for (const task of tasksForAI) {
+                    if (task.deadline_day && task.deadline_day !== 999) {
+                        // deadline_day가 기본 범위를 넘으면 범위 확장
+                        if (task.deadline_day > maxDeadlineDayFromTasks) {
+                            maxDeadlineDayFromTasks = task.deadline_day;
+                        }
+                    }
+                }
+                
+                // 스케줄 범위 재확장 (기존 범위보다 크면 확장)
+                const newScheduleLength = Math.max(scheduleLength || 14, maxDeadlineDayFromTasks - baseRelDay + 1);
+                if (newScheduleLength > (scheduleLength || 14)) {
+                    taskDays = Array.from({ length: newScheduleLength }, (_, i) => baseRelDay + i);
+                    lifestyleDays = Array.from({ length: newScheduleLength }, (_, i) => baseRelDay + i);
+                    scheduleLength = newScheduleLength; // scheduleLength 업데이트
+                    // allowedDays도 재계산
+                    allowedDays = [...new Set([...taskDays, ...lifestyleDays])].sort((a,b)=>a-b);
+                    // busy도 재확장된 allowedDays를 기반으로 다시 생성
+                    busy = convertLifestyleToBusy(lifestylePatterns, now, allowedDays);
+                }
+            }
+            
             // 사용자 메시지만 최근 6개 유지
             let userMessages = (messages || []).filter(m => m && m.role === 'user').slice(-6);
             
             // === 새 아키텍처: 프롬프트 재작성 (간소화) ===
             // AI가 모든 작업을 자유롭게 배치하도록 함 (빈 시간 목록 제거)
             
-            // AI에 넘길 tasks (간소화된 스키마) - prefer_around 제거 (AI가 알아서 배치)
-            const tasksForAIJSON = tasksForAI.map(t => ({
-                id: t.id,
-                title: t.title,
-                deadline_day: t.deadline_day,
-                deadline_time: t.deadlineTime || null, // 특정 시간이 지정된 경우 (예: "오후 2시" → "14:00")
-                priority: t.priority,
-                difficulty: t.difficulty,
-                min_block_minutes: t.min_block_minutes,
-                type: t.type || 'task' // type 정보 추가 (appointment인 경우 특별 처리)
-            }));
+            // AI에 넘길 tasks (간소화된 스키마) 
+            const tasksForAIJSON = tasksForAI.map(t => {
+                const taskObj = {
+                    id: t.id,
+                    title: t.title,
+                    deadline_day: t.deadline_day,
+                    priority: t.priority,
+                    difficulty: t.difficulty,
+                    min_block_minutes: t.min_block_minutes,
+                    type: t.type || 'task' // type 정보 추가 (appointment인 경우 특별 처리)
+                };
+                
+                // deadline_time은 type이 "appointment"인 경우에만 포함
+                // type이 "task"인 경우 deadline_time이 있어도 제거 (AI가 자유롭게 배치하도록)
+                if (t.type === 'appointment' && t.deadlineTime) {
+                    taskObj.deadline_time = t.deadlineTime;
+                } else if (t.deadlineTime) {
+                    // task인데 deadline_time이 있으면 제거 (날짜만 지정된 경우)
+                    // taskObj.deadline_time = null; // 명시적으로 제거하지 않음 (null로 설정)
+                }
+                
+                return taskObj;
+            });
             
             // 디버깅: AI에게 전달되는 데이터 출력 (최종 전달 데이터만)
             console.log('[🔍 디버깅] ===== AI에게 전달되는 최종 데이터 =====');
@@ -437,6 +505,7 @@ class AIService {
 1) **할 일은** 생활 패턴과 겹치지 않도록 배치하세요. **생활 패턴은** 해당 요일에 반드시 배치하세요.
 2) **마감일 엄수**: 각 작업은 반드시 deadline_day를 넘기지 마세요 (deadline_day보다 큰 day에 배치 절대 금지)
 2-1) **특정 시간 지정 (매우 중요 - 절대 위반 금지)**: 
+  * **deadline_time이 있는 작업만** 이 규칙을 적용하세요. deadline_time이 없는 작업은 이 규칙을 무시하고 자유롭게 배치하세요.
   * 작업에 deadline_time이 있으면(예: "14:00"), **반드시 deadline_day의 해당 시간에 배치**하세요.
   * 예: deadline_day=8, deadline_time="14:00"이면 → **반드시** day:8, start:"14:00"에 배치
   * deadline_time이 "14:00"이면 start는 **정확히 "14:00"**이어야 합니다. deadline_time을 무시하고 다른 시간에 배치하는 것은 **절대 금지**입니다.
@@ -444,14 +513,17 @@ class AIService {
   * ⚠️ **중요**: deadline_time이 있는 작업을 deadline_day가 아닌 다른 day에 배치하거나, deadline_time이 아닌 다른 시간에 배치하면 **심각한 오류**입니다.
   * 예: { "title": "회의", "deadline_day": 8, "deadline_time": "14:00" } → **반드시** day:8, start:"14:00", end:"15:00" (또는 적절한 종료 시간)에 배치
   * ⚠️ **type: "appointment"인 작업 (최우선 처리)**: type이 "appointment"인 작업은 특정 날짜/시간에 고정된 일정입니다. deadline_day와 deadline_time을 **절대적으로 준수**해야 합니다. 다른 날짜나 시간에 배치하는 것은 **절대 금지**입니다.
+  * ⚠️ **type: "task"인 작업**: type이 "task"인 작업은 deadline_time이 없으면 **자유롭게 배치**하세요. deadline_day 이전의 어떤 시간에든 배치할 수 있습니다.
   * ⚠️ **절대 금지 사항**: deadline_day=8, deadline_time="14:00"인 작업을 day 10에 배치하거나, 14:00가 아닌 다른 시간에 배치하는 것은 **심각한 오류**입니다. 반드시 day 8, 14:00에 배치하세요.
   * ⚠️ **검증 필수**: 생성 후 반드시 확인하세요. deadline_time이 있는 작업이 deadline_day가 아닌 다른 day에 배치되었는지, deadline_time이 아닌 다른 시간에 배치되었는지 확인하고, 잘못 배치되었다면 즉시 수정하세요.
 3) **중요도+난이도 모두 상인 작업 (priority='상' AND difficulty='상')**: 반드시 **마감일까지 매일 매일(평일+주말 모두 포함), 비슷한 시간에 배치**하세요. 예를 들어 "오픽 시험 준비"가 priority='상', difficulty='상'이면 deadline_day까지 **평일과 주말을 구분하지 말고 매일 같은 시간대(예: 19:00-21:00)에 배치**해야 합니다. 주말(토요일 day:6, 일요일 day:7)에도 빈 시간이 있으면 **반드시 배치**하세요. 하루도 빠뜨리지 마세요!
+  * ⚠️ **중요**: deadline_day가 스케줄 생성 범위(day ${baseRelDay}~${baseRelDay + scheduleLength - 1})를 벗어나더라도, **스케줄 생성 범위 내에서 매일 배치**하세요. 예: deadline_day=24인 작업도 day ${baseRelDay}~${baseRelDay + scheduleLength - 1} 범위 내에서 매일 배치해야 합니다.
 4) **우선순위 기반 배치**: 
    - **긴급 작업 (deadline_day <= ${baseRelDay + 3})**: 반드시 **매일 일정 시간 투자**하도록 배치하세요. 같은 작업을 여러 날에 걸쳐 매일 배치하여 마감일까지 꾸준히 진행하세요.
    - **매우 긴급 (deadline_day <= ${baseRelDay + 2})**: 당일부터 매일 배치, 하루 2시간 이상 배치
    - **긴급 (deadline_day <= ${baseRelDay + 4})**: 당일 또는 다음날부터 매일 배치, 하루 1시간 이상 배치
 5) **중요도/난이도 상 작업**: (priority='상' 또는 difficulty='상')인 작업은 **마감일까지 여러 날에 걸쳐 충분히 배치**하세요. 특히 (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${baseRelDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하고, **여러 날에 분산 배치**하세요.
+  * ⚠️ **중요**: deadline_day가 스케줄 생성 범위(day ${baseRelDay}~${baseRelDay + scheduleLength - 1})를 벗어나더라도, **스케줄 생성 범위 내에서 매일 배치**하세요. deadline_day가 멀리 있어도 스케줄 생성 범위 내에서 매일 배치해야 합니다.
 6) **마감일 임박 + 집중 작업**: 마감일이 얼마 안 남았고(deadline_day <= ${baseRelDay + 2}), 집중해서 빠르게 끝낼 수 있는 작업은 **긴 시간(2-3시간 블록)**을 투자하여 배치하세요. 한 번에 몰아서 끝내는 것이 효율적입니다.
 7) **시간 활용 (매우 중요)**: 하루에 **생활 패턴을 제외한 시간이 60분 이상 남으면 반드시 채워야** 합니다. 같은 작업을 **하루에 여러 블록으로 분할 배치**하거나, 여러 작업을 **병렬 배치**하여 시간을 최대한 활용하세요.
 8) **같은 작업 하루 여러 번 배치**: **특히 중요도+난이도 상 작업**은 같은 날에 **여러 시간대에 분산 배치**하세요. 예를 들어 "오픽 시험 준비"가 하루에 4시간 필요하면 **오전 2시간, 오후 2시간**으로 나누어 배치하세요.
@@ -460,6 +532,7 @@ class AIService {
 11) **휴식 간격 필수**: 같은 작업이나 다른 작업을 연속으로 배치할 때는 **최소 30분** 간격을 두세요 (예: 17:00-19:00 작업 후 다음 작업은 19:30 이후). **쉬는 시간을 반드시 포함**하세요.
 12) **주말 정책**: ${weekendInstruction}  주말이 허용이면 **주말 시간도 적극 활용**하여 여러 블록을 배치하세요. 특히 priority='상' AND difficulty='상' 작업은 **주말에도 매일, 필요 시 하루 여러 블록**을 배치하세요.
 13) **생활 패턴 필수 배치**: 사용자가 입력한 모든 생활 패턴은 반드시 해당 요일에 배치되어야 합니다. 생활 패턴이 겹치더라도 모두 배치하세요. 예: "주말 22시~24시 자유시간"은 모든 주말(day:6, day:7)에 반드시 배치되어야 합니다.
+14) **모든 작업 필수 배치 (매우 중요)**: tasks 배열의 **모든 작업은 반드시 스케줄에 배치**되어야 합니다. deadline_day가 스케줄 생성 범위(day ${baseRelDay}~${baseRelDay + scheduleLength - 1})를 벗어나더라도, **스케줄 생성 범위 내에서 배치**하세요. priority='상' AND difficulty='상'인 작업은 **스케줄 생성 범위 내에서 매일 배치**하세요. 작업을 배치하지 않는 것은 **절대 금지**입니다.
 
 **입력 (tasks만 배치하세요):**
 \`\`\`json
