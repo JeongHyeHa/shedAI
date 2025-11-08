@@ -29,7 +29,8 @@ import {
   buildTasksForAI,
   parseTaskFromFreeText,
   postprocessSchedule,
-  dedupeActivitiesByTitleTime
+  dedupeActivitiesByTitleTime,
+  convertScheduleToEvents
 } from '../utils/scheduleUtils';
 import { endsWithAppointmentCommand, extractAppointmentTitle } from '../utils/appointmentRules';
 import { parseLifestyleLines } from '../utils/lifestyleParse';
@@ -513,6 +514,40 @@ function CalendarPage() {
       api?.removeAllEvents();
       updateSchedule({ schedule: withTasks });
       
+      // 스케줄을 캘린더 이벤트로 변환하여 렌더링
+      console.log('[🔍 디버깅] withTasks 데이터:', {
+        length: withTasks?.length,
+        sample: withTasks?.[0],
+        day10: withTasks?.find(d => d.day === 10),
+        allDays: withTasks?.map(d => ({ day: d.day, activitiesCount: d.activities?.length }))
+      });
+      
+      const events = convertScheduleToEvents(withTasks, today).map(event => ({
+        ...event,
+        extendedProps: {
+          ...event.extendedProps,
+          isDone: false,
+        }
+      }));
+      
+      console.log('[🔍 디버깅] convertScheduleToEvents 결과:', {
+        totalEvents: events.length,
+        taskEvents: events.filter(e => e.extendedProps?.type === 'task').length,
+        lifestyleEvents: events.filter(e => e.extendedProps?.type === 'lifestyle').length,
+        taskEventsDetails: events.filter(e => e.extendedProps?.type === 'task').map(e => ({
+          title: e.title,
+          start: e.start,
+          end: e.end,
+          type: e.extendedProps?.type
+        })),
+        allEvents: events.map(e => ({
+          title: e.title,
+          start: e.start,
+          type: e.extendedProps?.type
+        }))
+      });
+      setAllEvents(events);
+      
       addAIMessage("스케줄 생성이 완료되었습니다!");
       alert('스케줄이 생성되었습니다!');
       
@@ -623,6 +658,16 @@ function CalendarPage() {
         const api = calendarRef.current?.getApi();
         api?.removeAllEvents();
         updateSchedule({ schedule: processedSchedule });
+        
+        // 스케줄을 캘린더 이벤트로 변환하여 렌더링
+        const events = convertScheduleToEvents(processedSchedule, today).map(event => ({
+          ...event,
+          extendedProps: {
+            ...event.extendedProps,
+            isDone: false,
+          }
+        }));
+        setAllEvents(events);
         
         const scheduleSessionId = await saveScheduleSessionUnified({
           uid: user.uid,
@@ -1004,6 +1049,16 @@ function CalendarPage() {
       const api = calendarRef.current?.getApi();
       api?.removeAllEvents();
       updateSchedule({ schedule: next });
+      
+      // 스케줄을 캘린더 이벤트로 변환하여 렌더링
+      const events = convertScheduleToEvents(next, today).map(event => ({
+        ...event,
+        extendedProps: {
+          ...event.extendedProps,
+          isDone: false,
+        }
+      }));
+      setAllEvents(events);
 
       const scheduleSessionId = await saveScheduleSessionUnified({
         uid: user.uid,

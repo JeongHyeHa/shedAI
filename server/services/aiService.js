@@ -154,11 +154,37 @@ class AIService {
                 return Math.floor(diffTime / (1000 * 60 * 60 * 24));
             };
             
-            // day별 deadline_day 계산
+            // day별 deadline_day 계산 (DB의 deadline 문자열을 정확히 파싱)
             const getDeadlineDay = (deadline) => {
                 if (!deadline) return 999;
-                const deadlineDate = deadline instanceof Date ? deadline : new Date(deadline);
-                const diffTime = deadlineDate.getTime() - now.getTime();
+                
+                let deadlineDate = null;
+                
+                // 문자열인 경우 (예: "2025-11-10")
+                if (typeof deadline === 'string') {
+                    // YYYY-MM-DD 형식 파싱
+                    const match = deadline.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+                    if (match) {
+                        const year = parseInt(match[1], 10);
+                        const month = parseInt(match[2], 10) - 1; // 0-based
+                        const day = parseInt(match[3], 10);
+                        deadlineDate = new Date(year, month, day, 0, 0, 0, 0);
+                    } else {
+                        // 다른 형식 시도
+                        deadlineDate = new Date(deadline);
+                    }
+                } else if (deadline instanceof Date) {
+                    deadlineDate = deadline;
+                } else {
+                    deadlineDate = new Date(deadline);
+                }
+                
+                if (!deadlineDate || isNaN(deadlineDate.getTime())) return 999;
+                
+                // 자정 기준으로 날짜 차이 계산
+                const deadlineMidnight = new Date(deadlineDate.getFullYear(), deadlineDate.getMonth(), deadlineDate.getDate());
+                const nowMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const diffTime = deadlineMidnight.getTime() - nowMidnight.getTime();
                 const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
                 return baseRelDay + diffDays;
             };
@@ -197,7 +223,18 @@ class AIService {
                     minBlockMinutes = 90; // 1.5시간
                 }
                 
-                const deadlineDay = getDeadlineDay(task.deadline);
+                // DB의 deadline을 직접 사용하여 deadline_day 계산
+                let deadlineDay = getDeadlineDay(task.deadline);
+                
+                // deadlineTime이 있으면 deadline이 정확한지 재확인
+                // DB에 저장된 deadline 문자열을 직접 사용
+                if (task.deadlineTime && task.deadline) {
+                    // deadline 문자열을 정확히 파싱하여 재계산
+                    const recalculated = getDeadlineDay(task.deadline);
+                    if (recalculated !== 999) {
+                        deadlineDay = recalculated;
+                    }
+                }
                 
                 // 중요도와 난이도가 모두 상이면 매일 배치 필요
                 const bothHigh = highPriority && highDifficulty;
@@ -210,6 +247,7 @@ class AIService {
                     priority: highPriority ? '상' : (task.importance === '중' ? '중' : '하'),
                     difficulty: highDifficulty ? '상' : (task.difficulty === '중' ? '중' : '하'),
                     min_block_minutes: minBlockMinutes,
+                    type: task.type || 'task', // type 정보 추가 (appointment인 경우 특별 처리)
                     // 긴급도 정보 추가 (AI가 우선순위 판단에 사용)
                     urgency_level: bothHigh ? '매우중요' : (veryUrgent ? '매우긴급' : (urgent ? '긴급' : '보통')),
                     days_until_deadline: daysUntilDeadline,
@@ -229,10 +267,6 @@ class AIService {
                 
                 return taskForAI;
             });
-            // tasksForAI 개수만 로깅 (상세 로그 제거)
-            
-            // 빈 시간 목록 제거 - AI가 자유롭게 스케줄을 만들도록 함
-            
             // 사용자 메시지만 최근 6개 유지
             let userMessages = (messages || []).filter(m => m && m.role === 'user').slice(-6);
             
@@ -247,12 +281,20 @@ class AIService {
                 deadline_time: t.deadlineTime || null, // 특정 시간이 지정된 경우 (예: "오후 2시" → "14:00")
                 priority: t.priority,
                 difficulty: t.difficulty,
-                min_block_minutes: t.min_block_minutes
+                min_block_minutes: t.min_block_minutes,
+                type: t.type || 'task' // type 정보 추가 (appointment인 경우 특별 처리)
             }));
             
             // 디버깅: AI에게 전달되는 데이터 출력 (최종 전달 데이터만)
             console.log('[🔍 디버깅] ===== AI에게 전달되는 최종 데이터 =====');
             console.log('[🔍 디버깅] 1. tasksForAIJSON (할 일 목록):', JSON.stringify(tasksForAIJSON, null, 2));
+            console.log('[🔍 디버깅] 1-1. deadline_time이 있는 작업:', tasksForAIJSON.filter(t => t.deadline_time).map(t => ({
+                title: t.title,
+                deadline_day: t.deadline_day,
+                deadline_time: t.deadline_time,
+                expected_day: t.deadline_day,
+                expected_time: t.deadline_time
+            })));
             console.log('[🔍 디버깅] 2. lifestylePatternsOriginal (생활 패턴 원본 텍스트):', opts.lifestylePatternsOriginal || '(없음)');
             
             // 주말 정책 확인 (사용자 피드백 또는 기본 설정)
@@ -295,7 +337,7 @@ class AIService {
                 timePreferenceInstruction = '\n- **오전 작업 선호**: 사용자가 오전 시간대 작업을 선호합니다. 가능한 한 오전 시간(00:00-12:00)에 작업을 배치하세요.';
             }
             if (eveningPreference) {
-                timePreferenceInstruction += '\n- **저녁 시간 활용**: 사용자가 오후 9시(21:00) 이후 시간대를 활용하고 싶어합니다. 21:00 이후 빈 시간에도 작업을 배치하세요.';
+                timePreferenceInstruction += '\n- **저녁 시간 활용**: 사용자가 오후 9시(21:00) 이후 시간대를 활용하고 싶어합니다. 21:00 이후 시간에도 작업을 배치하세요.';
             }
             
             // 생활 패턴 원본 텍스트 추출 - 원본 텍스트를 그대로 사용
@@ -307,7 +349,6 @@ class AIService {
                 lifestyleTexts = opts.lifestylePatternsOriginal
                     .map(t => typeof t === 'string' ? t.trim() : null)
                     .filter(t => t && t.length > 0);
-                console.log('[🔍 디버깅] opts.lifestylePatternsOriginal에서 추출:', lifestyleTexts);
             }
             
             // 2) lifestylePatterns 배열에서 원본 텍스트 추출 (우선순위 2)
@@ -326,13 +367,11 @@ class AIService {
                         return null;
                     })
                     .filter(t => t && t.length > 0);
-                console.log('[🔍 디버깅] lifestylePatterns 배열에서 추출:', lifestyleTexts);
             }
             
             // 3) userMessages에서 [생활 패턴] 섹션 추출 (fallback)
             if (lifestyleTexts.length === 0) {
                 const allUserContent = userMessages.map(m => m.content || '').join('\n');
-                console.log('[🔍 디버깅] userMessages 전체 내용 (처음 500자):', allUserContent.substring(0, 500));
                 const lifestyleSectionMatch = allUserContent.match(/\[생활 패턴\]([\s\S]*?)(?:\[할 일 목록\]|$)/i);
                 if (lifestyleSectionMatch && lifestyleSectionMatch[1]) {
                     const extractedTexts = lifestyleSectionMatch[1]
@@ -341,9 +380,6 @@ class AIService {
                         .filter(t => t && t.length > 0 && !t.match(/^\[/))
                         .filter(t => t.length > 0);
                     lifestyleTexts = extractedTexts;
-                    console.log('[🔍 디버깅] userMessages에서 [생활 패턴] 섹션 추출:', lifestyleTexts);
-                } else {
-                    console.log('[🔍 디버깅] userMessages에서 [생활 패턴] 섹션을 찾지 못함');
                 }
             }
             
@@ -351,9 +387,6 @@ class AIService {
             if (lifestyleTexts.length > 0) {
                 lifestyleTextDisplay = `\n\n**사용자가 입력한 생활 패턴 (원본 텍스트):**\n${lifestyleTexts.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n⚠️ **위 생활 패턴들은 반드시 type: "lifestyle"로 배치하고, 해당 요일마다 반복 배치해야 합니다.**`;
             }
-            
-            // 디버깅: 생활 패턴 텍스트 출력
-            console.log('[🔍 디버깅] 4. lifestyleTextDisplay (시스템 프롬프트에 포함될 생활 패턴 텍스트):', lifestyleTextDisplay || '(없음)');
             
             const systemPrompt = {
                 role: 'system',
@@ -369,7 +402,7 @@ class AIService {
   * 예: "평일 오전 8시~오후 5시 회사"는 생성 기간의 **모든 평일(day:1~5)에 반복** 배치되어야 합니다.
   * 예: "주말 22시~24시 자유시간"은 생성 기간의 **모든 주말(day:6, day:7)에 반복** 배치되어야 합니다.
 - **생활 패턴은 반드시 type: "lifestyle"이어야 합니다. 절대로 type: "task"로 설정하지 마세요.**
-- **할 일은 type: "task"이고 빈 시간 내부에서만 배치하세요.**
+- **할 일은 type: "task"이고 생활 패턴과 겹치지 않도록 배치하세요.**
 - **생활 패턴 간 겹침 허용**: 생활 패턴끼리는 시간이 겹쳐도 됩니다. 예: "주말 22시~24시 자유시간"과 "매일 저녁 9시~아침 7시 취침"이 겹치더라도 둘 다 배치해야 합니다.
 - **생활 패턴 누락 금지**: 사용자가 입력한 모든 생활 패턴은 반드시 배치되어야 합니다. 일부만 배치하고 나머지를 누락하는 것은 절대 금지입니다.
 - **생활 패턴 검증**: 생성 후 반드시 확인하세요. 예를 들어 "일요일 오후 12시~13시 브런치"가 있으면 모든 일요일(day:7)에 type: "lifestyle"로 배치되었는지 확인하세요. "주말 22시~24시 자유시간"이 있으면 모든 주말(day:6, day:7)에 type: "lifestyle"로 배치되었는지 확인하세요.
@@ -403,11 +436,16 @@ class AIService {
   * 예: "평일 오전 8시~오후 5시 회사" → 생성 기간의 **모든 평일(day:1~5)에 반복** 배치 
 1) **할 일은** 생활 패턴과 겹치지 않도록 배치하세요. **생활 패턴은** 해당 요일에 반드시 배치하세요.
 2) **마감일 엄수**: 각 작업은 반드시 deadline_day를 넘기지 마세요 (deadline_day보다 큰 day에 배치 절대 금지)
-2-1) **특정 시간 지정 (매우 중요)**: 
+2-1) **특정 시간 지정 (매우 중요 - 절대 위반 금지)**: 
   * 작업에 deadline_time이 있으면(예: "14:00"), **반드시 deadline_day의 해당 시간에 배치**하세요.
-  * 예: deadline_day=15, deadline_time="14:00"이면 → day:15, start:"14:00"에 배치
-  * deadline_time이 "14:00"이면 start는 "14:00"이어야 합니다. deadline_time을 무시하고 다른 시간에 배치하는 것은 절대 금지입니다.
-  * deadline_time이 있으면 deadline_day에만 배치하고, 다른 day에 배치하는 것은 절대 금지입니다.
+  * 예: deadline_day=8, deadline_time="14:00"이면 → **반드시** day:8, start:"14:00"에 배치
+  * deadline_time이 "14:00"이면 start는 **정확히 "14:00"**이어야 합니다. deadline_time을 무시하고 다른 시간에 배치하는 것은 **절대 금지**입니다.
+  * deadline_time이 있으면 **반드시 deadline_day에만 배치**하고, 다른 day에 배치하는 것은 **절대 금지**입니다.
+  * ⚠️ **중요**: deadline_time이 있는 작업을 deadline_day가 아닌 다른 day에 배치하거나, deadline_time이 아닌 다른 시간에 배치하면 **심각한 오류**입니다.
+  * 예: { "title": "회의", "deadline_day": 8, "deadline_time": "14:00" } → **반드시** day:8, start:"14:00", end:"15:00" (또는 적절한 종료 시간)에 배치
+  * ⚠️ **type: "appointment"인 작업 (최우선 처리)**: type이 "appointment"인 작업은 특정 날짜/시간에 고정된 일정입니다. deadline_day와 deadline_time을 **절대적으로 준수**해야 합니다. 다른 날짜나 시간에 배치하는 것은 **절대 금지**입니다.
+  * ⚠️ **절대 금지 사항**: deadline_day=8, deadline_time="14:00"인 작업을 day 10에 배치하거나, 14:00가 아닌 다른 시간에 배치하는 것은 **심각한 오류**입니다. 반드시 day 8, 14:00에 배치하세요.
+  * ⚠️ **검증 필수**: 생성 후 반드시 확인하세요. deadline_time이 있는 작업이 deadline_day가 아닌 다른 day에 배치되었는지, deadline_time이 아닌 다른 시간에 배치되었는지 확인하고, 잘못 배치되었다면 즉시 수정하세요.
 3) **중요도+난이도 모두 상인 작업 (priority='상' AND difficulty='상')**: 반드시 **마감일까지 매일 매일(평일+주말 모두 포함), 비슷한 시간에 배치**하세요. 예를 들어 "오픽 시험 준비"가 priority='상', difficulty='상'이면 deadline_day까지 **평일과 주말을 구분하지 말고 매일 같은 시간대(예: 19:00-21:00)에 배치**해야 합니다. 주말(토요일 day:6, 일요일 day:7)에도 빈 시간이 있으면 **반드시 배치**하세요. 하루도 빠뜨리지 마세요!
 4) **우선순위 기반 배치**: 
    - **긴급 작업 (deadline_day <= ${baseRelDay + 3})**: 반드시 **매일 일정 시간 투자**하도록 배치하세요. 같은 작업을 여러 날에 걸쳐 매일 배치하여 마감일까지 꾸준히 진행하세요.
@@ -415,7 +453,7 @@ class AIService {
    - **긴급 (deadline_day <= ${baseRelDay + 4})**: 당일 또는 다음날부터 매일 배치, 하루 1시간 이상 배치
 5) **중요도/난이도 상 작업**: (priority='상' 또는 difficulty='상')인 작업은 **마감일까지 여러 날에 걸쳐 충분히 배치**하세요. 특히 (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${baseRelDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하고, **여러 날에 분산 배치**하세요.
 6) **마감일 임박 + 집중 작업**: 마감일이 얼마 안 남았고(deadline_day <= ${baseRelDay + 2}), 집중해서 빠르게 끝낼 수 있는 작업은 **긴 시간(2-3시간 블록)**을 투자하여 배치하세요. 한 번에 몰아서 끝내는 것이 효율적입니다.
-7) **시간 활용 (매우 중요)**: 하루에 **빈 시간이 60분 이상 남으면 반드시 채워야** 합니다. 같은 작업을 **하루에 여러 블록으로 분할 배치**하거나, 여러 작업을 **병렬 배치**하여 시간을 최대한 활용하세요.
+7) **시간 활용 (매우 중요)**: 하루에 **생활 패턴을 제외한 시간이 60분 이상 남으면 반드시 채워야** 합니다. 같은 작업을 **하루에 여러 블록으로 분할 배치**하거나, 여러 작업을 **병렬 배치**하여 시간을 최대한 활용하세요.
 8) **같은 작업 하루 여러 번 배치**: **특히 중요도+난이도 상 작업**은 같은 날에 **여러 시간대에 분산 배치**하세요. 예를 들어 "오픽 시험 준비"가 하루에 4시간 필요하면 **오전 2시간, 오후 2시간**으로 나누어 배치하세요.
 9) **시간 활용 전략**: 각 day의 가능한 시간대를 확인하고, **가능한 모든 시간대에 배치**하세요.
 10) **할 일 간 겹침 금지, 생활패턴/고정일정 침범 금지**: 할 일끼리는 겹치면 안 되지만, **생활 패턴끼리는 겹쳐도 됩니다.**
@@ -432,11 +470,14 @@ class AIService {
 
 **⚠️ 중요: 빈 시간 목록을 제공하지 않으므로, AI가 생활 패턴과 할 일을 고려하여 자유롭게 스케줄을 설계하세요.**
 
-**⚠️ 매우 중요 - deadline_time 처리:**
+**⚠️ 매우 중요 - deadline_time 처리 (절대 위반 금지):**
 - tasks 배열의 각 작업을 확인하세요.
 - deadline_time이 있는 작업은 **반드시 deadline_day의 deadline_time에 배치**하세요.
-- 예: { "title": "회의", "deadline_day": 15, "deadline_time": "14:00" } → day:15, start:"14:00"에 배치
-- deadline_time이 있는 작업을 deadline_day가 아닌 다른 day에 배치하거나, deadline_time이 아닌 다른 시간에 배치하는 것은 절대 금지입니다.
+- 예: { "title": "회의", "deadline_day": 8, "deadline_time": "14:00" } → **반드시** day:8, start:"14:00"에 배치
+- deadline_time이 있는 작업을 deadline_day가 아닌 다른 day에 배치하거나, deadline_time이 아닌 다른 시간에 배치하는 것은 **절대 금지**입니다.
+- ⚠️ **type: "appointment"인 작업 (최우선 처리)**: type이 "appointment"인 작업은 특정 날짜/시간에 고정된 일정입니다. deadline_day와 deadline_time을 **절대적으로 준수**해야 합니다. 다른 날짜나 시간에 배치하는 것은 **절대 금지**입니다.
+- ⚠️ **검증 필수**: 생성 후 반드시 확인하세요. deadline_time이 있는 작업이 deadline_day가 아닌 다른 day에 배치되었는지, deadline_time이 아닌 다른 시간에 배치되었는지 확인하고, 잘못 배치되었다면 즉시 수정하세요.
+- ⚠️ **중요**: deadline_day=8, deadline_time="14:00"인 작업을 day 10에 배치하거나, 14:00가 아닌 다른 시간에 배치하는 것은 **심각한 오류**입니다. 반드시 day 8, 14:00에 배치하세요.
 
 **출력 (반드시 이 형식만 사용):**
 \`\`\`json
@@ -508,7 +549,7 @@ class AIService {
     - 예: "중요도 상 작업 '오픽 시험 준비'를 마감일까지 매일 19:00-21:00에 배치하여 꾸준한 학습 습관을 형성하도록 설계했습니다."
     - 예: "할 일이 없어 생활 패턴만 배치했습니다. 평일에는 회사 업무, 주말에는 자유시간을 중심으로 일정을 구성했습니다."
     - 예: "긴급 작업 '정보처리기사 시험'을 우선순위로 배치하고, 나머지 작업은 마감일 순서대로 분산 배치했습니다."
-  * 생활 패턴만 입력된 경우: "생활 패턴만 입력되어 생활 패턴을 반복 배치했습니다. 할 일이 추가되면 빈 시간에 배치하겠습니다."
+  * 생활 패턴만 입력된 경우: "생활 패턴만 입력되어 생활 패턴을 반복 배치했습니다. 할 일이 추가되면 생활 패턴과 겹치지 않도록 배치하겠습니다."
   * 할 일이 있는 경우: 각 작업의 배치 이유와 우선순위를 구체적으로 설명하세요.`
             };
 
@@ -516,18 +557,6 @@ class AIService {
             const enhancedMessages = [systemPrompt, ...userMessages]
                 .filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
             
-            // 디버깅: 최종 프롬프트 요약 출력
-            console.log('[🔍 디버깅] 4. enhancedMessages (AI에게 전달되는 최종 메시지 배열):');
-            console.log('[🔍 디버깅]   - 개수:', enhancedMessages.length);
-            console.log('[🔍 디버깅]   - 시스템 프롬프트 길이:', systemPrompt.content.length, '자');
-            enhancedMessages.forEach((m, idx) => {
-                const roleName = m.role === 'system' ? '시스템 프롬프트 (규칙 및 지침)' : m.role === 'user' ? '사용자 메시지 (요청 내용)' : m.role;
-                console.log(`[🔍 디버깅]   - 메시지 ${idx + 1} (${m.role}): ${roleName}`, {
-                    contentLength: m.content?.length || 0,
-                    contentPreview: m.content?.substring(0, 200) + (m.content?.length > 200 ? '...' : '')
-                });
-            });
-            console.log('[🔍 디버깅] ===========================================');
 
             // 타이밍 로그 시작
             const T0 = Date.now();

@@ -321,9 +321,6 @@ class AIController {
             // 원본 텍스트를 opts에 추가하여 aiService로 전달
             if (lifestylePatternsOriginal.length > 0) {
                 opts.lifestylePatternsOriginal = lifestylePatternsOriginal;
-                console.log('[🔍 디버깅] aiController에서 lifestylePatternsOriginal 전달:', lifestylePatternsOriginal);
-            } else {
-                console.warn('[🔍 디버깅] aiController에서 lifestylePatternsOriginal이 비어있음');
             }
             
             // 피드백을 messages에 추가
