@@ -519,7 +519,12 @@ class FirestoreService {
       
       if (!qs1.empty) {
         const doc = qs1.docs[0];
-        return { id: doc.id, ...doc.data() };
+        const data = doc.data();
+        // scheduleData가 비어있으면 null 반환 (초기화 상태)
+        if (!data.scheduleData || (Array.isArray(data.scheduleData) && data.scheduleData.length === 0)) {
+          return null;
+        }
+        return { id: doc.id, ...data };
       }
     } catch (msError) {
       // 인덱스 오류가 아니면 다른 오류일 수 있으므로 계속 진행
@@ -543,7 +548,12 @@ class FirestoreService {
       
       if (!qs2.empty) {
         const doc = qs2.docs[0];
-        return { id: doc.id, ...doc.data() };
+        const data = doc.data();
+        // scheduleData가 비어있으면 null 반환 (초기화 상태)
+        if (!data.scheduleData || (Array.isArray(data.scheduleData) && data.scheduleData.length === 0)) {
+          return null;
+        }
+        return { id: doc.id, ...data };
       }
     } catch (createdAtError) {
       // 인덱스 오류인 경우 클라이언트 측 정렬로 fallback
@@ -575,31 +585,42 @@ class FirestoreService {
         return bTime - aTime; // 내림차순 (최신이 먼저)
       });
       
-      return sessions.length > 0 ? sessions[0] : null;
+      if (sessions.length > 0) {
+        const latest = sessions[0];
+        // scheduleData가 비어있으면 null 반환 (초기화 상태)
+        if (!latest.scheduleData || (Array.isArray(latest.scheduleData) && latest.scheduleData.length === 0)) {
+          return null;
+        }
+        return latest;
+      }
+      
+      return null;
     } catch (fallbackError) {
       console.error('최근 스케줄 조회 fallback 실패:', fallbackError);
       return null;
     }
   }
 
-  // 최신 스케줄을 "삭제" 처리 (hasSchedule=false, isActive=false, scheduleData=[])
+  // 최신 스케줄을 "삭제" 처리 (빈 scheduleData를 가진 초기화 세션 저장)
   async deleteLatestSchedule(userId) {
     try {
+      // 기존 활성 세션 비활성화
+      await this.deactivateScheduleSessions(userId);
+      
+      // 빈 scheduleData를 가진 초기화 세션 저장
+      // hasSchedule: true, isActive: true로 저장하여 getLastSchedule에서 조회되도록 함
+      // 단, getLastSchedule에서 scheduleData가 비어있으면 null을 반환하도록 처리됨
       const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
-      const q = query(sessionsRef, orderBy('createdAt', 'desc'), limit(10));
-      const qs = await getDocs(q);
-      if (qs.empty) return false;
-
-      const target = qs.docs.find(d => d.data()?.hasSchedule === true);
-      if (!target) return false;
-
-      // scheduleData도 빈 배열로 초기화하여 완전히 삭제
-      await updateDoc(target.ref, { 
-        hasSchedule: false, 
-        isActive: false, 
-        scheduleData: [], // 스케줄 데이터도 완전히 삭제
-        updatedAt: serverTimestamp() 
-      });
+      const resetData = {
+        hasSchedule: true, // true로 저장하여 getLastSchedule에서 조회되도록 함
+        isActive: true,    // true로 저장하여 getLastSchedule에서 조회되도록 함
+        scheduleData: [], // 빈 배열로 초기화 (getLastSchedule에서 null 반환)
+        createdAt: serverTimestamp(),
+        createdAtMs: Date.now(),
+        updatedAt: serverTimestamp()
+      };
+      
+      await addDoc(sessionsRef, resetData);
       return true;
     } catch (error) {
       console.error('최신 스케줄 삭제 처리 실패:', error);

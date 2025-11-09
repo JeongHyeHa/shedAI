@@ -320,8 +320,6 @@ class AIService {
                 }
             }
             
-            console.log('[🔍 디버깅] 4. 최종 scheduleLength:', scheduleLength);
-            console.log('[🔍 디버깅] 4-1. 스케줄 생성 범위: day', baseRelDay, '~', baseRelDay + scheduleLength - 1, '(총', scheduleLength, '일)');
             
             // 사용자 메시지만 최근 6개 유지
             let userMessages = (messages || []).filter(m => m && m.role === 'user').slice(-6);
@@ -353,11 +351,6 @@ class AIService {
                 return taskObj;
             });
             
-            // 디버깅: AI에게 전달되는 데이터 출력 (최종 전달 데이터만)
-            console.log('[🔍 디버깅] ===== AI에게 전달되는 최종 데이터 =====');
-            console.log('[🔍 디버깅] 1. tasksForAIJSON (할 일 목록):', JSON.stringify(tasksForAIJSON, null, 2));
-            console.log('[🔍 디버깅] 2. lifestylePatternsOriginal (생활 패턴 원본 텍스트):', opts.lifestylePatternsOriginal || '(없음)');
-            console.log('[🔍 디버깅] 3. userFeedback (사용자 피드백):', opts.userFeedback || '(없음)');
 
             // 생활 패턴 원본 텍스트 추출 - 원본 텍스트를 그대로 사용
             let lifestyleTextDisplay = '';
@@ -408,25 +401,185 @@ class AIService {
             }
             
             // 피드백을 프롬프트에 명확히 반영 (최우선)
-            const feedbackSection = opts.userFeedback && opts.userFeedback.trim() 
-                ? `\n\n${opts.userFeedback.trim()}` 
-                : '';
+            let feedbackSection = '';
+            let detectedPatterns = [];
+            let hasMorningPreferenceGlobal = false; // 전역 변수로 설정
+            if (opts.userFeedback && opts.userFeedback.trim()) {
+                const feedbackText = opts.userFeedback.trim();
+                feedbackSection = `\n\n${feedbackText}`;
+                
+                // 피드백 내용 분석하여 추가 규칙 생성
+                const feedbackLower = feedbackText.toLowerCase();
+                
+                // 1. 아침 시간대 선호도 감지
+                const morningKeywords = ['아침', '오전', '아침형', '오전에', '오전 시간', '오전에 작업', '아침에 작업', '오전에 집중', '아침에 집중', '아침에 더'];
+                const hasMorningPreference = morningKeywords.some(keyword => feedbackLower.includes(keyword));
+                if (hasMorningPreference) {
+                    hasMorningPreferenceGlobal = true;
+                    detectedPatterns.push('아침 시간대 선호도');
+                    feedbackSection += `\n\n🚨🚨🚨 **아침 시간대 선호도 (최우선 반영 필수 - 절대 위반 금지)**:\n` +
+                        `- 사용자가 아침/오전 시간대에 작업을 선호한다고 명시했습니다.\n` +
+                        `- **⚠️⚠️⚠️ 모든 할 일(task)은 반드시 오전 시간대(06:00~12:00)에 우선 배치하세요. 저녁 시간대(19:00 이후)에 배치하는 것은 절대 금지입니다.**\n` +
+                        `- **⚠️⚠️⚠️ 특히 "오픽 시험 준비" 같은 중요한 작업은 반드시 오전 06:00~12:00 시간대에 배치하세요. 저녁 시간대에 배치하면 심각한 오류입니다.**\n` +
+                        `- 오전 시간대가 부족하면 오후 시간대(12:00~18:00)를 사용하되, **오전 시간대를 최대한 활용**하세요.\n` +
+                        `- ⚠️ **절대 금지**: 할 일을 저녁 시간대(19:00 이후)에만 배치하는 것은 피드백 위반입니다. 오전 시간대를 우선 사용하세요.\n` +
+                        `- ⚠️ **검증 필수**: 생성 후 반드시 확인하세요. 모든 할 일이 오전 시간대에 배치되었는지 확인하고, 저녁 시간대에만 배치된 할 일이 있으면 즉시 오전 시간대로 이동하세요.\n` +
+                        `- ⚠️ **중요**: 평일에는 회사(08:00~17:00)가 있으므로, 회사 전(06:00~08:00) 또는 회사 후(17:00~18:00) 시간대를 활용하되, 가능하면 회사 전 시간대를 우선 사용하세요.`;
+                }
+                
+                // 2. 저녁 시간대 선호도 감지
+                const eveningKeywords = ['저녁', '저녁형', '저녁에', '밤에', '저녁 시간', '저녁에 작업', '밤에 작업', '저녁에 집중'];
+                const hasEveningPreference = eveningKeywords.some(keyword => feedbackLower.includes(keyword));
+                if (hasEveningPreference) {
+                    detectedPatterns.push('저녁 시간대 선호도');
+                    feedbackSection += `\n\n🚨🚨🚨 **저녁 시간대 선호도 (최우선 반영 필수 - 절대 위반 금지)**:\n` +
+                        `- 사용자가 저녁/밤 시간대에 작업을 선호한다고 명시했습니다.\n` +
+                        `- **모든 할 일(task)은 가능한 한 저녁 시간대(18:00~23:00)에 우선 배치하세요.**\n` +
+                        `- 저녁 시간대가 부족하면 오후 시간대를 사용하되, **저녁 시간대를 최대한 활용**하세요.\n` +
+                        `- 예: "오픽 시험 준비" 같은 중요한 작업은 **저녁 18:00~23:00 시간대에 우선 배치**하세요.\n` +
+                        `- ⚠️ **절대 금지**: 할 일을 오전 시간대(12:00 이전)에만 배치하는 것은 피드백 위반입니다. 저녁 시간대를 우선 사용하세요.`;
+                }
+                
+                // 3. 주말 업무 허용 감지
+                const hasWeekendKeyword = feedbackLower.includes('주말');
+                const hasWorkKeyword = feedbackLower.includes('업무') || feedbackLower.includes('일할') || 
+                                      feedbackLower.includes('작업') || feedbackLower.includes('생성') ||
+                                      feedbackLower.includes('배치');
+                if (hasWeekendKeyword && hasWorkKeyword) {
+                    // 주말 업무 금지 키워드 확인
+                    const weekendDeny = feedbackLower.includes('안') || feedbackLower.includes('금지') ||
+                                       feedbackLower.includes('하지') || feedbackLower.includes('싶지') ||
+                                       feedbackLower.includes('원하지') || feedbackLower.includes('ㄴㄴ');
+                    
+                    if (weekendDeny) {
+                        detectedPatterns.push('주말 업무 금지');
+                        feedbackSection += `\n\n🚨🚨🚨 **주말 업무 금지 (최우선 반영 필수 - 절대 위반 금지)**:\n` +
+                            `- 사용자가 주말에 업무/작업을 원하지 않는다고 명시했습니다.\n` +
+                            `- **모든 할 일(task)은 주말(토요일 day:6, 일요일 day:7)에 절대 배치하지 마세요.**\n` +
+                            `- 주말에는 생활 패턴(lifestyle)만 배치하고, 할 일(task)은 배치하지 마세요.\n` +
+                            `- ⚠️ **절대 금지**: 주말에 할 일을 배치하는 것은 피드백 위반입니다. 주말에는 반드시 할 일을 배치하지 마세요.`;
+                    } else {
+                        detectedPatterns.push('주말 업무 허용');
+                        feedbackSection += `\n\n🚨🚨🚨 **주말 업무 배치 (최우선 반영 필수 - 절대 위반 금지)**:\n` +
+                            `- 사용자가 주말에도 업무/작업을 원한다고 명시했습니다.\n` +
+                            `- **모든 할 일(task)은 주말(토요일 day:6, 일요일 day:7)에도 반드시 배치하세요.**\n` +
+                            `- 특히 중요도가 높거나 난이도가 높은 할 일은 **주말에도 매일 배치**하세요.\n` +
+                            `- 예: "오픽 시험 준비" (중요도: 상, 난이도: 상)는 **주말(day:6, day:7)에도 반드시 배치**하세요.\n` +
+                            `- ⚠️ **절대 금지**: 주말에 할 일을 배치하지 않는 것은 피드백 위반입니다. 주말에도 반드시 배치하세요.\n` +
+                            `- ⚠️ **검증 필수**: 생성 후 반드시 확인하세요. 주말(day:6, day:7)에 할 일이 배치되었는지 확인하고, 없으면 즉시 추가하세요.`;
+                    }
+                }
+                
+                // 4. 휴식 시간 선호도 감지
+                const restTimeMatch = feedbackLower.match(/(?:쉬는|휴식|쉼|브레이크).*?(?:시간|분|30|60|1시간|30분)/);
+                if (restTimeMatch || feedbackLower.includes('쉬는시간') || feedbackLower.includes('휴식시간')) {
+                    let restMinutes = 30; // 기본값
+                    if (feedbackLower.includes('30') || feedbackLower.includes('30분')) {
+                        restMinutes = 30;
+                    } else if (feedbackLower.includes('60') || feedbackLower.includes('1시간') || feedbackLower.includes('60분')) {
+                        restMinutes = 60;
+                    } else if (feedbackLower.includes('90') || feedbackLower.includes('1.5시간')) {
+                        restMinutes = 90;
+                    } else if (feedbackLower.includes('120') || feedbackLower.includes('2시간')) {
+                        restMinutes = 120;
+                    }
+                    
+                    feedbackSection += `\n\n⚠️⚠️⚠️ **휴식 시간 선호도 (최우선 반영 필수)**:\n` +
+                        `- 사용자가 작업 간 휴식 시간을 ${restMinutes}분으로 선호한다고 명시했습니다.\n` +
+                        `- **모든 작업 간에는 반드시 최소 ${restMinutes}분의 휴식 시간을 두세요.**\n` +
+                        `- 예: 작업이 17:00에 끝나면 다음 작업은 ${restMinutes}분 후인 ${restMinutes === 30 ? '17:30' : restMinutes === 60 ? '18:00' : restMinutes === 90 ? '18:30' : '19:00'} 이후에 배치하세요.\n` +
+                        `- ⚠️ **절대 금지**: 작업을 연속으로 배치하거나 휴식 시간이 ${restMinutes}분 미만인 것은 피드백 위반입니다. 반드시 ${restMinutes}분 이상의 휴식 시간을 두세요.`;
+                }
+                
+                // 5. 특정 시간대 작업 금지 감지
+                if (feedbackLower.includes('출근') && (feedbackLower.includes('바로') || feedbackLower.includes('다음')) &&
+                    (feedbackLower.includes('일') || feedbackLower.includes('작업') || feedbackLower.includes('배치')) &&
+                    (feedbackLower.includes('안') || feedbackLower.includes('금지') || feedbackLower.includes('ㄴㄴ'))) {
+                    feedbackSection += `\n\n⚠️⚠️⚠️ **출근 직후 작업 금지 (최우선 반영 필수)**:\n` +
+                        `- 사용자가 출근 직후(회사 시작 직후)에는 작업을 배치하지 않기를 원합니다.\n` +
+                        `- **출근 시간(예: 08:00) 직후 1시간 동안(예: 08:00~09:00)에는 할 일(task)을 배치하지 마세요.**\n` +
+                        `- 출근 직후 시간대는 생활 패턴(회사)만 배치하고, 할 일은 배치하지 마세요.\n` +
+                        `- ⚠️ **절대 금지**: 출근 직후 시간대에 할 일을 배치하는 것은 피드백 위반입니다.`;
+                }
+                
+                // 6. 점심 시간대 작업 금지 감지
+                if ((feedbackLower.includes('점심') || feedbackLower.includes('식사')) &&
+                    (feedbackLower.includes('안') || feedbackLower.includes('금지') || feedbackLower.includes('ㄴㄴ'))) {
+                    feedbackSection += `\n\n⚠️⚠️⚠️ **점심 시간대 작업 금지 (최우선 반영 필수)**:\n` +
+                        `- 사용자가 점심 시간대(12:00~14:00)에는 작업을 배치하지 않기를 원합니다.\n` +
+                        `- **점심 시간대(12:00~14:00)에는 할 일(task)을 배치하지 마세요.**\n` +
+                        `- 점심 시간대는 생활 패턴(식사)만 배치하고, 할 일은 배치하지 마세요.\n` +
+                        `- ⚠️ **절대 금지**: 점심 시간대에 할 일을 배치하는 것은 피드백 위반입니다.`;
+                }
+                
+                // 디버깅 로그
+                if (detectedPatterns.length > 0) {
+                    console.log('[🔍 피드백 패턴 감지]', detectedPatterns);
+                } else {
+                    console.log('[🔍 피드백 패턴 감지] 패턴 없음 - 원본 피드백만 사용');
+                }
+            }
             
             // 최종 스케줄 범위 계산
             const finalStartDay = baseRelDay;
             const finalEndDay = baseRelDay + scheduleLength - 1;
             
-            console.log('[🔍 디버깅] 프롬프트에 전달될 스케줄 범위:', {
-                baseRelDay,
-                scheduleLength,
-                finalStartDay,
-                finalEndDay,
-                expectedDays: `day ${finalStartDay} ~ day ${finalEndDay} (총 ${scheduleLength}일)`
-            });
             
+            // 빈 시간 감지 및 활용 가이드 생성
+            let emptyTimeGuide = '';
+            if (hasMorningPreferenceGlobal) {
+                emptyTimeGuide = `\n\n**🚨 빈 시간 감지 및 활용 가이드 (아침형 선호도 반영 필수)**:\n` +
+                    `1. **각 day의 빈 시간을 먼저 파악하세요**:\n` +
+                    `   - 생활 패턴을 배치한 후 남은 시간대를 확인하세요.\n` +
+                    `   - 예: 평일(day:1~5)에는 회사(08:00~17:00)가 있으므로, 회사 전(06:00~08:00)과 회사 후(17:00~21:00) 시간대가 비어있습니다.\n` +
+                    `   - 예: 주말(day:6, day:7)에는 자유시간(15:00~17:00)이 있으므로, 그 외 시간대가 비어있습니다.\n` +
+                    `2. **빈 시간대에 할 일을 우선 배치하세요**:\n` +
+                    `   - **오전 시간대(06:00~12:00)의 빈 시간을 최우선으로 활용**하세요.\n` +
+                    `   - 평일: 회사 전(06:00~08:00) 시간대를 최우선으로 사용하세요.\n` +
+                    `   - 주말: 오전 전체(06:00~12:00) 시간대를 최우선으로 사용하세요.\n` +
+                    `   - 오전 시간대가 부족하면 오후 시간대(12:00~18:00)의 빈 시간을 활용하세요.`;
+            }
+            
+            // 피드백 섹션을 최상단에 배치하고 강조
             const systemPrompt = {
                 role: 'system',
-                content: `당신은 사용자의 생활 패턴과 할 일을 바탕으로 완전한 스케줄을 생성하는 전문가입니다.${feedbackSection}${lifestyleTextDisplay}
+                content: `${feedbackSection ? `🚨🚨🚨🚨🚨 **사용자 피드백 (최우선 반영 - 절대 위반 금지 - 반드시 읽고 준수하세요)**\n${feedbackSection}${emptyTimeGuide}\n\n⚠️⚠️⚠️⚠️⚠️ **위 피드백을 최우선으로 반영하여 스케줄을 설계하세요. 피드백과 일반 규칙이 충돌하면 피드백을 우선하세요. 피드백을 무시하면 생성 실패입니다.**\n\n` : ''}당신은 사용자의 생활 패턴과 할 일을 바탕으로 완전한 스케줄을 생성하는 전문가입니다.
+
+**스케줄 생성 단계 (반드시 이 순서대로 진행하세요):**
+
+**1단계: 생활 패턴 배치**
+${lifestyleTextDisplay}
+- 생활 패턴을 먼저 해당 요일, 해당 시간에 배치하세요.
+- 생활 패턴은 type: "lifestyle"로 설정하세요.
+- 생활 패턴은 생성 기간 내의 해당 요일마다 반복 배치하세요.
+
+**2단계: 할 일 우선순위 계산**
+- 각 할 일의 중요도(priority), 난이도(difficulty), 마감일(deadline_day)을 분석하세요.
+- 아이젠하워 매트릭스 기법을 기반으로 우선순위를 정하세요:
+  * 긴급하고 중요한 작업 (deadline_day가 가까움 + priority='상' + difficulty='상') → 최우선
+  * 긴급하지만 덜 중요한 작업 → 두 번째 우선순위
+  * 덜 긴급하지만 중요한 작업 → 세 번째 우선순위
+  * 덜 긴급하고 덜 중요한 작업 → 네 번째 우선순위
+
+**3단계: 빈 시간 찾기 (매우 중요 - 반드시 수행하세요)**
+- 생활 패턴을 배치한 후, **각 day에서 남은 빈 시간을 명시적으로 계산하세요.**
+- 빈 시간 = 24시간 중 생활 패턴이 차지하지 않은 시간대
+- **⚠️ 반드시 각 day별로 빈 시간 목록을 먼저 작성하세요:**
+  * 예: day:8 (월요일) - 생활 패턴: 회사(08:00~17:00), 취침(21:00~07:00)
+    → 빈 시간: 07:00~08:00 (1시간), 17:00~21:00 (4시간)
+  * 예: day:7 (일요일) - 생활 패턴: 브런치(12:00~13:00), 자유시간(15:00~17:00), 취침(21:00~07:00)
+    → 빈 시간: 07:00~12:00 (5시간), 13:00~15:00 (2시간), 17:00~21:00 (4시간)
+- **⚠️ 빈 시간을 찾지 않고 할 일을 배치하면 안 됩니다. 반드시 빈 시간을 먼저 계산하세요.**
+
+**4단계: 할 일 배치 (피드백 반영 필수)**
+${feedbackSection ? `- **⚠️⚠️⚠️ 사용자 피드백을 최우선으로 반영하세요. 피드백과 일반 규칙이 충돌하면 피드백을 우선하세요.**` : ''}
+- **⚠️ 반드시 3단계에서 계산한 빈 시간 목록을 확인하세요.**
+- 우선순위가 높은 할 일부터 **빈 시간 목록**에 배치하세요.
+${hasMorningPreferenceGlobal ? `- **⚠️⚠️⚠️ 사용자가 아침형 선호를 명시했으므로, 빈 시간 중 오전 시간대(06:00~12:00)를 최우선으로 선택하세요. 저녁 시간대(19:00 이후)의 빈 시간은 사용하지 마세요.**` : ''}
+- 할 일은 type: "task"로 설정하세요.
+- 할 일끼리는 겹치지 않도록 배치하세요.
+- deadline_time이 있는 작업은 반드시 deadline_day의 deadline_time에 배치하세요.
+- **⚠️ 검증: 할 일을 배치한 후, 해당 시간대가 실제로 빈 시간이었는지 확인하세요.**
 
 **현재 날짜: ${year}년 ${month}월 ${date}일 (${currentDayName})**
 **기준 day: ${anchorDay}**
@@ -505,7 +658,11 @@ class AIService {
   * ⚠️ **type: "task"인 작업**: type이 "task"인 작업은 deadline_time이 없으면 **자유롭게 배치**하세요. deadline_day 이전의 어떤 시간에든 배치할 수 있습니다.
   * ⚠️ **절대 금지 사항**: deadline_day=8, deadline_time="14:00"인 작업을 day 10에 배치하거나, 14:00가 아닌 다른 시간에 배치하는 것은 **심각한 오류**입니다. 반드시 day 8, 14:00에 배치하세요.
   * ⚠️ **검증 필수**: 생성 후 반드시 확인하세요. deadline_time이 있는 작업이 deadline_day가 아닌 다른 day에 배치되었는지, deadline_time이 아닌 다른 시간에 배치되었는지 확인하고, 잘못 배치되었다면 즉시 수정하세요.
-3) **중요도+난이도 모두 상인 작업 (priority='상' AND difficulty='상')**: 반드시 **마감일까지 매일 매일(평일+주말 모두 포함), 비슷한 시간에 배치**하세요. 예를 들어 "오픽 시험 준비"가 priority='상', difficulty='상'이면 deadline_day까지 **평일과 주말을 구분하지 말고 매일 같은 시간대(예: 19:00-21:00)에 배치**해야 합니다. 주말(토요일 day:6, 일요일 day:7)에도 빈 시간이 있으면 **반드시 배치**하세요. 하루도 빠뜨리지 마세요!
+3) **중요도+난이도 모두 상인 작업 (priority='상' AND difficulty='상')**: 반드시 **마감일까지 매일 매일(평일+주말 모두 포함) 배치**하세요. 예를 들어 "오픽 시험 준비"가 priority='상', difficulty='상'이면 deadline_day까지 **평일과 주말을 구분하지 말고 매일 배치**해야 합니다. 주말(토요일 day:6, 일요일 day:7)에도 빈 시간이 있으면 **반드시 배치**하세요. 하루도 빠뜨리지 마세요!
+  * 🚨🚨🚨 **시간대 선호도 반영 (최우선 - 절대 위반 금지)**: 
+    - **사용자 피드백에 아침/오전 시간대 선호가 있으면, 반드시 오전 시간대(06:00~12:00)의 빈 시간에 우선 배치하세요. 저녁 시간대(19:00 이후)에 배치하는 것은 절대 금지입니다.**
+    - **사용자 피드백에 저녁 시간대 선호가 있으면, 반드시 저녁 시간대(18:00~23:00)의 빈 시간에 우선 배치하세요.**
+    - **피드백이 없으면 빈 시간을 찾아 자유롭게 배치하세요.**
   * ⚠️ **중요**: deadline_day가 스케줄 생성 범위(day ${finalStartDay}~${finalEndDay})를 벗어나더라도, **스케줄 생성 범위 내에서 매일 배치**하세요. 예: deadline_day=24인 작업도 day ${finalStartDay}~${finalEndDay} 범위 내에서 매일 배치해야 합니다.
 4) **우선순위 기반 배치**: 
    - **긴급 작업 (deadline_day <= ${finalStartDay + 3})**: 반드시 **매일 일정 시간 투자**하도록 배치하세요. 같은 작업을 여러 날에 걸쳐 매일 배치하여 마감일까지 꾸준히 진행하세요.
@@ -515,11 +672,15 @@ class AIService {
   * ⚠️ **중요**: deadline_day가 스케줄 생성 범위(day ${finalStartDay}~${finalEndDay})를 벗어나더라도, **스케줄 생성 범위 내에서 매일 배치**하세요. deadline_day가 멀리 있어도 스케줄 생성 범위 내에서 매일 배치해야 합니다.
 6) **마감일 임박 + 집중 작업**: 마감일이 얼마 안 남았고(deadline_day <= ${finalStartDay + 2}), 집중해서 빠르게 끝낼 수 있는 작업은 **긴 시간(2-3시간 블록)**을 투자하여 배치하세요. 한 번에 몰아서 끝내는 것이 효율적입니다.
 7) **시간 활용 (매우 중요)**: 하루에 **생활 패턴을 제외한 시간이 60분 이상 남으면 반드시 채워야** 합니다. 같은 작업을 **하루에 여러 블록으로 분할 배치**하거나, 여러 작업을 **병렬 배치**하여 시간을 최대한 활용하세요.
-8) **같은 작업 하루 여러 번 배치**: **특히 중요도+난이도 상 작업**은 같은 날에 **여러 시간대에 분산 배치**하세요. 예를 들어 "오픽 시험 준비"가 하루에 4시간 필요하면 **오전 2시간, 오후 2시간**으로 나누어 배치하세요.
+8) **같은 작업 하루 여러 번 배치**: **특히 중요도+난이도 상 작업**은 같은 날에 **여러 시간대에 분산 배치**하세요. 
+  * 🚨 **시간대 선호도 우선**: 사용자 피드백에 아침/오전 시간대 선호가 있으면, **오전 시간대(06:00~12:00)에 우선 배치**하세요. 예를 들어 "오픽 시험 준비"가 하루에 4시간 필요하면 **오전 2시간(06:00~08:00), 오전 2시간(10:00~12:00)**으로 나누어 배치하세요. 저녁 시간대(19:00 이후)에 배치하는 것은 절대 금지입니다.
 9) **시간 활용 전략**: 각 day의 가능한 시간대를 확인하고, **가능한 모든 시간대에 배치**하세요.
 10) **할 일 간 겹침 금지, 생활패턴/고정일정 침범 금지**: 할 일끼리는 겹치면 안 되지만, **생활 패턴끼리는 겹쳐도 됩니다.**
 11) **휴식 간격 필수**: 같은 작업이나 다른 작업을 연속으로 배치할 때는 **최소 30분** 간격을 두세요 (예: 17:00-19:00 작업 후 다음 작업은 19:30 이후). **쉬는 시간을 반드시 포함**하세요.
-12) **주말 정책**: 사용자 피드백을 확인하세요. 피드백에 주말 관련 내용이 있으면 그에 따라 배치하세요. 피드백이 없으면 **주말(day:6 토요일, day:7 일요일)도 스케줄 배치가 가능합니다. 필요한 경우 주말에도 배치하세요.** 특히 priority='상' AND difficulty='상' 작업은 **주말에도 매일, 필요 시 하루 여러 블록**을 배치하세요.
+12) **주말 정책**: 
+  * **사용자 피드백에 주말 관련 내용이 있으면 그에 따라 배치하세요.**
+  * **피드백이 없으면 주말(day:6 토요일, day:7 일요일)도 스케줄 배치가 가능합니다. 필요한 경우 주말에도 배치하세요.**
+  * **특히 priority='상' AND difficulty='상' 작업은 주말에도 매일, 필요 시 하루 여러 블록을 배치하세요.**
 13) **생활 패턴 필수 배치**: 사용자가 입력한 모든 생활 패턴은 반드시 해당 요일에 배치되어야 합니다. 생활 패턴이 겹치더라도 모두 배치하세요. 예: "주말 22시~24시 자유시간"은 모든 주말(day:6, day:7)에 반드시 배치되어야 합니다.
 14) **모든 작업 필수 배치 (매우 중요)**: tasks 배열의 **모든 작업은 반드시 스케줄에 배치**되어야 합니다. deadline_day가 스케줄 생성 범위(day ${finalStartDay}~${finalEndDay})를 벗어나더라도, **스케줄 생성 범위 내에서 배치**하세요. priority='상' AND difficulty='상'인 작업은 **스케줄 생성 범위 내에서 매일 배치**하세요. 작업을 배치하지 않는 것은 **절대 금지**입니다.
 
@@ -532,26 +693,14 @@ class AIService {
 
 **⚠️ 중요: 빈 시간 목록을 제공하지 않으므로, AI가 생활 패턴과 할 일을 고려하여 자유롭게 스케줄을 설계하세요.**
 
-**⚠️ 매우 중요 - deadline_time 처리 (절대 위반 금지):**
-- tasks 배열의 각 작업을 확인하세요.
+**deadline_time 처리:**
 - deadline_time이 있는 작업은 **반드시 deadline_day의 deadline_time에 배치**하세요.
-- 예: { "title": "회의", "deadline_day": 8, "deadline_time": "14:00" } → **반드시** day:8, start:"14:00"에 배치
-- deadline_time이 있는 작업을 deadline_day가 아닌 다른 day에 배치하거나, deadline_time이 아닌 다른 시간에 배치하는 것은 **절대 금지**입니다.
-- ⚠️ **type: "appointment"인 작업 (최우선 처리)**: type이 "appointment"인 작업은 특정 날짜/시간에 고정된 일정입니다. deadline_day와 deadline_time을 **절대적으로 준수**해야 합니다. 다른 날짜나 시간에 배치하는 것은 **절대 금지**입니다.
-- ⚠️ **검증 필수**: 생성 후 반드시 확인하세요. deadline_time이 있는 작업이 deadline_day가 아닌 다른 day에 배치되었는지, deadline_time이 아닌 다른 시간에 배치되었는지 확인하고, 잘못 배치되었다면 즉시 수정하세요.
-- ⚠️ **중요**: deadline_day=8, deadline_time="14:00"인 작업을 day 10에 배치하거나, 14:00가 아닌 다른 시간에 배치하는 것은 **심각한 오류**입니다. 반드시 day 8, 14:00에 배치하세요.
+- type: "appointment"인 작업은 deadline_day와 deadline_time을 **절대적으로 준수**해야 합니다.
 
-**출력 (반드시 이 형식만 사용):**
-⚠️⚠️⚠️ **절대 위반 금지 - 스케줄 범위 생성 (최우선 규칙)**: 
+**출력 형식:**
 - **반드시 day ${finalStartDay}부터 day ${finalEndDay}까지 모든 day에 대해 scheduleData를 생성하세요.**
-- **현재 스케줄 생성 범위는 day ${finalStartDay}~${finalEndDay} (총 ${scheduleLength}일)입니다.**
-- **반드시 ${scheduleLength}개의 day 객체를 생성하세요: day ${finalStartDay}, day ${finalStartDay + 1}, day ${finalStartDay + 2}, ..., day ${finalEndDay}**
-- **day ${finalEndDay}까지 생성하지 않고 중간에 멈추는 것은 절대 금지입니다.**
-- **day ${finalEndDay}를 생성하지 않으면 생성 실패입니다. 반드시 다시 생성하세요.**
-- **생성 전에 반드시 확인: day ${finalStartDay}부터 day ${finalEndDay}까지 모든 day가 포함되어 있는지 확인하세요.**
-- **⚠️ 매우 중요: 마지막 day는 day ${finalEndDay}입니다. day ${finalEndDay}를 반드시 포함해야 합니다.**
-- **⚠️⚠️⚠️ 절대 금지: day ${finalEndDay}를 생성하지 않고 day ${finalEndDay - 1}까지만 생성하는 것은 심각한 오류입니다. 반드시 day ${finalEndDay}까지 생성하세요.**
-- **⚠️⚠️⚠️ 검증 필수: 생성 후 반드시 scheduleData 배열의 마지막 요소가 day ${finalEndDay}인지 확인하세요. day ${finalEndDay}가 없으면 생성 실패입니다.**
+- **반드시 ${scheduleLength}개의 day 객체를 생성하세요: day ${finalStartDay}, day ${finalStartDay + 1}, ..., day ${finalEndDay}**
+- **day ${finalEndDay}를 생성하지 않으면 생성 실패입니다.**
 
 \`\`\`json
 {
@@ -646,15 +795,19 @@ class AIService {
 - **⚠️ 매우 중요: 마지막 day는 day ${finalEndDay}입니다. day ${finalEndDay}를 반드시 포함해야 합니다.**
 - 각 day 객체는 "day", "weekday", "activities" 필드를 포함해야 합니다.
 - 각 activity는 "start", "end", "title", "type" 필드를 포함해야 합니다.
-- **"notes"는 스케줄 생성 이유와 배치 전략을 간결하게 설명하는 문자열 배열입니다 (최대 2-3줄).**
+- **"notes"는 스케줄 생성 이유와 배치 전략을 간결하게 설명하는 문자열 배열입니다 (최대 3-4줄).**
   * **간결하고 핵심만 작성하세요. 장황한 설명은 피하세요.**
+  * **⚠️ 반드시 포함해야 할 내용:**
+    1. 각 day별로 계산한 빈 시간 요약 (예: "평일: 회사 전 06:00~08:00, 회사 후 17:00~21:00 / 주말: 오전 07:00~12:00, 오후 13:00~15:00, 저녁 17:00~21:00")
+    2. 할 일 배치 전략 (어떤 빈 시간을 선택했는지)
+    3. 피드백 반영 여부 (예: "아침형 선호도에 따라 오전 시간대의 빈 시간을 우선 활용했습니다")
   * 제네릭한 문구("생활 패턴을 반복 배치했습니다", "모든 빈 시간을 최대한 활용했습니다" 등)는 사용하지 마세요.
   * 대신 실제 스케줄 설계 이유를 구체적으로 작성하세요:
-    - 예: "중요도 상 작업 '오픽 시험 준비'를 마감일까지 매일 19:00-21:00에 배치하여 꾸준한 학습 습관을 형성하도록 설계했습니다."
+    - 예: "평일 빈 시간: 06:00~08:00(2h), 17:00~21:00(4h). 주말 빈 시간: 07:00~12:00(5h), 13:00~15:00(2h), 17:00~21:00(4h). 중요도 상 작업 '오픽 시험 준비'를 아침형 선호도에 따라 평일 06:00~08:00, 주말 07:00~12:00의 빈 시간에 배치했습니다."
     - 예: "할 일이 없어 생활 패턴만 배치했습니다. 평일에는 회사 업무, 주말에는 자유시간을 중심으로 일정을 구성했습니다."
     - 예: "긴급 작업 '정보처리기사 시험'을 우선순위로 배치하고, 나머지 작업은 마감일 순서대로 분산 배치했습니다."
   * 생활 패턴만 입력된 경우: "생활 패턴만 입력되어 생활 패턴을 반복 배치했습니다. 할 일이 추가되면 생활 패턴과 겹치지 않도록 배치하겠습니다."
-  * 할 일이 있는 경우: 각 작업의 배치 이유와 우선순위를 구체적으로 설명하세요.`
+  * 할 일이 있는 경우: 각 작업의 배치 이유와 우선순위, 그리고 사용한 빈 시간을 구체적으로 설명하세요.`
             };
 
             // 시스템 프롬프트를 맨 앞에 추가
