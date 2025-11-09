@@ -954,7 +954,10 @@ export function convertScheduleToEvents(scheduleArray, nowLike = new Date()) {
           description: activity.description,
           category: normalizedCategory,
           confidence: activity.confidence ?? undefined,
-          taskId: activity.taskId ?? null  // taskId 포함
+          taskId: activity.taskId ?? null,  // taskId 포함
+          originalDay: dayBlock.day,        // 원본 day 저장 (드래그 앤 드롭 매칭용)
+          originalStart: activity.start,    // 원본 start 시간 저장 (드래그 앤 드롭 매칭용)
+          originalEnd: activity.end         // 원본 end 시간 저장 (드래그 앤 드롭 매칭용)
         };
         
 

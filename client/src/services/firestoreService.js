@@ -450,8 +450,32 @@ class FirestoreService {
         await this.deactivateScheduleSessions(userId);
       }
       
-      // 새 세션 저장 (정합성 강화)
-      const docRef = await addDoc(sessionsRef, {
+      // undefined 값을 제거하는 헬퍼 함수 (null은 유지, undefined만 제거)
+      const removeUndefined = (obj) => {
+        if (obj === undefined) {
+          return undefined; // undefined는 제거됨 (객체에서 제외)
+        }
+        if (obj === null) {
+          return null; // null은 유지 (Firestore에서 허용)
+        }
+        if (Array.isArray(obj)) {
+          return obj.map(item => removeUndefined(item)).filter(item => item !== undefined);
+        }
+        if (typeof obj === 'object' && obj !== null) {
+          const cleaned = {};
+          for (const [key, value] of Object.entries(obj)) {
+            const cleanedValue = removeUndefined(value);
+            if (cleanedValue !== undefined) {
+              cleaned[key] = cleanedValue;
+            }
+          }
+          return cleaned;
+        }
+        return obj;
+      };
+      
+      // 새 세션 저장 (정합성 강화) - undefined 값 제거
+      const cleanedData = removeUndefined({
         ...sessionData,
         hasSchedule: willActivate,   
         isActive: willActivate,      
@@ -459,6 +483,8 @@ class FirestoreService {
         createdAtMs: Date.now(),    
         updatedAt: serverTimestamp()
       });
+      
+      const docRef = await addDoc(sessionsRef, cleanedData);
       
       return docRef.id;
     } catch (error) {
@@ -469,40 +495,89 @@ class FirestoreService {
 
   // 최근 스케줄 조회: 가장 최신 세션 하나만 조회하여 유효한 스케줄만 반환
   async getLastSchedule(userId) {
+    const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
+    
+    // 인덱스 오류 감지 헬퍼
+    const isIndexError = (error) => {
+      return error?.code === 'failed-precondition' || 
+             error?.message?.includes('index') || 
+             error?.message?.includes('requires an index');
+    };
+    
+    // 최적화된 쿼리: 인덱스를 사용하여 서버에서 정렬 및 제한
+    // createdAtMs가 있으면 우선 사용, 없으면 createdAt 사용
     try {
-      const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
-      const fetchLatestSession = async (orderByField) => {
-        const q = query(
-          sessionsRef, 
-          orderBy(orderByField, 'desc'), 
-          limit(1)
-        );
-        const qs = await getDocs(q);
-        
-        if (qs.docs.length === 0) {
-          return null;
-        }
-        
-        const data = qs.docs[0].data();
-        return data.hasSchedule === true ? data : null;
-      };
+      // 1차 시도: createdAtMs 필드로 정렬 (더 정확함)
+      const q1 = query(
+        sessionsRef,
+        where('hasSchedule', '==', true),
+        where('isActive', '==', true),
+        orderBy('createdAtMs', 'desc'),
+        limit(1)
+      );
+      const qs1 = await getDocs(q1);
       
-      // createdAtMs로 먼저 시도
-      try {
-        const result = await fetchLatestSession('createdAtMs');
-        if (result) return result;
-      } catch (indexError) {
-        // 인덱스 에러가 발생하면 createdAt으로 fallback
+      if (!qs1.empty) {
+        const doc = qs1.docs[0];
+        return { id: doc.id, ...doc.data() };
       }
+    } catch (msError) {
+      // 인덱스 오류가 아니면 다른 오류일 수 있으므로 계속 진행
+      if (isIndexError(msError)) {
+        console.debug('[getLastSchedule] createdAtMs 인덱스 없음, createdAt으로 시도');
+      } else {
+        console.debug('[getLastSchedule] createdAtMs 쿼리 실패:', msError.message);
+      }
+    }
+    
+    // 2차 시도: createdAt 필드로 정렬 (fallback)
+    try {
+      const q2 = query(
+        sessionsRef,
+        where('hasSchedule', '==', true),
+        where('isActive', '==', true),
+        orderBy('createdAt', 'desc'),
+        limit(1)
+      );
+      const qs2 = await getDocs(q2);
       
-      // createdAt으로 fallback
-      try {
-        return await fetchLatestSession('createdAt');
-      } catch (fallbackError) {
+      if (!qs2.empty) {
+        const doc = qs2.docs[0];
+        return { id: doc.id, ...doc.data() };
+      }
+    } catch (createdAtError) {
+      // 인덱스 오류인 경우 클라이언트 측 정렬로 fallback
+      if (isIndexError(createdAtError)) {
+        console.debug('[getLastSchedule] createdAt 인덱스 없음, 클라이언트 측 정렬로 fallback');
+      } else {
+        console.debug('[getLastSchedule] createdAt 쿼리 실패:', createdAtError.message);
+      }
+    }
+    
+    // 최종 fallback: 인덱스 없이 클라이언트 측 정렬
+    try {
+      const q = query(
+        sessionsRef, 
+        where('hasSchedule', '==', true), 
+        where('isActive', '==', true)
+      );
+      const qs = await getDocs(q);
+      
+      if (qs.empty) {
         return null;
       }
-    } catch (error) {
-      console.error('최근 스케줄 조회 실패:', error);
+      
+      // 클라이언트 측에서 정렬
+      const sessions = qs.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      sessions.sort((a, b) => {
+        const aTime = a.createdAtMs || (a.createdAt?.toMillis?.() || 0);
+        const bTime = b.createdAtMs || (b.createdAt?.toMillis?.() || 0);
+        return bTime - aTime; // 내림차순 (최신이 먼저)
+      });
+      
+      return sessions.length > 0 ? sessions[0] : null;
+    } catch (fallbackError) {
+      console.error('최근 스케줄 조회 fallback 실패:', fallbackError);
       return null;
     }
   }
@@ -550,25 +625,99 @@ class FirestoreService {
 
   // 최근 스케줄의 활동 비중 업데이트
   async updateLastScheduleActivityAnalysis(userId, activityAnalysis) {
+    const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
+    
+    // 인덱스 오류 감지 헬퍼
+    const isIndexError = (error) => {
+      return error?.code === 'failed-precondition' || 
+             error?.message?.includes('index') || 
+             error?.message?.includes('requires an index');
+    };
+    
+    // 최적화: hasSchedule 필터를 서버 쿼리에 포함
     try {
-      const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
-      const q = query(sessionsRef, orderBy('createdAtMs', 'desc'), limit(10));
+      // 1차 시도: createdAtMs로 정렬
+      const q1 = query(
+        sessionsRef,
+        where('hasSchedule', '==', true),
+        orderBy('createdAtMs', 'desc'),
+        limit(1)
+      );
+      const qs1 = await getDocs(q1);
+      
+      if (!qs1.empty) {
+        await updateDoc(qs1.docs[0].ref, {
+          activityAnalysis,
+          updatedAt: serverTimestamp()
+        });
+        return true;
+      }
+    } catch (msError) {
+      // 인덱스 오류가 아니면 다른 오류일 수 있으므로 계속 진행
+      if (isIndexError(msError)) {
+        console.debug('[updateLastScheduleActivityAnalysis] createdAtMs 인덱스 없음, createdAt으로 시도');
+      } else {
+        console.debug('[updateLastScheduleActivityAnalysis] createdAtMs 쿼리 실패:', msError.message);
+      }
+    }
+    
+    // 2차 시도: createdAt으로 정렬
+    try {
+      const q2 = query(
+        sessionsRef,
+        where('hasSchedule', '==', true),
+        orderBy('createdAt', 'desc'),
+        limit(1)
+      );
+      const qs2 = await getDocs(q2);
+      
+      if (!qs2.empty) {
+        await updateDoc(qs2.docs[0].ref, {
+          activityAnalysis,
+          updatedAt: serverTimestamp()
+        });
+        return true;
+      }
+    } catch (createdAtError) {
+      // 인덱스 오류인 경우 클라이언트 측 정렬로 fallback
+      if (isIndexError(createdAtError)) {
+        console.debug('[updateLastScheduleActivityAnalysis] createdAt 인덱스 없음, 클라이언트 측 정렬로 fallback');
+      } else {
+        console.debug('[updateLastScheduleActivityAnalysis] createdAt 쿼리 실패:', createdAtError.message);
+      }
+    }
+    
+    // 최종 fallback: 클라이언트 측 정렬
+    try {
+      const q = query(
+        sessionsRef,
+        where('hasSchedule', '==', true)
+      );
       const qs = await getDocs(q);
       
-      for (const doc of qs.docs) {
-        const data = doc.data();
-        if (data.hasSchedule === true) {
-          await updateDoc(doc.ref, {
-            activityAnalysis,
-            updatedAt: serverTimestamp()
-          });
-          return true;
-        }
+      if (qs.empty) {
+        return false;
+      }
+      
+      // 클라이언트 측에서 정렬하여 최신 것 찾기
+      const sessions = qs.docs.map(doc => ({ id: doc.id, ref: doc.ref, ...doc.data() }));
+      sessions.sort((a, b) => {
+        const aTime = a.createdAtMs || (a.createdAt?.toMillis?.() || 0);
+        const bTime = b.createdAtMs || (b.createdAt?.toMillis?.() || 0);
+        return bTime - aTime; // 내림차순 (최신이 먼저)
+      });
+      
+      if (sessions.length > 0) {
+        await updateDoc(sessions[0].ref, {
+          activityAnalysis,
+          updatedAt: serverTimestamp()
+        });
+        return true;
       }
       
       return false;
-    } catch (error) {
-      console.error('최근 스케줄 활동 비중 업데이트 실패:', error);
+    } catch (fallbackError) {
+      console.error('최근 스케줄 활동 비중 업데이트 fallback 실패:', fallbackError);
       return false;
     }
   }

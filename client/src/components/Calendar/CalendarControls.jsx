@@ -8,10 +8,16 @@ const CalendarControls = ({
   onPencilClick,  // 생활패턴 버튼을 클릭했을 때 실행할 함수
   onAdviceClick,  // 조언 버튼을 클릭했을 때 실행할 함수
   onReportClick,  // 월말 레포트 버튼을 클릭했을 때 실행할 함수
-  onResetClick   // 캘린더 초기화 버튼을 클릭했을 때 실행할 함수
+  onResetClick,   // 캘린더 초기화 버튼을 클릭했을 때 실행할 함수
+  onSaveClick     // 스케줄 저장 버튼을 클릭했을 때 실행할 함수
 }) => {
   return (
     <>
+      {onSaveClick && (
+        <button className="save-button" onClick={onSaveClick}>
+          캘린더 수정
+        </button>
+      )}
       <button className="reset-button" onClick={onResetClick}>
         캘린더 초기화
       </button>

@@ -3,6 +3,7 @@ import React, { useRef, useEffect } from 'react'; // 웹페이지를 만드는 �
 import FullCalendar from '@fullcalendar/react';  
 import dayGridPlugin from '@fullcalendar/daygrid';  // 월간 달력 뷰
 import timeGridPlugin from '@fullcalendar/timegrid';  // 주간/일간 달력 뷰
+import interactionPlugin from '@fullcalendar/interaction';  // 드래그 앤 드롭 플러그인
 import '../../styles/fullcalendar-custom.css';
 
 const Calendar = React.forwardRef(({ 
@@ -11,7 +12,8 @@ const Calendar = React.forwardRef(({
   onViewDidMount,     // 달력 뷰가 변경될 때 실행할 함수
   onDatesSet,         // 날짜가 변경될 때 실행할 함수
   onDayHeaderContent, // 요일 헤더를 만들 때 실행할 함수
-  onEventContent      // 일정 내용을 만들 때 실행할 함수
+  onEventContent,     // 일정 내용을 만들 때 실행할 함수
+  onEventDrop         // 일정이 드롭될 때 실행할 함수
 }, ref) => {
   // ref는 부모 컴포넌트에서 전달받음
 
@@ -106,7 +108,7 @@ const Calendar = React.forwardRef(({
     <div className="calendar-container">
       <FullCalendar
         ref={ref} // 달력에 리모컨 연결 
-        plugins={[dayGridPlugin, timeGridPlugin]}
+        plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
         initialView="dayGridMonth"
         headerToolbar={{
           start: "prev,next today",
@@ -121,12 +123,17 @@ const Calendar = React.forwardRef(({
         allDaySlot={true}
         navLinks={true}     // 날짜 클릭으로 이동 가능
         nowIndicator={true} // 현재 날짜 표시
+        editable={true}     // 드래그 앤 드롭 활성화
+        eventStartEditable={true}  // 시작 시간 변경 가능
+        eventDurationEditable={true} // 기간 변경 가능
         eventDidMount={onEventMount}  // 일정이 달력에 나타날 때 실행할 함수
         viewClassNames={(arg) => [`view-${arg.view.type}`]}
         viewDidMount={onViewDidMount} // 달력 뷰가 변경될 때 실행할 함수
         datesSet={onDatesSet}         // 날짜가 변경될 때 실행할 함수
         dayHeaderContent={onDayHeaderContent} // 요일 헤더를 만들 때 실행할 함수
         eventContent={onEventContent} // 일정 내용을 만들 때 실행할 함수
+        eventDrop={onEventDrop}       // 일정이 드롭될 때 실행할 함수
+        eventResize={onEventDrop}     // 일정 크기가 변경될 때 실행할 함수
       />
     </div>
   );

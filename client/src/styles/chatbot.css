@@ -226,10 +226,31 @@
   cursor: pointer;
   z-index: 100;
   box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  width: 140px;
 }
 
 .reset-button:hover {
   background-color: #ff3030;
+}
+
+/* 캘린더 수정 버튼 */
+.save-button {
+  position: fixed;
+  bottom: 80px;
+  left: 20px;
+  background-color: #003399;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  padding: 10px 15px;
+  cursor: pointer;
+  z-index: 100;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  width: 140px;
+}
+
+.save-button:hover {
+  background-color: #002266;
 }
 
 /* 챗봇 닫기 버튼 */

@@ -30,7 +30,9 @@ import {
   parseTaskFromFreeText,
   postprocessSchedule,
   dedupeActivitiesByTitleTime,
-  convertScheduleToEvents
+  convertScheduleToEvents,
+  getGptDayIndex,
+  convertToRelativeDay as convertToRelativeDayFromScheduleUtils
 } from '../utils/scheduleUtils';
 import { endsWithAppointmentCommand, extractAppointmentTitle } from '../utils/appointmentRules';
 import { parseLifestyleLines } from '../utils/lifestyleParse';
@@ -1336,6 +1338,178 @@ function CalendarPage() {
     return {domNodes:[span]}
   };
 
+  // 이벤트 드롭 핸들러 (드래그 앤 드롭/리사이즈 허용만 - 저장은 버튼 클릭 시)
+  const handleEventDrop = useCallback((dropInfo) => {
+    // FullCalendar가 자동으로 처리하도록 허용 (revert 없음)
+    // 저장은 "캘린더 수정" 버튼 클릭 시에만 수행
+  }, []);
+
+  // 이벤트를 스케줄 형식으로 변환하는 함수
+  const convertEventsToSchedule = useCallback((events) => {
+    const scheduleMap = new Map(); // day별로 그룹화
+    
+    events.forEach(event => {
+      if (!event.start) return;
+      
+      // scheduleUtils의 convertToRelativeDay 사용 (올바른 day 인덱스 계산)
+      const day = convertToRelativeDayFromScheduleUtils(event.start, today);
+      if (!day || day <= 0) {
+        console.warn('[convertEventsToSchedule] 유효하지 않은 day:', day, event);
+        return;
+      }
+      
+      // 로컬 시간대로 시간 추출 (FullCalendar는 로컬 시간을 사용)
+      const startDate = new Date(event.start);
+      const endDate = event.end ? new Date(event.end) : null;
+      
+      const startTime = `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`;
+      const endTime = endDate 
+        ? `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}`
+        : null;
+      
+      // duration 계산 (분 단위)
+      let duration = null;
+      if (startDate && endDate) {
+        duration = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60));
+      } else if (event.extendedProps?.duration) {
+        duration = event.extendedProps.duration;
+      }
+      
+      // undefined 값을 제거하여 Firestore 저장 오류 방지
+      const activity = {
+        title: event.title,
+        start: startTime,
+        end: endTime,
+        type: event.extendedProps?.type || 'task'
+      };
+      
+      // undefined가 아닌 값만 추가
+      if (event.extendedProps?.importance) {
+        activity.importance = event.extendedProps.importance;
+      }
+      if (event.extendedProps?.difficulty) {
+        activity.difficulty = event.extendedProps.difficulty;
+      }
+      if (event.extendedProps?.description) {
+        activity.description = event.extendedProps.description;
+      }
+      if (event.extendedProps?.category) {
+        activity.category = event.extendedProps.category;
+      }
+      if (event.extendedProps?.taskId) {
+        activity.taskId = event.extendedProps.taskId;
+      }
+      if (duration !== null && duration > 0) {
+        activity.duration = duration;
+      }
+      if (event.extendedProps?.isRepeating !== undefined) {
+        activity.isRepeating = event.extendedProps.isRepeating;
+      }
+      
+      if (!scheduleMap.has(day)) {
+        // GPT day 인덱스를 weekday로 변환 (1=월요일, 2=화요일, ..., 7=일요일)
+        // day % 7을 계산하되, 0이면 7(일요일)로 처리
+        const weekdayNum = day % 7 === 0 ? 7 : day % 7;
+        const weekdays = ['', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일'];
+        const weekday = weekdays[weekdayNum] || '알 수 없음';
+        
+        scheduleMap.set(day, {
+          day,
+          weekday,
+          activities: []
+        });
+      }
+      
+      scheduleMap.get(day).activities.push(activity);
+    });
+    
+    // day별로 정렬하고 activities도 시간순으로 정렬
+    // day가 0이거나 유효하지 않은 항목 제거
+    const schedule = Array.from(scheduleMap.values())
+      .filter(dayBlock => dayBlock.day > 0) // day가 0인 항목 제거
+      .sort((a, b) => a.day - b.day)
+      .map(dayBlock => ({
+        ...dayBlock,
+        activities: dayBlock.activities
+          .filter(activity => activity.title && activity.start) // 필수 필드가 있는 활동만 유지
+          .sort((a, b) => {
+            const toMin = (s) => {
+              const [h, m] = String(s || '0:0').split(':').map(x => parseInt(x || '0', 10));
+              return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
+            };
+            return toMin(a.start || '00:00') - toMin(b.start || '00:00');
+          })
+      }))
+      .filter(dayBlock => dayBlock.activities.length > 0); // 활동이 있는 날짜만 유지
+    
+    return schedule;
+  }, [today]);
+
+  // 스케줄 저장 핸들러 (저장 버튼 클릭 시)
+  const handleSaveSchedule = useCallback(async () => {
+    if (!user?.uid) {
+      alert('로그인이 필요합니다.');
+      return;
+    }
+
+    try {
+      console.log('[SaveSchedule] 저장 시작');
+      
+      // FullCalendar API에서 현재 이벤트 가져오기
+      const calendarApi = calendarRef.current?.getApi();
+      if (!calendarApi) {
+        alert('캘린더를 불러올 수 없습니다.');
+        return;
+      }
+      
+      const events = calendarApi.getEvents();
+      if (!events || events.length === 0) {
+        alert('저장할 일정이 없습니다.');
+        return;
+      }
+      
+      // 이벤트를 스케줄 형식으로 변환
+      const schedule = convertEventsToSchedule(events);
+      
+      if (!schedule || schedule.length === 0) {
+        alert('저장할 스케줄이 없습니다.');
+        return;
+      }
+      
+      console.log('[SaveSchedule] 변환된 스케줄:', schedule);
+      
+      // Firestore에 저장
+      const lifestyleList = await firestoreService.getLifestylePatterns(user.uid);
+      const lifestyleListForSave = Array.isArray(lifestyleList) 
+        ? lifestyleList.filter(p => typeof p === 'string')
+        : [];
+
+      const sessionId = await saveScheduleSessionUnified({
+        uid: user.uid,
+        schedule: schedule,
+        lifestyleList: lifestyleListForSave,
+        aiPrompt: '', // 수동 저장은 AI 프롬프트 없음
+        conversationContext: [],
+        activityAnalysis: {} // 기존 activityAnalysis 유지 필요할 수 있음
+      });
+
+      if (sessionId) {
+        console.log('[SaveSchedule] 저장 완료:', sessionId);
+        alert('스케줄이 저장되었습니다.');
+        
+        // 저장 후 스케줄 업데이트
+        setLastSchedule(schedule);
+        updateSchedule(schedule);
+      } else {
+        console.warn('[SaveSchedule] 저장 실패: sessionId가 null입니다.');
+        alert('스케줄 저장에 실패했습니다.');
+      }
+    } catch (error) {
+      console.error('[SaveSchedule] 저장 실패:', error);
+      alert('스케줄 저장 중 오류가 발생했습니다: ' + error.message);
+    }
+  }, [user?.uid, convertEventsToSchedule, saveScheduleSessionUnified, setLastSchedule, updateSchedule]);
+
   return (
     <div className="calendar-page">
       <CalendarHeader isLoading={isLoading} loadingProgress={loadingProgress} />
@@ -1359,12 +1533,14 @@ function CalendarPage() {
         onDatesSet={handleDatesSet}
         onDayHeaderContent={handleDayHeaderContent}
         onEventContent={handleEventContent}
+        onEventDrop={handleEventDrop}
         eventClassNames={(arg) => {
           return (arg.event.extendedProps?.type === 'lifestyle') ? ['is-lifestyle'] : [];
         }}
       />
 
       <CalendarControls
+        onSaveClick={handleSaveSchedule}
         onPlusClick={() => {
           // 다른 모달이 열려있으면 먼저 닫기
           setShowLifestyleModal(false);
