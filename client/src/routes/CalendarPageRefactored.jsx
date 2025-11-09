@@ -103,7 +103,8 @@ const saveScheduleSessionUnified = async ({
   lifestyleList,
   aiPrompt,
   conversationContext,
-  activityAnalysis = {} // AI가 생성한 activityAnalysis를 전달받음
+  activityAnalysis = {}, // AI가 생성한 activityAnalysis를 전달받음
+  isManualEdit = false // 수동 수정 여부 플래그
 }) => {
   // lifestyleList는 원본 텍스트 문자열 배열이어야 함 (AI가 직접 파싱하도록)
   // 파싱된 형식(예: "7 09:00-18:00 브런치")이 아닌 원본 텍스트(예: "일요일 오후 12시 브런치")를 저장해야 함
@@ -162,6 +163,7 @@ const saveScheduleSessionUnified = async ({
     aiPromptPreview: promptPreview,
     conversationContext: Array.isArray(conversationContext) ? conversationContext.slice(-8) : [],
     activityAnalysis: finalActivityAnalysis, // AI가 생성한 것 우선, 없으면 클라이언트 계산
+    isManualEdit: isManualEdit, // 수동 수정 여부 저장
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
   };
@@ -458,8 +460,10 @@ function CalendarPage() {
       
       
       // 5. 스케줄 생성 (직접 호출로 변경)
+      // 수동으로 수정한 스케줄(isManualEdit: true)은 무시하고 완전히 새로 생성
+      const shouldUseLastSchedule = lastSchedule && !lastSchedule.isManualEdit;
       const promptBase = enforceScheduleRules(
-        lastSchedule 
+        shouldUseLastSchedule 
           ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule)
           : buildShedAIPrompt(lifestyleText, taskText, today, existingTasksForAI)
       );
@@ -595,7 +599,9 @@ function CalendarPage() {
       // 원본 텍스트를 그대로 사용하여 AI가 직접 파싱하도록 함
       const lifestyleText = lifestylePatternsOriginal.join("\n");
       
-      const promptBase = lastSchedule 
+      // 수동으로 수정한 스케줄(isManualEdit: true)은 무시하고 완전히 새로 생성
+      const shouldUseLastSchedule = lastSchedule && !lastSchedule.isManualEdit;
+      const promptBase = shouldUseLastSchedule 
         ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule, existingTasksForAI)
         : buildShedAIPrompt(lifestyleText, taskText, today, existingTasksForAI);
       
@@ -801,7 +807,13 @@ function CalendarPage() {
       addAIMessage("피드백을 반영하여 스케줄을 조정합니다...");
       
       const lifestyleText = lifestyleList.join("\n");
-      const feedbackPrompt = enforceScheduleRules(buildFeedbackPrompt(lifestyleText, messageText, lastSchedule));
+      // 수동으로 수정한 스케줄(isManualEdit: true)은 무시하고 완전히 새로 생성
+      const shouldUseLastSchedule = lastSchedule && !lastSchedule.isManualEdit;
+      const feedbackPrompt = enforceScheduleRules(
+        shouldUseLastSchedule 
+          ? buildFeedbackPrompt(lifestyleText, messageText, lastSchedule)
+          : buildShedAIPrompt(lifestyleText, messageText, today, [])
+      );
       handleScheduleGeneration(feedbackPrompt, "피드백을 반영하여 스케줄을 조정합니다...");
     });
   };
@@ -947,8 +959,10 @@ function CalendarPage() {
     );
 
     // promptBase 생성 (lastSchedule이 있으면 피드백 프롬프트, 없으면 새 스케줄 프롬프트)
+    // 단, 수동으로 수정한 스케줄(isManualEdit: true)은 무시하고 완전히 새로 생성
     const lastSchedule = user?.uid ? await firestoreService.getLastSchedule(user.uid) : null;
-    const promptBase = lastSchedule 
+    const shouldUseLastSchedule = lastSchedule && !lastSchedule.isManualEdit; // 수동 수정 스케줄은 무시
+    const promptBase = shouldUseLastSchedule 
       ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule, existingTasksForAI)
       : buildShedAIPrompt(lifestyleText, taskText, today, existingTasksForAI);
 
@@ -1490,7 +1504,8 @@ function CalendarPage() {
         lifestyleList: lifestyleListForSave,
         aiPrompt: '', // 수동 저장은 AI 프롬프트 없음
         conversationContext: [],
-        activityAnalysis: {} // 기존 activityAnalysis 유지 필요할 수 있음
+        activityAnalysis: {}, // 기존 activityAnalysis 유지 필요할 수 있음
+        isManualEdit: true // 수동 수정 플래그 추가
       });
 
       if (sessionId) {
