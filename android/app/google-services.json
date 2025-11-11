@@ -1,0 +1,39 @@
+{
+    "project_info": {
+      "project_number": "112076496685",
+      "project_id": "shedai20251011",
+      "storage_bucket": "shedai20251011.firebasestorage.app"
+    },
+    "client": [
+      {
+        "client_info": {
+          "mobilesdk_app_id": "1:112076496685:android:aa3038a6e7f0f65c337da4",
+          "android_client_info": {
+            "package_name": "com.hajeonghye.shedai.dev"
+          }
+        },
+        "oauth_client": [
+          {
+            "client_id": "112076496685-9uoi5fbl70264hgu4tluiqtn5jhk1871.apps.googleusercontent.com",
+            "client_type": 3
+          }
+        ],
+        "api_key": [
+          {
+            "current_key": "AIzaSyA4_m7VHNCxLH-oOgMD3ZCpB47UEZ9Q0Qg"
+          }
+        ],
+        "services": {
+          "appinvite_service": {
+            "other_platform_oauth_client": [
+              {
+                "client_id": "112076496685-9uoi5fbl70264hgu4tluiqtn5jhk1871.apps.googleusercontent.com",
+                "client_type": 3
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "configuration_version": "1"
+  }

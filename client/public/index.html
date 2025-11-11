@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>shedAI</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.8/dist/web/variable/pretendardvariable-dynamic-subset.css" />
+    <!-- Firebase 설정을 Service Worker에 전달 -->
+    <script>
+      // Firebase 설정을 전역 변수로 설정 (Service Worker에서 사용)
+      window.firebaseConfig = {
+        apiKey: "%REACT_APP_FIREBASE_API_KEY%",
+        authDomain: "%REACT_APP_FIREBASE_AUTH_DOMAIN%",
+        projectId: "%REACT_APP_FIREBASE_PROJECT_ID%",
+        storageBucket: "%REACT_APP_FIREBASE_STORAGE_BUCKET%",
+        messagingSenderId: "%REACT_APP_FIREBASE_MESSAGING_SENDER_ID%",
+        appId: "%REACT_APP_FIREBASE_APP_ID%",
+        measurementId: "%REACT_APP_FIREBASE_MEASUREMENT_ID%"
+      };
+    </script>
   </head>
   <body>
     <div id="root"></div>

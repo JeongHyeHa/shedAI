@@ -217,6 +217,18 @@ class AIService {
                 const taskId = task.id || `t${idx + 1}`;
                 tasksById[taskId] = task;
                 
+                // 디버깅: 원본 task 데이터 확인
+                if (idx === 0) {
+                    console.log('[AI Service] 첫 번째 할 일 원본 데이터:', {
+                        title: task.title,
+                        deadline: task.deadline,
+                        deadlineTime: task.deadlineTime,
+                        importance: task.importance,
+                        difficulty: task.difficulty,
+                        type: task.type
+                    });
+                }
+                
                 // 전략 계산: 중요/난이도 高 + 임박 마감 + 집중 작업 여부
                 const daysUntilDeadline = daysUntil(task.deadline);
                 const urgent = daysUntilDeadline <= 3;  // D-3 이내
@@ -249,6 +261,15 @@ class AIService {
                 
                 // DB의 deadline을 직접 사용하여 deadline_day 계산
                 let deadlineDay = getDeadlineDay(task.deadline);
+                
+                // 디버깅: deadline_day 계산 결과 확인
+                if (idx === 0) {
+                    console.log('[AI Service] deadline_day 계산:', {
+                        deadline: task.deadline,
+                        deadlineDay: deadlineDay,
+                        getDeadlineDay_result: getDeadlineDay(task.deadline)
+                    });
+                }
                 
                 // deadlineTime이 있으면 deadline이 정확한지 재확인
                 // DB에 저장된 deadline 문자열을 직접 사용
@@ -343,11 +364,7 @@ class AIService {
                 // type이 "task"인 경우 deadline_time이 있어도 제거 (AI가 자유롭게 배치하도록)
                 if (t.type === 'appointment' && t.deadlineTime) {
                     taskObj.deadline_time = t.deadlineTime;
-                } else if (t.deadlineTime) {
-                    // task인데 deadline_time이 있으면 제거 (날짜만 지정된 경우)
-                    // taskObj.deadline_time = null; // 명시적으로 제거하지 않음 (null로 설정)
                 }
-                
                 return taskObj;
             });
             
@@ -398,6 +415,9 @@ class AIService {
             // 4) 최종 텍스트 생성
             if (lifestyleTexts.length > 0) {
                 lifestyleTextDisplay = `\n\n**사용자가 입력한 생활 패턴 (원본 텍스트):**\n${lifestyleTexts.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\n⚠️ **위 생활 패턴들은 반드시 type: "lifestyle"로 배치하고, 해당 요일마다 반복 배치해야 합니다.**`;
+                console.log('[AI Service] 프롬프트에 포함될 생활패턴 원본:', lifestyleTexts);
+            } else {
+                console.warn('[AI Service] 생활패턴 원본 텍스트가 없습니다!');
             }
             
             // 피드백을 프롬프트에 명확히 반영 (최우선)
@@ -539,6 +559,11 @@ class AIService {
             }
             
             // 피드백 섹션을 최상단에 배치하고 강조
+            // 디버깅: 프롬프트에 생활패턴이 포함되는지 확인
+            if (lifestyleTextDisplay) {
+                console.log('[AI Service] 프롬프트에 포함된 생활패턴 섹션:', lifestyleTextDisplay.substring(0, 200) + '...');
+            }
+            
             const systemPrompt = {
                 role: 'system',
                 content: `${feedbackSection ? `🚨🚨🚨🚨🚨 **사용자 피드백 (최우선 반영 - 절대 위반 금지 - 반드시 읽고 준수하세요)**\n${feedbackSection}${emptyTimeGuide}\n\n⚠️⚠️⚠️⚠️⚠️ **위 피드백을 최우선으로 반영하여 스케줄을 설계하세요. 피드백과 일반 규칙이 충돌하면 피드백을 우선하세요. 피드백을 무시하면 생성 실패입니다.**\n\n` : ''}당신은 사용자의 생활 패턴과 할 일을 바탕으로 완전한 스케줄을 생성하는 전문가입니다.
@@ -550,6 +575,45 @@ ${lifestyleTextDisplay}
 - 생활 패턴을 먼저 해당 요일, 해당 시간에 배치하세요.
 - 생활 패턴은 type: "lifestyle"로 설정하세요.
 - 생활 패턴은 생성 기간 내의 해당 요일마다 반복 배치하세요.
+
+🚨🚨🚨 **평일/주말 구분 규칙 (최우선 - 절대 위반 금지):**
+- **"평일" 패턴은 오직 day:1,2,3,4,5 (월~금)에만 배치하세요.**
+- **"평일" 패턴을 day:6 (토요일)이나 day:7 (일요일)에 배치하는 것은 절대 금지입니다!**
+- **"주말" 패턴은 오직 day:6,7 (토~일)에만 배치하세요.**
+- **⚠️⚠️⚠️ 절대 금지: 사용자가 입력하지 않은 생활 패턴을 자동으로 추가하지 마세요.**
+- **⚠️⚠️⚠️ 절대 금지: 주말에 생활 패턴이 없으면 주말 day는 완전히 비워두세요. 취침, 식사 등 어떤 생활 패턴도 추가하지 마세요!**
+- **⚠️⚠️⚠️ 검증 필수: 생성 후 반드시 확인하세요. 주말(day:6, day:7)에 사용자가 입력하지 않은 생활 패턴이 있다면 즉시 제거하세요!**
+- **예: "평일 오전 8시~오후 5시 회사" → day:1,2,3,4,5에만 배치 (day:6,7에는 절대 배치하지 마세요!)**
+- **예: "평일 오전 1시~오전6시 취침" → day:1,2,3,4,5에만 배치 (day:6,7에는 절대 배치하지 마세요!)**
+- **예: 사용자가 "평일" 패턴만 입력했다면, day:6과 day:7의 activities 배열은 비워두거나 할 일만 배치하세요.**
+
+🚨🚨🚨 **시간 파싱 규칙 (최우선 - 절대 위반 금지):**
+**"오전"과 "오후"를 정확히 구분하세요:**
+- **"오전" = 00:00~11:59 (자정부터 정오 전까지)**
+- **"오후" = 12:00~23:59 (정오부터 자정 전까지)**
+
+**구체적인 시간 변환 규칙:**
+- **"오전 1시" = 01:00 (새벽 1시) - 절대로 21:00이 아닙니다!**
+- **"오전 2시" = 02:00**
+- **"오전 6시" = 06:00 (아침 6시)**
+- **"오전 8시" = 08:00**
+- **"오전 11시" = 11:00**
+- **"오후 12시" = 12:00 (정오)**
+- **"오후 1시" = 13:00**
+- **"오후 5시" = 17:00**
+- **"저녁 9시" = 21:00 (이건 "오후 9시"와 같습니다)**
+- **"밤 11시" = 23:00**
+
+**⚠️⚠️⚠️ 절대 금지:**
+- **"오전 1시"를 21:00으로 파싱하는 것은 심각한 오류입니다!**
+- **"오전"은 항상 00:00~11:59 범위입니다.**
+- **"오후"는 항상 12:00~23:59 범위입니다.**
+
+**실제 사용자 입력 예시:**
+- **"평일 오전 1시~오전6시 취침"** → start: **"01:00"**, end: **"06:00"** (자정 넘김 아님! 새벽 1시부터 아침 6시까지)
+- **"평일 오전 8시~오후 5시 회사"** → start: **"08:00"**, end: **"17:00"**
+
+**검증: 생성 후 반드시 확인하세요. "오전 1시"가 포함된 생활 패턴이 "21:00"으로 파싱되었다면 즉시 수정하세요!**
 
 **2단계: 할 일 우선순위 계산**
 - 각 할 일의 중요도(priority), 난이도(difficulty), 마감일(deadline_day)을 분석하세요.
@@ -563,10 +627,10 @@ ${lifestyleTextDisplay}
 - 생활 패턴을 배치한 후, 각 day에서 남은 빈 시간을 명시적으로 계산하세요.
 - 빈 시간 = 24시간 중 생활 패턴이 차지하지 않은 시간대
 - 반드시 각 day별로 빈 시간 목록을 먼저 작성하세요:
-  * 예: day:8 (월요일) - 생활 패턴: 회사(08:00~17:00), 취침(21:00~07:00)
-    → 빈 시간: 07:00~08:00 (1시간), 17:00~21:00 (4시간)
-  * 예: day:7 (일요일) - 생활 패턴: 브런치(12:00~13:00), 자유시간(15:00~17:00), 취침(21:00~07:00)
-    → 빈 시간: 07:00~12:00 (5시간), 13:00~15:00 (2시간), 17:00~21:00 (4시간)
+  * 예: day:8 (월요일) - 생활 패턴: 회사(08:00~17:00), 취침(01:00~06:00) (사용자가 "오전 1시~오전6시 취침"을 입력한 경우)
+    → 빈 시간: 06:00~08:00 (2시간), 17:00~01:00 다음날 (8시간, 자정 넘김)
+  * 예: day:7 (일요일) - 생활 패턴: 브런치(12:00~13:00), 자유시간(15:00~17:00), 취침(01:00~06:00)
+    → 빈 시간: 06:00~12:00 (6시간), 13:00~15:00 (2시간), 17:00~01:00 다음날 (8시간, 자정 넘김)
 - 빈 시간을 찾지 않고 할 일을 배치하면 안 됩니다. 반드시 빈 시간을 먼저 계산하세요.
 - 빈 시간 계산 결과는 반드시 notes에 포함해야 합니다.
 
@@ -615,7 +679,10 @@ ${hasMorningPreferenceGlobal ? `- 사용자가 아침형 선호를 명시했으�
 - **생활 패턴 간 겹침 허용**: 생활 패턴끼리는 시간이 겹쳐도 됩니다. 예: "주말 22시~24시 자유시간"과 "매일 저녁 9시~아침 7시 취침"이 겹치더라도 둘 다 배치해야 합니다.
 - **생활 패턴 누락 금지**: 사용자가 입력한 모든 생활 패턴은 반드시 배치되어야 합니다. 일부만 배치하고 나머지를 누락하는 것은 절대 금지입니다.
 - **생활 패턴 검증**: 생성 후 반드시 확인하세요. 예를 들어 "일요일 오후 12시~13시 브런치"가 있으면 모든 일요일(day:7)에 type: "lifestyle"로 배치되었는지 확인하세요. "주말 22시~24시 자유시간"이 있으면 모든 주말(day:6, day:7)에 type: "lifestyle"로 배치되었는지 확인하세요.
-- **절대 금지**: 사용자가 입력하지 않은 생활 패턴(식사, 브런치, 점심 등)을 자동으로 추가하지 마세요. 오직 사용자가 명시적으로 입력한 생활 패턴만 반복 배치하세요.
+- **절대 금지**: 사용자가 입력하지 않은 생활 패턴(식사, 브런치, 점심, 저녁식사, 아침식사, 취침 등)을 자동으로 추가하지 마세요. 오직 사용자가 명시적으로 입력한 생활 패턴만 반복 배치하세요.
+- **⚠️⚠️⚠️ 매우 중요**: 사용자가 "평일" 패턴만 입력했다면, 주말(day:6, day:7)에는 생활 패턴을 배치하지 마세요. 주말 day는 비워두거나 할 일만 배치하세요.
+- **⚠️⚠️⚠️ 검증 필수**: 생성 후 반드시 확인하세요. 사용자가 입력하지 않은 생활 패턴(예: 주말 취침)이 자동으로 추가되었다면 즉시 제거하세요!
+- **⚠️⚠️⚠️ 절대 금지 예시**: 사용자가 "평일 오전 1시~오전6시 취침"만 입력했다면, 주말(day:6, day:7)에 "21:00~07:00 취침" 같은 다른 취침 패턴을 추가하는 것은 절대 금지입니다!
 
 **요일 구분 (매우 중요):**
 - **평일 (weekday)**: day:1 (월요일), day:2 (화요일), day:3 (수요일), day:4 (목요일), day:5 (금요일) **만**
@@ -637,7 +704,13 @@ ${hasMorningPreferenceGlobal ? `- 사용자가 아침형 선호를 명시했으�
   * **생활 패턴끼리는 시간이 겹쳐도 됩니다. 모든 생활 패턴을 반드시 배치하세요.**
   * 예: "주말 22시~24시 자유시간"과 "매일 저녁 9시~아침 7시 취침"이 겹치더라도(22:00-00:00와 21:00-07:00) 둘 다 배치해야 합니다.
   * 예: "일요일 오후 12시~13시 브런치"와 "매일 저녁 9시~아침 7시 취침"이 겹치지 않더라도 둘 다 배치해야 합니다.
-0-1) **평일/주말 구분 (매우 중요)**: "평일" 패턴은 **오직 day:1,2,3,4,5에만** 배치하세요. day:6(토요일)이나 day:7(일요일)에는 절대 배치하지 마세요. "주말" 패턴은 **오직 day:6,7에만** 배치하세요.
+0-1) **평일/주말 구분 (매우 중요 - 절대 위반 금지)**: 
+  * **"평일" 패턴은 오직 day:1,2,3,4,5 (월요일~금요일)에만 배치하세요.**
+  * **day:6 (토요일)이나 day:7 (일요일)에는 절대 배치하지 마세요.**
+  * **"주말" 패턴은 오직 day:6,7 (토요일~일요일)에만 배치하세요.**
+  * **⚠️⚠️⚠️ 검증 필수**: 생성 후 반드시 확인하세요. "평일" 패턴이 day:6이나 day:7에 배치되었다면 즉시 제거하세요!
+  * **예: "평일 오전 8시~오후 5시 회사" → day:1,2,3,4,5에만 배치 (day:6,7에는 절대 배치하지 마세요!)**
+  * **예: "평일 오전 1시~오전6시 취침" → day:1,2,3,4,5에만 배치 (day:6,7에는 절대 배치하지 마세요!)**
 0-2) **생활 패턴 반복 배치 (매우 중요)**: 
   * **생활 패턴은 해당 요일마다 반복되어야 합니다. 한 번만 배치하는 것은 절대 금지입니다.**
   * 예: "일요일 오후 12시~13시 브런치" → 생성 기간의 **모든 일요일(day:7)에 반복** 배치
@@ -667,7 +740,9 @@ ${hasMorningPreferenceGlobal ? `- 사용자가 아침형 선호를 명시했으�
    - **긴급 작업 (deadline_day <= ${finalStartDay + 3})**: 반드시 **매일 일정 시간 투자**하도록 배치하세요. 같은 작업을 여러 날에 걸쳐 매일 배치하여 마감일까지 꾸준히 진행하세요.
    - **매우 긴급 (deadline_day <= ${finalStartDay + 2})**: 당일부터 매일 배치, 하루 2시간 이상 배치
    - **긴급 (deadline_day <= ${finalStartDay + 4})**: 당일 또는 다음날부터 매일 배치, 하루 1시간 이상 배치
-5) **중요도/난이도 상 작업**: (priority='상' 또는 difficulty='상')인 작업은 **마감일까지 여러 날에 걸쳐 충분히 배치**하세요. 특히 (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${finalStartDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하고, **여러 날에 분산 배치**하세요.
+5) **중요도/난이도 중 이상 작업**: (priority='중' 이상 또는 difficulty='중' 이상)인 작업은 **하루에 최소 2시간 이상 배치**하세요. 시간이 많이 남으면 그 이상 배치해도 좋습니다.
+  * (priority='상' 또는 difficulty='상')인 작업은 **마감일까지 여러 날에 걸쳐 충분히 배치**하세요. 특히 (priority='상' 또는 difficulty='상') **이고 동시에** (deadline_day<=${finalStartDay + 3}) 인 작업은 블록 길이를 **min_block_minutes(120분) 이상**으로 배치하고, **여러 날에 분산 배치**하세요.
+  * 예: priority='중', difficulty='상'인 작업은 하루에 최소 2시간 이상 배치하세요. 시간이 남으면 3시간, 4시간 배치해도 좋습니다. 아이젠하워 매트릭스를 바탕으로 일의 우선순위 및 중요도, 난이도를 보고 판단해서 배치하세요.
   * ⚠️ **중요**: deadline_day가 스케줄 생성 범위(day ${finalStartDay}~${finalEndDay})를 벗어나더라도, **스케줄 생성 범위 내에서 매일 배치**하세요. deadline_day가 멀리 있어도 스케줄 생성 범위 내에서 매일 배치해야 합니다.
 6) **마감일 임박 + 집중 작업**: 마감일이 얼마 안 남았고(deadline_day <= ${finalStartDay + 2}), 집중해서 빠르게 끝낼 수 있는 작업은 **긴 시간(2-3시간 블록)**을 투자하여 배치하세요. 한 번에 몰아서 끝내는 것이 효율적입니다.
 7) **시간 활용 (매우 중요)**: 하루에 **생활 패턴을 제외한 시간이 60분 이상 남으면 반드시 채워야** 합니다. 같은 작업을 **하루에 여러 블록으로 분할 배치**하거나, 여러 작업을 **병렬 배치**하여 시간을 최대한 활용하세요.
@@ -693,8 +768,10 @@ ${hasMorningPreferenceGlobal ? `- 사용자가 아침형 선호를 명시했으�
 **⚠️ 중요: 빈 시간 목록을 제공하지 않으므로, AI가 생활 패턴과 할 일을 고려하여 자유롭게 스케줄을 설계하세요.**
 
 **deadline_time 처리:**
+- **⚠️ 중요**: tasks 배열에 deadline_time 필드가 있는 작업만 이 규칙을 적용하세요. deadline_time 필드가 없는 작업은 자유롭게 배치하세요.
 - deadline_time이 있는 작업은 **반드시 deadline_day의 deadline_time에 배치**하세요.
 - type: "appointment"인 작업은 deadline_day와 deadline_time을 **절대적으로 준수**해야 합니다.
+- **type: "task"인 작업은 deadline_time이 있어도 무시하고 자유롭게 배치하세요.**
 
 **출력 형식:**
 - **반드시 day ${finalStartDay}부터 day ${finalEndDay}까지 모든 day에 대해 scheduleData를 생성하세요.**
@@ -813,6 +890,43 @@ ${hasMorningPreferenceGlobal ? `- 사용자가 아침형 선호를 명시했으�
             const enhancedMessages = [systemPrompt, ...userMessages]
                 .filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
             
+            // 디버깅: AI에게 전달되는 최종 데이터 로깅
+            console.log('=== [AI Service] AI에게 전달되는 최종 데이터 ===');
+            console.log('[생활패턴 원본 텍스트]:', lifestyleTexts.length > 0 ? lifestyleTexts : '없음');
+            console.log('[생활패턴 분석]:', lifestyleTexts.length > 0 ? lifestyleTexts.map(t => {
+                const isWeekday = /평일/.test(t);
+                const isWeekend = /주말/.test(t);
+                const isDaily = /매일/.test(t);
+                return {
+                    text: t,
+                    isWeekday,
+                    isWeekend,
+                    isDaily,
+                    shouldApplyTo: isWeekday ? 'day:1~5만' : (isWeekend ? 'day:6~7만' : 'day:1~7 모두')
+                };
+            }) : '없음');
+            console.log('[할 일 목록 (원본 - aiController에서 받은 데이터)]:', existingTasks.length > 0 ? existingTasks.map(t => ({
+                title: t.title,
+                deadline: t.deadline,
+                deadlineTime: t.deadlineTime,
+                importance: t.importance,
+                difficulty: t.difficulty,
+                type: t.type
+            })) : '없음');
+            console.log('[할 일 목록 (AI용 변환 후 - tasksForAI)]:', tasksForAI.length > 0 ? tasksForAI.map(t => ({
+                title: t.title,
+                deadline_day: t.deadline_day,
+                deadlineTime: t.deadlineTime,
+                priority: t.priority,
+                difficulty: t.difficulty,
+                type: t.type,
+                _original_deadline: t._original?.deadline
+            })) : '없음');
+            console.log('[피드백]:', opts.userFeedback || '없음');
+            console.log('[프롬프트 길이]:', systemPrompt.content.length, '자');
+            console.log('[사용자 메시지 수]:', userMessages.length);
+            console.log('[사용자 메시지 내용 (첫 500자)]:', userMessages.length > 0 ? userMessages[0].content.substring(0, 500) : '없음');
+            console.log('==========================================');
 
             // 타이밍 로그 시작
             const T0 = Date.now();

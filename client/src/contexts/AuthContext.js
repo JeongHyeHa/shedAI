@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../config/firebase';
 import authService from '../services/authService'; // 메서드 호출용(가입/로그인 등)
+import fcmService from '../services/fcmService';
 
 const AuthContext = createContext();
 
@@ -19,9 +20,25 @@ export const AuthProvider = ({ children }) => {
       return () => {};
     }
 
-    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       setUser(fbUser);
       setLoading(false);
+      
+      // 로그인 시 FCM 초기화 및 토큰 저장
+      if (fbUser) {
+        try {
+          await fcmService.initialize();
+          console.log('[AuthContext] FCM 초기화 완료');
+          
+          // pendingToken이 있으면 저장
+          if (fcmService.pendingToken) {
+            await fcmService.saveTokenToFirestore(fcmService.pendingToken, fbUser.uid);
+            console.log('[AuthContext] 대기 중이던 FCM 토큰 저장 완료');
+          }
+        } catch (error) {
+          console.error('[AuthContext] FCM 초기화 실패:', error);
+        }
+      }
     }, (err) => {
       setAuthError(err);
       setLoading(false);
@@ -59,6 +76,10 @@ export const AuthProvider = ({ children }) => {
 
   const signOut = async () => {
     try {
+      // 로그아웃 시 FCM 토큰 삭제
+      if (user) {
+        await fcmService.deleteToken(user.uid);
+      }
       await authService.signOutUser();
     } catch (error) {
       throw error;

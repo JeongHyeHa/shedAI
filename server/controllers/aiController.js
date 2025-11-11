@@ -136,6 +136,7 @@ class AIController {
                 lifestylePatternsOriginal = lifestylePatternsOriginalFromClient
                     .map(p => typeof p === 'string' ? p.trim() : null)
                     .filter(p => p && p.length > 0);
+                console.log('[AI Controller] 클라이언트에서 전달된 생활패턴 원본:', lifestylePatternsOriginal);
             }
             
             // 2) lifestylePatterns 배열에서 원본 텍스트 추출 시도
@@ -231,6 +232,24 @@ class AIController {
                 } else {
                   dl = null;
                 }
+                
+                // 디버깅: 첫 번째 할 일의 원본 데이터 확인
+                if (existingTasks.length > 0 && existingTasks[0] === t) {
+                    console.log('[AI Controller] 클라이언트에서 받은 첫 번째 할 일 원본:', {
+                        title: t?.title,
+                        deadline: t?.deadline,
+                        deadlineTime: t?.deadlineTime,
+                        importance: t?.importance,
+                        difficulty: t?.difficulty,
+                        type: t?.type
+                    });
+                    console.log('[AI Controller] 정규화 후:', {
+                        title: t?.title || '제목없음',
+                        deadline: dl || null,
+                        deadlineTime: t?.deadlineTime || null
+                    });
+                }
+                
                 return {
                     title: t?.title || '제목없음',
                     deadline: dl || null,

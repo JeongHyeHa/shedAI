@@ -6,6 +6,7 @@ import CalendarPage from "./routes/CalendarPageRefactored";
 import MonthlyReport from "./routes/MonthlyReport";
 import LoginForm from "./components/Auth/LoginForm";
 import SignUpForm from "./components/Auth/SignUpForm";
+import fcmService from "./services/fcmService";
 import "./components/Auth/Auth.css";
 
 // 인증이 필요한 컴포넌트
@@ -75,6 +76,19 @@ function AuthPage() {
 function AppContent() {
   const { user, signOut } = useAuth();
   const [showUserInfo, setShowUserInfo] = useState(false);
+
+  // FCM 초기화는 AuthContext에서만 수행 (중복 방지)
+  // useEffect(() => {
+  //   if (user) {
+  //     fcmService.initialize().then((success) => {
+  //       if (success) {
+  //         console.log('[App] FCM 초기화 완료');
+  //       } else {
+  //         console.warn('[App] FCM 초기화 실패');
+  //       }
+  //     });
+  //   }
+  // }, [user]);
 
   // 사용자 정보 팝업을 3초 후에 숨기기
   useEffect(() => {

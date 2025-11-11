@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">shedAI</string>
+    <string name="title_activity_main">shedAI</string>
+    <string name="package_name">com.shedai.app</string>
+    <string name="custom_url_scheme">com.shedai.app</string>
+</resources>
