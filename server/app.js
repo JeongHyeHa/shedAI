@@ -36,7 +36,7 @@ const app = express();
 
 // 미들웨어 설정
 app.use(cors());
-app.use(timeout('210s')); // 응답 대기 허용 시간 (210초)
+app.use(timeout('330s')); // 응답 대기 허용 시간 (330초 = 5.5분) - 긴 프롬프트와 AI 응답 생성 시간을 고려
 app.use(express.json({ limit: '25mb' }));
 
 // 대화 세션 저장소 (메모리)

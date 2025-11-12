@@ -9,7 +9,7 @@ class AIService {
         this.openaiApiKey = process.env.OPENAI_API_KEY;
         this.httpsAgent = new https.Agent({ keepAlive: true });
         this.axiosOpts = {
-            timeout: 180000,                      // 180초
+            timeout: 300000,                      // 300초 (5분) - 긴 프롬프트와 스트리밍 응답을 고려
             maxBodyLength: Infinity,
             maxContentLength: Infinity,
             httpsAgent: this.httpsAgent,

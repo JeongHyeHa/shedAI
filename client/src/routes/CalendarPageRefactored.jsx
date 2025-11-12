@@ -970,7 +970,7 @@ function CalendarPage() {
     let controller;
     try {
       controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), 60000);
+      timeoutId = setTimeout(() => controller.abort(), 360000); // 360초 (6분) - 서버 타임아웃(5.5분)보다 여유있게 설정
       
       // 공통 메시지 빌더 사용
       const messagesForAPI = buildScheduleMessages({
