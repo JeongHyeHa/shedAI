@@ -4,23 +4,22 @@
       "day": 3,
       "weekday": "수요일",
       "activities": [
-        {
-          "start": "01:00",
-          "end": "06:00",
+                 "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -29,22 +28,22 @@
       "weekday": "목요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -53,22 +52,22 @@
       "weekday": "금요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -77,10 +76,10 @@
       "weekday": "토요일",
       "activities": [
         {
-          "start": "21:00",
-          "end": "07:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "21:00",
+          "end": "07:00"
         }
       ]
     },
@@ -89,10 +88,10 @@
       "weekday": "일요일",
       "activities": [
         {
-          "start": "21:00",
-          "end": "07:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "21:00",
+          "end": "07:00"
         }
       ]
     },
@@ -101,22 +100,22 @@
       "weekday": "월요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -125,22 +124,22 @@
       "weekday": "화요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -149,22 +148,22 @@
       "weekday": "수요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -173,22 +172,22 @@
       "weekday": "목요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -197,22 +196,22 @@
       "weekday": "금요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -221,10 +220,10 @@
       "weekday": "토요일",
       "activities": [
         {
-          "start": "21:00",
-          "end": "07:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "21:00",
+          "end": "07:00"
         }
       ]
     },
@@ -233,10 +232,10 @@
       "weekday": "일요일",
       "activities": [
         {
-          "start": "21:00",
-          "end": "07:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "21:00",
+          "end": "07:00"
         }
       ]
     },
@@ -245,22 +244,22 @@
       "weekday": "월요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -269,22 +268,22 @@
       "weekday": "화요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     },
@@ -293,28 +292,28 @@
       "weekday": "수요일",
       "activities": [
         {
-          "start": "01:00",
-          "end": "06:00",
+          "type": "lifestyle",
           "title": "취침",
-          "type": "lifestyle"
+          "start": "01:00",
+          "end": "06:00"
         },
         {
-          "start": "08:00",
-          "end": "17:00",
+          "type": "lifestyle",
           "title": "회사",
-          "type": "lifestyle"
+          "start": "08:00",
+          "end": "17:00"
         },
         {
-          "start": "17:00",
-          "end": "19:00",
+          "type": "task",
           "title": "오픽 시험 준비",
-          "type": "task"
+          "start": "17:00",
+          "end": "19:00"
         }
       ]
     }
   ],
   "notes": [
-    "기존 일정에 따라 모든 활동을 유지하며, 오픽 시험 준비를 매일 배치했습니다.",
-    "회사 업무 후 1시간의 휴식 시간을 반영하여 작업을 조정했습니다."
+    "기존 스케줄을 유지하며, 오픽 시험 준비를 매일 배치했습니다.",
+    "생활 패턴과 중복되지 않도록 빈 시간대를 활용하여 분산 구성했습니다."
   ]
 }

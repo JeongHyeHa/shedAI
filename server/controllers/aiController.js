@@ -369,11 +369,30 @@ class AIController {
             inProgress.delete(dedupeKey);
         }
         } catch (error) {
+            const statusCode = error.statusCode || error.response?.status || 500;
+            const openAIError = error.openAIError || error.response?.data?.error;
+            
             console.error('=== 스케줄 생성 컨트롤러 에러 ===');
             console.error('에러 타입:', error.constructor.name);
             console.error('에러 메시지:', error.message);
+            console.error('HTTP 상태코드:', statusCode);
+            if (openAIError) {
+                console.error('OpenAI 에러 타입:', openAIError.type);
+                console.error('OpenAI 에러 코드:', openAIError.code);
+                console.error('OpenAI 에러 메시지:', openAIError.message);
+            }
             console.error('에러 스택:', error.stack);
             console.error('요청 본문:', JSON.stringify(req.body, null, 2));
+            
+            // 429, 5xx는 상태코드 그대로 전달 (재시도 가능)
+            if ([429, 500, 502, 503, 504].includes(statusCode)) {
+                return res.status(statusCode).json({
+                    ok: false,
+                    code: statusCode,
+                    message: openAIError?.message || error.message || '스케줄 생성에 실패했습니다.',
+                    error: openAIError
+                });
+            }
             
             // API 키 관련 에러인지 확인
             if (String(error.message).includes('OPENAI_API_KEY') || String(error.message).includes('API key')) {
@@ -401,7 +420,11 @@ class AIController {
             } catch (fallbackError) {
                 console.error('로컬 폴백 실패:', fallbackError);
                 console.error('폴백 에러 스택:', fallbackError.stack);
-                return res.status(500).json({ ok: false, message: '스케줄 생성에 실패했습니다.' });
+                return res.status(statusCode).json({
+                    ok: false,
+                    code: statusCode,
+                    message: error.message || '스케줄 생성에 실패했습니다.'
+                });
             } finally {
                 inProgress.delete(dedupeKey);
             }

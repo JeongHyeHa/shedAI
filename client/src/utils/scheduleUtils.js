@@ -314,6 +314,7 @@ export function resetToStartOfDay(date, isEnd = false) {
   }
 
   
+  // ⚠️ 사용 안 함: 서버의 aiService.js가 자체 시스템 프롬프트를 생성하므로 이 함수는 무시됩니다.
   // GPT 프롬프트: 새 시간표 생성용
 export function buildShedAIPrompt(lifestyleText, taskText, nowLike, existingTasksForAI = []) {
   const today = resolveNow(nowLike);
@@ -637,6 +638,7 @@ export function buildShedAIPrompt(lifestyleText, taskText, nowLike, existingTask
     return `${prefix}\n[생활 패턴]\n${lifestyleText}\n\n[할 일 목록]\n${taskText}`;
   }
   
+  // ⚠️ 사용 안 함: 서버의 aiService.js가 자체 시스템 프롬프트를 생성하므로 이 함수는 무시됩니다.
   // GPT 프롬프트: 기존 시간표 수정용
   export function buildFeedbackPrompt(lifestyleText, taskText, previousSchedule, existingTasksForAI = []) {
     const today = new Date();
