@@ -427,14 +427,6 @@ class FirestoreService {
   // 스케줄 세션 저장
   async saveScheduleSession(userId, sessionData) {
     try {
-      console.log('[Firestore] saveScheduleSession 호출:', {
-        userId,
-        hasScheduleData: !!sessionData?.scheduleData,
-        scheduleDataLength: Array.isArray(sessionData?.scheduleData) ? sessionData.scheduleData.length : 'not array',
-        hasSchedule: sessionData?.hasSchedule,
-        isActive: sessionData?.isActive
-      });
-      
       const sessionsRef = collection(this.db, 'users', userId, 'scheduleSessions');
       
       // 실제 스케줄 존재 여부 판단 (배열/객체 모든 형태 지원)
@@ -449,19 +441,8 @@ class FirestoreService {
       };
       const willActivate = hasRealSchedule(sessionData?.scheduleData);
       
-      console.log('[Firestore] 스케줄 검증:', {
-        willActivate,
-        hasScheduleFlag: sessionData?.hasSchedule,
-        scheduleDataType: Array.isArray(sessionData?.scheduleData) ? 'array' : typeof sessionData?.scheduleData
-      });
-      
       // 실제 스케줄이 없거나 hasSchedule이 false인 세션은 저장하지 않음 (최종 스케줄만 저장)
       if (!willActivate || sessionData?.hasSchedule === false) {
-        console.warn('[Firestore] 스케줄 저장 스킵:', {
-          reason: !willActivate ? '스케줄 데이터 없음' : 'hasSchedule이 false',
-          willActivate,
-          hasSchedule: sessionData?.hasSchedule
-        });
         return null;
       }
       
@@ -503,20 +484,7 @@ class FirestoreService {
         updatedAt: serverTimestamp()
       });
       
-      console.log('[Firestore] 스케줄 저장 시작:', {
-        scheduleDataLength: Array.isArray(cleanedData.scheduleData) ? cleanedData.scheduleData.length : 'not array',
-        hasSchedule: cleanedData.hasSchedule,
-        isActive: cleanedData.isActive,
-        createdAtMs: cleanedData.createdAtMs,
-        timestamp: new Date(cleanedData.createdAtMs).toISOString()
-      });
-      
       const docRef = await addDoc(sessionsRef, cleanedData);
-      
-      console.log('[Firestore] 스케줄 저장 완료:', {
-        sessionId: docRef.id,
-        timestamp: new Date().toISOString()
-      });
       
       return docRef.id;
     } catch (error) {

@@ -48,13 +48,6 @@ class ApiService {
       promptContext: opts.promptContext || lastContent, // 사용자 자연어 입력을 promptContext로 전달
       ...opts
     };
-    
-    // 디버깅: 생활패턴 원본 텍스트 확인
-    if (opts.lifestylePatternsOriginal) {
-      console.log('[API] 생활패턴 원본 텍스트 전달:', opts.lifestylePatternsOriginal);
-    } else {
-      console.warn('[API] lifestylePatternsOriginal이 없습니다!');
-    }
 
     
     // userId/sessionId가 있으면 쿼리와 헤더에도 함께 넣어 서버에서 안전하게 읽도록

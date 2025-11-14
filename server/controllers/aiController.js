@@ -59,9 +59,12 @@ class AIController {
     // 스케줄 생성
     async generateSchedule(req, res) {
         const { userId, sessionId } = req.body || {};
-        const dedupeKey = JSON.stringify({ userId, sessionId: sessionId || Date.now() });
+        // 중복 요청 차단: sessionId가 있으면 userId+sessionId로, 없으면 userId만으로 차단
+        const dedupeKey = sessionId 
+            ? JSON.stringify({ userId, sessionId })
+            : `user:${userId || 'anon'}`;
         
-        // 중복 요청 차단
+        // 중복 요청 차단 (sessionId 없을 때는 userId 기반으로 차단)
         if (inProgress.has(dedupeKey)) {
             console.warn('[AI Controller] 중복 요청 차단:', dedupeKey);
             return res.status(429).json({ ok: false, error: 'duplicate request' });
@@ -136,7 +139,6 @@ class AIController {
                 lifestylePatternsOriginal = lifestylePatternsOriginalFromClient
                     .map(p => typeof p === 'string' ? p.trim() : null)
                     .filter(p => p && p.length > 0);
-                console.log('[AI Controller] 클라이언트에서 전달된 생활패턴 원본:', lifestylePatternsOriginal);
             }
             
             // 2) lifestylePatterns 배열에서 원본 텍스트 추출 시도
@@ -233,24 +235,9 @@ class AIController {
                   dl = null;
                 }
                 
-                // 디버깅: 첫 번째 할 일의 원본 데이터 확인
-                if (existingTasks.length > 0 && existingTasks[0] === t) {
-                    console.log('[AI Controller] 클라이언트에서 받은 첫 번째 할 일 원본:', {
-                        title: t?.title,
-                        deadline: t?.deadline,
-                        deadlineTime: t?.deadlineTime,
-                        importance: t?.importance,
-                        difficulty: t?.difficulty,
-                        type: t?.type
-                    });
-                    console.log('[AI Controller] 정규화 후:', {
-                        title: t?.title || '제목없음',
-                        deadline: dl || null,
-                        deadlineTime: t?.deadlineTime || null
-                    });
-                }
                 
                 return {
+                    id: t?.id || null, // id 필드 유지 (마감일 캡핑 시 매칭용)
                     title: t?.title || '제목없음',
                     deadline: dl || null,
                     deadlineTime: t?.deadlineTime || null,
@@ -264,9 +251,12 @@ class AIController {
                     ...(Number.isFinite(t?.relativeDay) ? { relativeDay: t.relativeDay } : {})
                 };
             };
-            existingTasks = existingTasks.map(normFromClient);
-                        
-            if (existingTasks.length === 0 && userId) {
+            // 클라이언트에서 받은 할 일 정규화
+            const clientTasks = existingTasks.map(normFromClient);
+            
+            // DB에서도 할 일 가져와서 병합 (클라이언트에서 일부만 보내도 DB 할 일 포함)
+            let dbTasks = [];
+            if (userId) {
                 try {
                     const firestoreService = require('../services/firestoreService');
                     const [sessionTasks, globalTasks] = await Promise.all([
@@ -282,6 +272,7 @@ class AIController {
                         if (typeof dl === 'string' && dl.includes('T')) dl = dl.split('T')[0];
 
                         return {
+                            id: t?.id || null, // id 필드 유지 (마감일 캡핑 시 매칭용)
                             title: t?.title || '제목없음',
                             deadline: dl || null,
                             deadlineTime: t?.deadlineTime || null,
@@ -297,20 +288,27 @@ class AIController {
                         };
                     };
 
-                    // 세션+글로벌을 합치되, 제목/마감일/중요도/난이도 키로 중복 제거
-                    const merged = [...(sessionTasks||[]), ...(globalTasks||[])].map(normalize);
-                    const dedupKey = (x)=>`${x.title}||${x.deadline}||${x.importance}||${x.difficulty}`;
-                    const seen = new Set();
-                    existingTasks = merged.filter(t => {
-                        const k = dedupKey(t);
-                        if (seen.has(k)) return false;
-                        seen.add(k);
-                        return true;
-                    });
+                    // 세션+글로벌을 합치기
+                    dbTasks = [...(sessionTasks||[]), ...(globalTasks||[])].map(normalize);
                 } catch (error) {
                     console.warn('할 일 병합 조회 실패:', error.message);
                 }
             }
+            
+            // 클라이언트 할 일 + DB 할 일 병합 및 중복 제거
+            const allTasks = [...clientTasks, ...dbTasks];
+            const dedupKey = (x) => {
+                // id가 있으면 id로, 없으면 제목/마감일/중요도/난이도로 중복 판단
+                if (x.id) return `id:${x.id}`;
+                return `${x.title}||${x.deadline}||${x.importance}||${x.difficulty}`;
+            };
+            const seen = new Set();
+            existingTasks = allTasks.filter(t => {
+                const k = dedupKey(t);
+                if (seen.has(k)) return false;
+                seen.add(k);
+                return true;
+            });
 
             // 피드백 조회 및 반영
             let userFeedback = '';
@@ -318,11 +316,11 @@ class AIController {
             if (userId) {
                 try {
                     const firestoreService = require('../services/firestoreService');
-                    // 피드백 제한 없이 모두 가져오기 (기본 limit: 50, 필요시 더 늘릴 수 있음)
-                    const feedbacks = await firestoreService.getFeedbacks(userId, { type: 'feedback', limit: 100 });
+                    // 피드백 제한 없이 모두 가져오기 (type 필터 제거하여 모든 피드백 포함)
+                    const feedbacks = await firestoreService.getFeedbacks(userId, { limit: 100 });
                     if (Array.isArray(feedbacks) && feedbacks.length > 0) {
                         feedbackMessages = feedbacks
-                            .map(f => f.userMessage || f.feedbackText || '')
+                            .map(f => f.userMessage || f.feedbackText || f.feedback || '')
                             .filter(Boolean);
                         
                         if (feedbackMessages.length > 0) {
@@ -355,8 +353,20 @@ class AIController {
             );
             
              try {
-                   const today = nowOverride ? new Date(nowOverride) : new Date();
-                   const deadlineMap = buildDeadlineDayMap(existingTasks, today);
+                   // 마감일 캡핑 기준 날짜: anchorDay가 있으면 그 기준으로, 없으면 nowOverride 또는 오늘
+                   const baseDate = anchorDay ? (() => {
+                       // anchorDay는 상대 day (1~7)이므로, 실제 날짜로 변환 필요
+                       // aiService에서 anchorDay를 기준으로 day를 계산하므로, 여기서도 동일한 기준 사용
+                       const today = nowOverride ? new Date(nowOverride) : new Date();
+                       const todayDayOfWeek = today.getDay(); // 0=일, 1=월, ..., 6=토
+                       const todayRelDay = todayDayOfWeek === 0 ? 7 : todayDayOfWeek; // 1=월, ..., 7=일
+                       const diff = anchorDay - todayRelDay;
+                       const base = new Date(today);
+                       base.setDate(base.getDate() + diff);
+                       return base;
+                   })() : (nowOverride ? new Date(nowOverride) : new Date());
+                   
+                   const deadlineMap = buildDeadlineDayMap(existingTasks, baseDate);
                    if (Array.isArray(result?.schedule)) {
                      result.schedule = capScheduleByDeadlines(result.schedule, deadlineMap);
                    }
@@ -589,7 +599,7 @@ class AIController {
     // 대화형 피드백 분석
     async analyzeConversationalFeedback(req, res) {
         try {
-            const { message, sessionId } = req.body;
+            const { message, sessionId, userId } = req.body;
             
             if (!message) {
                 return res.status(400).json({ 
@@ -603,6 +613,32 @@ class AIController {
                 ? message
                 : [{ userMessage: String(message), aiResponse: '', sessionId }];
             const analysis = await aiService.analyzeConversationalFeedback(payload);
+            
+            // 분석 결과를 피드백으로 저장하여 스케줄 생성 시 반영되도록
+            if (userId && analysis) {
+                try {
+                    const firestoreService = require('../services/firestoreService');
+                    // 분석 결과에서 요약 또는 추천사항을 피드백으로 저장
+                    const feedbackText = analysis.analysis || 
+                                        (analysis.recommendations && analysis.recommendations.length > 0 
+                                            ? analysis.recommendations.map(r => r.description || r.title).join('\n')
+                                            : JSON.stringify(analysis));
+                    
+                    await firestoreService.saveFeedback(
+                        userId,
+                        feedbackText,
+                        null,
+                        { 
+                            type: 'feedback', 
+                            source: 'conversation', 
+                            sessionId: sessionId || null 
+                        }
+                    );
+                    console.log('[AI Controller] 대화형 피드백 분석 결과를 피드백으로 저장 완료');
+                } catch (saveError) {
+                    console.warn('[AI Controller] 대화형 피드백 저장 실패 (분석 결과는 반환됨):', saveError.message);
+                }
+            }
             
             res.json({ 
                 ok: true, 
@@ -634,9 +670,9 @@ class AIController {
 
             const firestoreService = require('../services/firestoreService');
             
-            // 메타데이터 구성
+            // 메타데이터 구성 (type 기본값을 'feedback'으로 변경하여 스케줄 생성 시 반영되도록)
             const metadata = {
-                type: type || 'general',
+                type: type || 'feedback',
                 scheduleId: scheduleId || null,
                 sessionId: sessionId || null,
                 userAgent: req.headers['user-agent'] || null,

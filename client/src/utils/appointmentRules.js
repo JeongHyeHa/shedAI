@@ -1,6 +1,6 @@
 // 일정 명령 감지 및 제목 정제 유틸
 
-export const APPT_END_RE = /(일정\s*추가(?:해줘|해|해주세요|해주라)?[.!]?)\s*$/;
+export const APPT_END_RE = /(일정\s*추가(?:해줘|해|해주세요|해주라)?[.!]?)\s*$/m;
 
 export function endsWithAppointmentCommand(text = '') {
   return APPT_END_RE.test(String(text).trim());

@@ -29,12 +29,10 @@ class FCMService {
   async initialize() {
     // 이미 초기화되었거나 초기화 중이면 건너뛰기
     if (this.isInitialized) {
-      console.log('[FCM] 이미 초기화되었습니다.');
       return true;
     }
     
     if (this.initializing) {
-      console.log('[FCM] 초기화가 진행 중입니다. 대기...');
       // 초기화 완료까지 대기
       while (this.initializing) {
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -63,7 +61,6 @@ class FCMService {
         // 모바일 플랫폼: Android/iOS에서 전달된 토큰 리스닝
         // 이벤트 리스너를 먼저 등록 (토큰이 먼저 도착할 수 있음)
         this.setupMobileTokenListener();
-        console.log('[FCM] 모바일 토큰 리스너 등록 완료, 플랫폼:', platform);
         return true;
       }
 
@@ -92,7 +89,6 @@ class FCMService {
 
       // Service Worker 등록 (Firebase 설정 전달)
       const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
-      console.log('[FCM] Service Worker 등록 완료:', registration.scope);
       
       // Service Worker가 활성화될 때까지 대기
       await navigator.serviceWorker.ready;
@@ -145,7 +141,6 @@ class FCMService {
     this.mobileTokenListener = async (event) => {
       try {
         const { token, platform } = event.detail;
-        console.log('[FCM] 모바일에서 토큰 수신:', token, platform);
         
         if (!token) {
           console.error('[FCM] 토큰이 없습니다.');
@@ -157,7 +152,6 @@ class FCMService {
         
         // Firestore에 저장
         await this.saveTokenToFirestore(token);
-        console.log('[FCM] 모바일 토큰 Firestore 저장 완료');
         
         // 저장 후 무효한 토큰 정리 (선택사항, 백그라운드에서 실행)
         // 현재 사용자 ID 가져오기
@@ -180,11 +174,9 @@ class FCMService {
     
     // 리스너를 먼저 등록 (토큰이 먼저 도착할 수 있으므로)
     window.addEventListener('fcm-token-received', this.mobileTokenListener);
-    console.log('[FCM] 모바일 토큰 리스너 등록됨');
     
     // 이미 전달된 토큰이 있을 수 있으므로 window 객체에서 확인
     if (window.__pendingFCMToken) {
-      console.log('[FCM] 대기 중인 토큰 발견, 즉시 처리...');
       const pendingEvent = {
         detail: window.__pendingFCMToken
       };
@@ -195,7 +187,6 @@ class FCMService {
     // Android에서 전달된 메시지 리스닝
     window.addEventListener('fcm-message-received', (event) => {
       const payload = event.detail;
-      console.log('[FCM] 모바일에서 메시지 수신:', payload);
       
       // 커스텀 이벤트 발생 (컴포넌트에서 사용 가능)
       window.dispatchEvent(new CustomEvent('fcm-message', { detail: payload }));
@@ -235,8 +226,6 @@ class FCMService {
         return null;
       }
 
-      console.log('[FCM] FCM 토큰:', this.token);
-
       // 토큰을 Firestore에 저장
       await this.saveTokenToFirestore(this.token);
 
@@ -253,8 +242,6 @@ class FCMService {
    */
   async saveTokenToFirestore(token, userId = null) {
     try {
-      console.log('[FCM] saveTokenToFirestore 호출, token:', token ? token.substring(0, 20) + '...' : 'null', 'userId:', userId);
-      
       // userId가 없으면 현재 로그인한 사용자 가져오기
       if (!userId) {
         const { getAuth } = await import('firebase/auth');
@@ -267,7 +254,6 @@ class FCMService {
           return;
         }
         userId = currentUser.uid;
-        console.log('[FCM] 현재 사용자 ID:', userId);
       }
       
       // pendingToken이 있으면 사용
@@ -306,15 +292,7 @@ class FCMService {
         updatedAt: serverTimestamp(),
       };
       
-      console.log('[FCM] Firestore에 저장할 데이터:', {
-        ...deviceData,
-        fcmToken: token ? token.substring(0, 20) + '...' : null,
-        updatedAt: 'serverTimestamp()'
-      });
-      
       await setDoc(deviceRef, deviceData, { merge: true });
-
-      console.log('[FCM] 토큰이 Firestore에 저장되었습니다. 경로: users/' + userId + '/devices/' + this.deviceId);
     } catch (error) {
       console.error('[FCM] 토큰 저장 실패:', error);
     }
@@ -328,12 +306,10 @@ class FCMService {
     
     // 이미 리스너가 등록되어 있으면 건너뛰기
     if (this.foregroundMessageListener) {
-      console.log('[FCM] 포어그라운드 메시지 리스너가 이미 등록되어 있습니다.');
       return;
     }
 
     this.foregroundMessageListener = onMessage(this.messaging, (payload) => {
-      console.log('[FCM] 포어그라운드 메시지 수신:', payload);
 
       // 브라우저 알림 표시
       if (payload.notification) {
@@ -367,8 +343,6 @@ class FCMService {
       const deviceRef = doc(db, 'users', userId, 'devices', this.deviceId);
       // 문서를 완전히 삭제 (fcmToken: null로 설정하는 것보다 깔끔함)
       await deleteDoc(deviceRef);
-
-      console.log('[FCM] 토큰이 삭제되었습니다. deviceId:', this.deviceId);
       
       // deviceId 초기화
       this.deviceId = null;
@@ -388,7 +362,6 @@ class FCMService {
       const snapshot = await getDocs(q);
       
       if (snapshot.empty) {
-        console.log('[FCM] 정리할 무효 토큰이 없습니다.');
         return;
       }
       
@@ -398,7 +371,6 @@ class FCMService {
       });
       
       await Promise.all(deletePromises);
-      console.log(`[FCM] ${deletePromises.length}개의 무효 토큰이 정리되었습니다.`);
     } catch (error) {
       console.error('[FCM] 무효 토큰 정리 실패:', error);
     }

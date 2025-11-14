@@ -81,9 +81,9 @@ npm run server
 ## 📚 문서
 
 - [구현 계획](./IMPLEMENTATION_PLAN.md) - 전체 구현 계획 및 확장성 전략
-- [최종 개발 계획](./FINAL_DEVELOPMENT_PLAN.md) - 7일 단기 개발 계획
-- [주간 개발 계획](./WEEKLY_DEVELOPMENT_PLAN.md) - 주간 개발 계획
-- [FCM 설정 가이드](./FCM_SETUP_GUIDE.md) - FCM 알림 설정 가이드
+- [네트워크 기능 최우선 계획](./NETWORK_FEATURES_PRIORITY.md) - 네트워크 기능 최우선 구현 계획 (이번주 일요일 마감)
+- [맞춤형 검증 상세](./PERSONALIZATION_DETAIL.md) - 맞춤형 검증 대시보드 상세 설명
+- [대시보드 접근 방법](./DASHBOARD_ACCESS_PLAN.md) - 대시보드 접근 방법
 - [Android 다음 단계](./ANDROID_NEXT_STEPS.md) - Android 개발 가이드
 
 ## 🛠 기술 스택
