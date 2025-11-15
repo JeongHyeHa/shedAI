@@ -11,6 +11,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(null);
+  const [googleCalendarAccessToken, setGoogleCalendarAccessToken] = useState(null);
 
   useEffect(() => {
     // Firebase 초기화가 실패했다면 여기서 바로 잡힘
@@ -67,10 +68,47 @@ export const AuthProvider = ({ children }) => {
 
   const signInWithGoogle = async () => {
     try {
-      const user = await authService.signInWithGoogle();
-      return user;
+      const result = await authService.signInWithGoogle();
+      // accessToken이 있으면 저장
+      if (result.accessToken) {
+        setGoogleCalendarAccessToken(result.accessToken);
+        // localStorage에도 저장 (새로고침 대비)
+        try {
+          localStorage.setItem('shedAI:googleCalendarAccessToken', result.accessToken);
+        } catch (e) {
+          console.warn('[AuthContext] localStorage 저장 실패:', e);
+        }
+      }
+      return result.user;
     } catch (error) {
       throw error;
+    }
+  };
+  
+  // Google Calendar accessToken 가져오기
+  const getGoogleCalendarAccessToken = async () => {
+    try {
+      // 먼저 localStorage에서 확인
+      const stored = localStorage.getItem('shedAI:googleCalendarAccessToken');
+      if (stored) {
+        setGoogleCalendarAccessToken(stored);
+        return stored;
+      }
+      
+      // 없으면 재인증으로 가져오기
+      const token = await authService.getGoogleCalendarAccessToken();
+      if (token) {
+        setGoogleCalendarAccessToken(token);
+        try {
+          localStorage.setItem('shedAI:googleCalendarAccessToken', token);
+        } catch (e) {
+          console.warn('[AuthContext] localStorage 저장 실패:', e);
+        }
+      }
+      return token;
+    } catch (error) {
+      console.error('[AuthContext] Google Calendar accessToken 가져오기 실패:', error);
+      return null;
     }
   };
 
@@ -86,14 +124,38 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // 로그인 시 localStorage에서 accessToken 복원
+  useEffect(() => {
+    if (user) {
+      try {
+        const stored = localStorage.getItem('shedAI:googleCalendarAccessToken');
+        if (stored) {
+          setGoogleCalendarAccessToken(stored);
+        }
+      } catch (e) {
+        console.warn('[AuthContext] localStorage 읽기 실패:', e);
+      }
+    } else {
+      // 로그아웃 시 토큰 제거
+      setGoogleCalendarAccessToken(null);
+      try {
+        localStorage.removeItem('shedAI:googleCalendarAccessToken');
+      } catch (e) {
+        console.warn('[AuthContext] localStorage 삭제 실패:', e);
+      }
+    }
+  }, [user]);
+
   const value = {
     user,
     loading,
     authError,
+    googleCalendarAccessToken,
     signUp,
     signIn,
     signInWithGoogle,
-    signOut
+    signOut,
+    getGoogleCalendarAccessToken
   };
 
   return (

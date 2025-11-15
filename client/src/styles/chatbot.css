@@ -253,6 +253,40 @@
   background-color: #002266;
 }
 
+/* Google Calendar로 보내기 버튼 */
+.export-google-calendar-button {
+  position: fixed;
+  bottom: 150px;
+  left: 20px;
+  background: linear-gradient(135deg, #4285f4 0%, #34a853 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 20px;
+  cursor: pointer;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(66, 133, 244, 0.3);
+  width: 140px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.export-google-calendar-button:hover {
+  background: linear-gradient(135deg, #357ae8 0%, #2d8f47 100%);
+  box-shadow: 0 6px 16px rgba(66, 133, 244, 0.4);
+  transform: translateY(-2px);
+}
+
+.export-google-calendar-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(66, 133, 244, 0.3);
+}
+
 /* 챗봇 닫기 버튼 */
 .chatbot-close-btn {
   background-color: #f2f2f2 !important;

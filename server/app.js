@@ -32,10 +32,17 @@ if (!admin.apps.length) {
 }
 
 const aiRoutes = require('./routes/aiRoutes');
+const googleCalendarRoutes = require('./routes/googleCalendarRoutes');
 const app = express();
 
 // 미들웨어 설정
 app.use(cors());
+// Cross-Origin-Opener-Policy 헤더 설정 (Firebase Auth popup 오류 해결)
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  next();
+});
 app.use(timeout('330s')); // 응답 대기 허용 시간 (330초 = 5.5분) - 긴 프롬프트와 AI 응답 생성 시간을 고려
 app.use(express.json({ limit: '25mb' }));
 
@@ -44,6 +51,7 @@ app.locals.conversationSessions = {};
 
 // 라우트 설정
 app.use('/api', aiRoutes);
+app.use('/api/google-calendar', googleCalendarRoutes);
 
 // 헬스 체크 (진단용) - 민감정보 노출 없음
 app.get('/api/health', (req, res) => {

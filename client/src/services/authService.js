@@ -19,7 +19,7 @@ class AuthService {
     }
     this.auth = auth;
     this.googleProvider = new GoogleAuthProvider();
-    // Google Calendar 접근 권한 추가
+    // Google Calendar 연동을 위한 scope 추가
     this.googleProvider.addScope('https://www.googleapis.com/auth/calendar');
   }
 
@@ -102,24 +102,89 @@ class AuthService {
   // Google 로그인
   async signInWithGoogle() {
     try {
-      const result = await signInWithPopup(this.auth, this.googleProvider);
-      
-      // Firestore에 사용자 프로필 생성 (없는 경우)
-      const isNewUser = await this.createUserProfileIfNotExists(result.user.uid, {
-        email: result.user.email,
-        displayName: result.user.displayName,
-        createdAt: serverTimestamp(),
-        lastLoginAt: serverTimestamp()
-      });
-      
-      // 새 사용자이면 로컬스토리지 초기화
-      if (isNewUser) {
-        this.clearLocalStorage();
+      // Cross-Origin-Opener-Policy 오류를 무시하기 위한 설정
+      const originalError = console.error;
+      const suppressedErrors = [];
+      console.error = (...args) => {
+        const errorMsg = args.join(' ');
+        // COOP 관련 오류는 무시
+        if (errorMsg.includes('Cross-Origin-Opener-Policy') || 
+            errorMsg.includes('window.closed') ||
+            errorMsg.includes('window.close')) {
+          suppressedErrors.push(errorMsg);
+          return;
+        }
+        originalError.apply(console, args);
+      };
+
+      try {
+        const result = await signInWithPopup(this.auth, this.googleProvider);
+        
+        // Google Calendar accessToken 추출
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        const accessToken = credential?.accessToken;
+        
+        // Firestore에 사용자 프로필 생성 (없는 경우)
+        const isNewUser = await this.createUserProfileIfNotExists(result.user.uid, {
+          email: result.user.email,
+          displayName: result.user.displayName,
+          createdAt: serverTimestamp(),
+          lastLoginAt: serverTimestamp(),
+          ...(accessToken && { googleCalendarAccessToken: accessToken }) // accessToken 저장 (선택적)
+        });
+        
+        // 새 사용자이면 로컬스토리지 초기화
+        if (isNewUser) {
+          this.clearLocalStorage();
+        }
+        
+        // accessToken을 반환하여 Context에서 사용할 수 있도록 함
+        return { 
+          user: result.user, 
+          accessToken 
+        };
+      } finally {
+        console.error = originalError;
       }
-      
-      return result.user;
     } catch (error) {
       throw new Error(this.getErrorMessage(error?.code));
+    }
+  }
+  
+  // Google Calendar accessToken 가져오기 (재인증 필요 시)
+  async getGoogleCalendarAccessToken() {
+    try {
+      const user = this.auth.currentUser;
+      if (!user) return null;
+      
+      // 현재 사용자의 Google credential에서 accessToken 가져오기
+      const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/calendar');
+      
+      // Cross-Origin-Opener-Policy 오류를 무시하기 위한 설정
+      const originalError = console.error;
+      console.error = (...args) => {
+        const errorMsg = args.join(' ');
+        // COOP 관련 오류는 무시
+        if (errorMsg.includes('Cross-Origin-Opener-Policy') || 
+            errorMsg.includes('window.closed') ||
+            errorMsg.includes('window.close')) {
+          return;
+        }
+        originalError.apply(console, args);
+      };
+
+      try {
+        // 재인증이 필요한 경우를 대비해 credential을 다시 가져옴
+        const result = await signInWithPopup(this.auth, provider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        return credential?.accessToken || null;
+      } finally {
+        console.error = originalError;
+      }
+    } catch (error) {
+      console.error('[AuthService] Google Calendar accessToken 가져오기 실패:', error);
+      return null;
     }
   }
 

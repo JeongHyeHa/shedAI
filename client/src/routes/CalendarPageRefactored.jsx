@@ -191,7 +191,7 @@ function CalendarPage() {
   const previousViewRef = useRef(null); // 이전 뷰를 기억하기 위한 ref
   const today = resetToStartOfDay(new Date());
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, googleCalendarAccessToken, getGoogleCalendarAccessToken } = useAuth();
   const { 
     allEvents, 
     setAllEvents, 
@@ -1569,6 +1569,91 @@ function CalendarPage() {
     }
   }, [user?.uid, convertEventsToSchedule, saveScheduleSessionUnified, setLastSchedule, updateSchedule]);
 
+  // Google Calendar로 내보내기 핸들러
+  const handleExportToGoogleCalendar = useCallback(async () => {
+    if (!user?.uid) {
+      alert('로그인이 필요합니다.');
+      return;
+    }
+
+    try {
+      // 1) accessToken 확인 및 가져오기
+      let accessToken = googleCalendarAccessToken;
+      if (!accessToken) {
+        accessToken = await getGoogleCalendarAccessToken();
+      }
+
+      if (!accessToken) {
+        alert('Google Calendar 연동을 위해 Google 계정으로 다시 로그인해주세요.');
+        return;
+      }
+
+      // 2) 현재 캘린더 이벤트 가져오기
+      const calendarApi = calendarRef.current?.getApi();
+      if (!calendarApi) {
+        alert('캘린더를 불러올 수 없습니다.');
+        return;
+      }
+
+      const events = calendarApi.getEvents();
+      if (!events || events.length === 0) {
+        alert('내보낼 일정이 없습니다.');
+        return;
+      }
+
+      // 3) FullCalendar 이벤트를 API 형식으로 변환
+      const payloadEvents = events.map(e => ({
+        title: e.title,
+        start: e.start ? new Date(e.start).toISOString() : null,
+        end: e.end ? new Date(e.end).toISOString() : null,
+        extendedProps: e.extendedProps || {},
+      })).filter(e => e.start && e.end); // 시작/종료 시간이 있는 이벤트만
+
+      if (payloadEvents.length === 0) {
+        alert('내보낼 수 있는 일정이 없습니다. (시작/종료 시간이 필요합니다)');
+        return;
+      }
+
+      // 4) 로딩 메시지
+      addAIMessage(`Google Calendar로 ${payloadEvents.length}개의 일정을 보내는 중...`);
+
+      // 5) 백엔드 API 호출
+      const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:3001';
+      const res = await fetch(`${API_BASE_URL}/api/google-calendar/sync-events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accessToken,
+          scheduleEvents: payloadEvents,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Google Calendar 동기화 실패');
+      }
+
+      // 6) 성공 메시지
+      const successMessage = `✅ Google Calendar에 ${data.createdCount}개의 일정이 추가되었습니다!`;
+      addAIMessage(successMessage);
+      alert(successMessage);
+
+      // 7) Google Calendar 링크가 있으면 제공
+      if (data.created && data.created.length > 0 && data.created[0].htmlLink) {
+        const openCalendar = window.confirm('Google Calendar에서 확인하시겠습니까?');
+        if (openCalendar) {
+          window.open(data.created[0].htmlLink, '_blank');
+        }
+      }
+    } catch (error) {
+      console.error('[handleExportToGoogleCalendar] 오류:', error);
+      const errorMessage = error.message || 'Google Calendar 연동 중 오류가 발생했습니다.';
+      addAIMessage(`❌ ${errorMessage}`);
+      alert(errorMessage);
+    }
+  }, [user?.uid, googleCalendarAccessToken, getGoogleCalendarAccessToken, addAIMessage]);
+
   return (
     <div className="calendar-page">
       <CalendarHeader isLoading={isLoading} loadingProgress={loadingProgress} />
@@ -1614,6 +1699,7 @@ function CalendarPage() {
         onAdviceClick={fetchAIAdvice}
         onReportClick={() => navigate('/report')}
         onResetClick={handleResetCalendar}
+        onExportToGoogleCalendar={handleExportToGoogleCalendar}
       />
 
       <Modals
