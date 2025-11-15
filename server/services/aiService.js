@@ -98,12 +98,22 @@ class AIService {
                 scheduleLength = 14;
             } else if (hasSpecificDate) {
                 const extractedDays = extractAllowedDays(messages);
-                taskDays = extractedDays;
-                lifestyleDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
-                scheduleLength = 14;
+                // extractAllowedDays는 이미 baseRelDay 기준 상대 day 값 반환
+                // 따라서 그대로 사용하되, 범위 계산은 일관되게 처리
+                if (extractedDays.length > 0) {
+                    const minDay = Math.min(...extractedDays);
+                    const maxDay = Math.max(...extractedDays);
+                    taskDays = Array.from({ length: maxDay - minDay + 1 }, (_, i) => minDay + i);
+                    scheduleLength = Math.max(14, maxDay - baseRelDay + 1); // 최소 14일 유지
+                } else {
+                    taskDays = Array.from({ length: 14 }, (_, i) => baseRelDay + i);
+                    scheduleLength = 14;
+                }
+                lifestyleDays = Array.from({ length: scheduleLength }, (_, i) => baseRelDay + i);
             } else if (hasDeadline) {
                 const extractedDays = extractAllowedDays(messages);
                 if (extractedDays.length > 0) {
+                    // extractAllowedDays는 baseRelDay 기준 상대 day 값 반환
                     const maxDay = Math.max(...extractedDays);
                     taskDays = Array.from({ length: maxDay - baseRelDay + 1 }, (_, i) => baseRelDay + i);
                     scheduleLength = maxDay - baseRelDay + 1;
@@ -167,13 +177,6 @@ class AIService {
             let allowedDays = [...new Set([...taskDays, ...lifestyleDays])].sort((a,b)=>a-b);
             const anchorDay = opts.anchorDay ?? (allowedDays.length ? allowedDays[0] : (dayOfWeek===0?7:dayOfWeek));
             
-            // 날짜 및 사용자 입력 분석 완료
-            
-            // 고정 일정 분리 기능 제거 - AI가 모든 작업을 자유롭게 배치하도록 함
-            
-            // tasks를 새 스키마로 변환 (taskId 추가) - 모든 task 포함 + 전략 주입
-            const tasksById = {};
-            
             // 마감일까지 일수 계산 헬퍼
             const daysUntil = (deadline) => {
                 if (!deadline) return 999;
@@ -219,7 +222,6 @@ class AIService {
             
                 const tasksForAI = (existingTasks || []).map((task, idx) => {
                 const taskId = task.id || `t${idx + 1}`;
-                tasksById[taskId] = task;
                 
                 // 전략 계산: 중요/난이도 高 + 임박 마감 + 집중 작업 여부
                 const daysUntilDeadline = daysUntil(task.deadline);
@@ -347,7 +349,8 @@ class AIService {
                 difficulty: t.difficulty,
                 min_block_minutes: t.min_block_minutes,
                     type: t.type || 'task', // type 정보 추가 (appointment인 경우 특별 처리)
-                    time_preference: t.timePreference || 'any' // 오전/오후 선호도
+                    time_preference: t.timePreference || 'any', // 오전/오후 선호도
+                    require_daily: t.require_daily || false // 마감일까지 매일 배치 필요 여부
                 };
                 
                 // deadline_time은 type이 "appointment"인 경우에만 포함
@@ -414,7 +417,6 @@ class AIService {
                 noWorkDuringLunch: false
             };
             let feedbackSection = '';
-            let detectedPatterns = [];
             if (opts.userFeedback && opts.userFeedback.trim()) {
                 const feedbackText = opts.userFeedback.trim();
                 
@@ -426,7 +428,6 @@ class AIService {
                 const hasMorningPreference = morningKeywords.some(keyword => feedbackLower.includes(keyword));
                 if (hasMorningPreference) {
                     feedbackConstraints.preferMorning = true;
-                    detectedPatterns.push('아침 시간대 선호도');
                     feedbackSection += `\n- 오전 시간대(06:00~12:00) 우선 배치`;
                 }
                 
@@ -435,7 +436,6 @@ class AIService {
                 const hasEveningPreference = eveningKeywords.some(keyword => feedbackLower.includes(keyword));
                 if (hasEveningPreference) {
                     feedbackConstraints.preferEvening = true;
-                    detectedPatterns.push('저녁 시간대 선호도');
                     feedbackSection += `\n- 저녁 시간대(18:00~23:00) 우선 배치`;
                 }
                 
@@ -452,11 +452,9 @@ class AIService {
                     
                     if (weekendDeny) {
                         feedbackConstraints.prohibitWeekendTasks = true;
-                        detectedPatterns.push('주말 업무 금지');
                         feedbackSection += `\n- 주말(day:6,7)에 task 배치 금지`;
                     } else {
                         feedbackConstraints.allowWeekendTasks = true;
-                        detectedPatterns.push('주말 업무 허용');
                         feedbackSection += `\n- 주말(day:6,7)에도 task 배치`;
                     }
                 }
@@ -490,7 +488,6 @@ class AIService {
                 
                 if (hasCompanyEnd && hasTimeRestriction && (hasWorkDenial || hasWorkKeyword)) {
                     feedbackConstraints.noWorkWithin1hAfterWork = true;
-                    detectedPatterns.push('회사 끝나고 작업 금지');
                     feedbackSection += `\n- 퇴근 후 1시간 이내 task 배치 금지`;
                 }
                 
@@ -499,7 +496,6 @@ class AIService {
                     (feedbackLower.includes('일') || feedbackLower.includes('작업') || feedbackLower.includes('배치')) &&
                     (feedbackLower.includes('안') || feedbackLower.includes('금지') || feedbackLower.includes('ㄴㄴ'))) {
                     feedbackConstraints.noWorkAfterArrival = true;
-                    detectedPatterns.push('출근 직후 작업 금지');
                     feedbackSection += `\n- 출근 직후 1시간 task 배치 금지`;
                 }
                 
@@ -546,205 +542,18 @@ class AIService {
                 constraintsText = `\n\n[제약 조건]\n${feedbackSection}\n`;
             }
             
-            // 구조화된 제약 조건이 있으면 JSON으로도 전달
-            const hasConstraints = Object.values(feedbackConstraints).some(v => v !== false && v !== 0);
-            
-            // 새 system 프롬프트 (사용자 제공 템플릿 사용)
-            const systemPrompt = {
-                role: 'system',
-                content: `
-당신은 사용자의 생활 패턴(lifestyle)과 할 일(tasks)을 이용해
-현실적인 주간/월간 스케줄을 만드는 **스케줄 설계 AI**입니다.
-
-====================
-[1] 출력 형식 (반드시 이 형식의 JSON만 출력)
-====================
-
-아래 형식 그대로 JSON 객체 한 개만 출력하세요. 설명 문장, 코드블럭, 주석은 절대 쓰지 마세요.
-
-{
-  "scheduleData": [
-    {
-      "day": number,              // ${finalStartDay} ~ ${finalEndDay} 사이 정수
-      "weekday": "월요일" | "화요일" | "수요일" | "목요일" | "금요일" | "토요일" | "일요일",
-      "activities": [
-        {
-          "start": "HH:MM",
-          "end": "HH:MM",         // start보다 이후, 필요하면 자정 넘겨도 됨
-          "title": string,
-          "type": "lifestyle" | "task" | "appointment"
-        }
-      ]
-    }
-  ],
-  "notes": [ string, ... ]        // 배치 전략/피드백 반영 요약
-}
-
-- JSON 앞뒤에 \`\`\` 같은 마크다운, 자연어 설명을 쓰면 안 됩니다.
-- \`scheduleData\`가 없거나 배열이 아니면 잘못된 출력입니다.
-
-====================
-[2] day / 시간 규칙
-====================
-
-- day 번호: day:1(월요일) ~ day:7(일요일), 그 뒤로 8,9,...는 계속 이어지는 상대 날짜입니다.
-- 이 요청에서 유효한 day 범위는 **${finalStartDay} ~ ${finalEndDay}** 입니다.
-- \`scheduleData\`에는 **${finalStartDay}부터 ${finalEndDay}까지의 day를 빠짐없이** 넣어야 합니다.
-  - 중간 day를 건너뛰면 안 됩니다.
-  - day는 오름차순으로 정렬하세요.
-
-- 시간 문자열:
-  - "오전" = 00:00~11:59, "오후" = 12:00~23:59
-  - "21:00"은 밤 9시입니다.
-  - start < end 이면 같은 날 안에서 끝나는 것으로 간주합니다.
-  - 자정을 넘기고 싶으면 예: start:"22:00", end:"03:00" 같이 표현해도 됩니다.
-
-====================
-[3] 입력 데이터 설명
-====================
-
-서버에서 이미 한국어 자연어를 파싱해서 구조화한 데이터를 제공합니다.  
-당신은 **파싱을 다시 할 필요 없고, 주어진 JSON만 정확히 이용하면 됩니다.**
-
-1) 생활 패턴 (lifestyle) 요약  
-- 다음 텍스트는 사용자가 직접 입력한 고정 생활 패턴입니다.
-- 여기에 없는 생활 패턴(수면, 식사, 자유시간 등)은 **절대 새로 만들지 마세요.**
-
-${lifestyleMappingText}
-
-2) tasks 배열 (JSON)  
-- 아래 JSON은 배치해야 할 할 일/일정 목록입니다.
-- 이미 서버에서 중요도, 난이도, 마감일, 타입 등을 계산해두었습니다.
-- 당신은 이 JSON에 맞춰 스케줄만 설계하면 됩니다.
-
-"tasks": ${JSON.stringify(tasksForAIJSON, null, 2)}
-
-${hasConstraints ? `3) 제약 조건 (JSON) - 반드시 준수
-- 아래 JSON 객체의 제약 조건을 **절대적으로** 준수해야 합니다.
-
-"constraints": ${JSON.stringify(feedbackConstraints, null, 2)}
-
-제약 조건 해석:
-- \`preferMorning: true\` → task는 06:00~12:00 우선 배치
-- \`preferEvening: true\` → task는 18:00~23:00 우선 배치
-- \`prohibitWeekendTasks: true\` → day:6,7에 task 배치 금지
-- \`allowWeekendTasks: true\` → day:6,7에도 task 배치
-- \`minRestMinutes: N\` → 작업 간 최소 N분 휴식
-- \`noWorkWithin1hAfterWork: true\` → 퇴근 후 1시간 이내 task 금지
-- \`noWorkAfterArrival: true\` → 출근 직후 1시간 task 금지
-- \`noWorkDuringLunch: true\` → 12:00~14:00 task 금지` : ''}
-
-각 task 필드는 다음 의미입니다:
-
-- id: 작업 식별자
-- title: 작업 이름 또는 일정 제목
-- type:
-  - "task": 마감일까지 나눠서 배치하는 일반적인 할 일
-  - "appointment": **특정 날짜/시간에 고정된 약속(일정)** 입니다.
-- deadline_day:
-  - 이 작업이 끝나 있어야 하는 마지막 day입니다.
-  - "appointment"일 경우, 이 day에 반드시 배치해야 합니다.
-- deadline_time (appointment에만 존재):
-  - 그 약속의 **시작 시간**입니다. (예: "21:00")
-- priority: "상" | "중" | "하"
-- difficulty: "상" | "중" | "하"
-- min_block_minutes:
-  - 이 작업을 한 번에 잡아야 하는 최소 작업 시간(분)입니다.
-- time_preference (선택):
-  - "morning": 가능하면 06:00~12:00 사이에 우선 배치
-  - "evening": 가능하면 18:00~23:00 사이에 우선 배치
-  - "any": 시간대 상관 없음 또는 미제공
-
-====================
-[4] 배치 순서 (중요)
-====================
-
-항상 다음 순서로 생각하고 배치하세요.
-
-1단계) 생활 패턴(lifestyle) 배치
---------------------------------
-- 위에서 제공한 생활 패턴 텍스트를 기준으로,
-  각 day에 \`type: "lifestyle"\` 활동을 먼저 배치합니다.
-- 생활 패턴은 서로 겹쳐도 괜찮습니다.
-- 단, 나중에 배치하는 \`task\`, \`appointment\`와는 겹치면 안 됩니다.
-- 사용자가 입력하지 않은 생활 패턴은 **절대 추가하지 마세요.**
-
-2단계) 빈 시간 계산
---------------------
-- 각 day에 대해 00:00~24:00 전체 중에서
-  lifestyle와 이미 배치된 appointment를 제외한 **빈 시간대**를 계산합니다.
-- 자정을 넘는 구간도 빈 시간에 포함해야 합니다.
-  - 예: 19:30에 마지막 작업이 끝나고, 다음날 01:00에 수면이 시작하면
-    19:30~01:00은 빈 시간입니다.
-
-3단계) appointment 배치
-------------------------
-- \`type: "appointment"\` 인 항목은 **가장 먼저** 배치합니다.
-- 규칙:
-  - \`deadline_day\`에 반드시 배치해야 합니다.
-  - \`deadline_time\`은 **시작 시간(start)** 입니다.
-  - end 시간은 \`min_block_minutes\`를 이용해
-    \`end = deadline_time + min_block_minutes\`로 계산하세요.
-  - 예:
-    - deadline_day: 15, deadline_time: "21:00", min_block_minutes: 60
-      → day:15, start:"21:00", end:"22:00"
-- appointment는 lifestyle와 겹치지 않는 위치에 정확히 넣어야 합니다.
-- appointment끼리도 시간 겹침이 나면 안 됩니다.
-
-4단계) task 배치
------------------
-- 이제 남은 빈 시간에 \`type: "task"\` 를 배치합니다.
-- 우선순위 계산 기준(대략적인 가이드):
-  1) 마감일까지 남은 day 수가 적을수록 우선
-  2) priority "상" > "중" > "하"
-  3) difficulty "상"일수록 한 번에 긴 블록으로 배치하는 것을 우선 고려
-- 배치 규칙:
-  - 가능한 한 **오늘 day:${finalStartDay}부터** 작업을 시작합니다.
-  - \`deadline_day\` 이후로는 절대 배치하면 안 됩니다.
-  - 각 task는 \`min_block_minutes\` 이상 길이의 블록으로 쪼개어,
-    여러 day에 나누어 배치할 수 있습니다.
-  - 작업들은 서로 겹치지 않아야 합니다.
-
-- time_preference 처리:
-  - time_preference가 "morning"이면:
-    - 가능한 한 06:00~12:00 사이 빈 시간에 먼저 넣습니다.
-    - 이 구간이 부족할 때만 오후/저녁으로 넘깁니다.
-  - "evening"이면:
-    - 18:00~23:00 사이를 우선 사용합니다.
-  - "any" 또는 필드가 없으면 시간대 상관없이 배치해도 됩니다.
-${hasConstraints && feedbackConstraints.preferMorning ? `- **제약 조건**: preferMorning=true이므로 모든 task는 06:00~12:00 우선 배치 필수` : ''}
-${hasConstraints && feedbackConstraints.prohibitWeekendTasks ? `- **제약 조건**: prohibitWeekendTasks=true이므로 day:6,7에 task 배치 금지` : ''}
-${hasConstraints && feedbackConstraints.minRestMinutes > 0 ? `- **제약 조건**: minRestMinutes=${feedbackConstraints.minRestMinutes}이므로 작업 간 최소 ${feedbackConstraints.minRestMinutes}분 휴식 필수` : ''}
-
-- 휴식:
-  - 같은 day에서 task/appointment 블록이 연속으로 붙지 않도록,
-    블록 사이에 최소 30분 정도의 빈 시간을 남기려고 노력하세요.
-  - (완벽하게 맞추지 못하더라도, 되도록 연달아 꽉 채우지 마세요.)
-
-5단계) 피드백/제약 조건 (옵션)
--------------------------------
-${hasConstraints ? `- 아래 "constraints" JSON 객체의 제약 조건을 **절대적으로** 준수해야 합니다.
-- 제약 조건과 일반 규칙이 충돌하면 제약 조건을 우선합니다.
-- 제약 조건 위반은 심각한 오류입니다.` : '- 추가 제약 조건이 없습니다.'}
-${constraintsText}
-====================
-[5] 검증 체크리스트
-====================
-
-출력하기 전에 스스로 다음을 점검하세요:
-
-- [ ] \`scheduleData\` 배열이 존재하고, JSON 최상위에 있다.
-- [ ] day는 ${finalStartDay}부터 ${finalEndDay}까지 빠짐없이 모두 있다.
-- [ ] 각 day의 \`activities\`는 배열이며, 모든 원소에 \`start\`, \`end\`, \`title\`, \`type\`이 있다.
-- [ ] appointment들은 모두 \`deadline_day + deadline_time\`에 시작하도록 배치되었다.
-- [ ] task들은 서로 겹치지 않는다.
-- [ ] deadline_day 이후로 task가 배치된 경우가 없다.
-- [ ] lifestyle는 사용자가 제공한 패턴만 있다 (새로 만든 lifestyle 없음).
-- [ ] \`notes\` 배열에, 빈 시간 활용 전략과 피드백/제약 반영 내용을 간단히 적었다.
-
-다시 강조합니다:
-→ **설명 문장 없이, 위에서 정의한 JSON 객체 한 개만 출력하세요.**`
-            };
+            // 시스템 프롬프트 생성 (별도 파일에서 관리)
+            // slimMode: 운영 환경에서는 true로 설정하여 프롬프트 길이 최적화
+            const slimMode = process.env.PROMPT_SLIM_MODE === 'true' || process.env.NODE_ENV === 'production';
+            const { buildSystemPrompt } = require('../prompts/systemPrompt');
+            const systemPrompt = buildSystemPrompt({
+                finalStartDay,
+                finalEndDay,
+                lifestyleMappingText,
+                tasksForAIJSON,
+                constraintsText,
+                slimMode
+            });
 
             // 타이밍 로그 시작
             const T0 = Date.now();
@@ -762,6 +571,12 @@ ${constraintsText}
             // 시스템 프롬프트를 맨 앞에 추가 (userMessages 줄인 후에 생성)
             const enhancedMessages = [systemPrompt, ...userMessages]
                 .filter(m => m && m.role && typeof m.content === 'string' && m.content.trim().length > 0);
+            
+            // 최종 프롬프트 길이 계산 및 로그 출력
+            const finalPromptLength = enhancedMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+            const systemPromptLength = systemPrompt.content.length;
+            const userMessagesLength = userMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+            console.log(`[프롬프트 길이] 전체: ${finalPromptLength}자 (시스템: ${systemPromptLength}자, 사용자: ${userMessagesLength}자)`);
         
             const basePayload = {
                 model: 'gpt-4o-mini',
@@ -769,8 +584,6 @@ ${constraintsText}
                 temperature: 0.3,
                 response_format: { type: 'json_object' }
             };
-            
-            const T1 = Date.now();
 
             // 비스트리밍 호출 (JSON 모드에 가장 안전)
             const nonStreamCall = async (payload) => {
@@ -1094,95 +907,86 @@ ${constraintsText}
                 });
             }
             
-            // 3. 사용자가 입력하지 않은 생활패턴 필터링 (선택적 - 필요시 활성화)
-            // const allowedLifestyleTitles = lifestyleTexts.length > 0 
-            //     ? lifestyleTexts.map(t => {
-            //         const parsed = parseLifestyleString(t);
-            //         return parsed ? parsed.title.toLowerCase().trim() : null;
-            //     }).filter(t => t !== null)
-            //     : [];
-            // 
-            // if (allowedLifestyleTitles.length > 0) {
-            //     let removedCount = 0;
-            //     finalSchedule.forEach(dayObj => {
-            //         dayObj.activities = dayObj.activities.filter(act => {
-            //             if (act.type === 'lifestyle') {
-            //                 const actTitle = (act.title || '').toLowerCase().trim();
-            //                 const isAllowed = allowedLifestyleTitles.some(allowed => 
-            //                     actTitle === allowed || actTitle.includes(allowed) || allowed.includes(actTitle)
-            //                 );
-            //                 if (!isAllowed) {
-            //                     removedCount++;
-            //                     console.warn(`[⚠️ 검증] 사용자가 입력하지 않은 생활패턴 제거: day ${dayObj.day}, "${act.title}"`);
-            //                     return false;
-            //                 }
-            //             }
-            //             return true;
-            //         });
-            //     });
-            //     if (removedCount > 0) {
-            //         console.warn(`[⚠️ 검증] 총 ${removedCount}개의 허용되지 않은 생활패턴이 제거되었습니다.`);
-            //     }
-            // }
+            // 3. 생활패턴 필터링: 사용자가 입력하지 않은 lifestyle 제거
+            if (lifestyleTexts.length > 0) {
+                const parsedLifestyle = lifestyleTexts
+                    .map(text => parseLifestyleString(text))
+                    .filter(p => p && Array.isArray(p.days) && p.days.length > 0);
+                
+                // title + 요일로 허용 여부 판단
+                const isAllowedLifestyle = (title, relDay) => {
+                    const weekdayNum = relDayToWeekdayNumber(relDay, now); // 1~7
+                    return parsedLifestyle.some(p => 
+                        p.title === title && p.days.includes(weekdayNum)
+                    );
+                };
+                
+                // 생활패턴 아닌 건 전부 삭제
+                let removedLifestyleCount = 0;
+                finalSchedule.forEach(dayObj => {
+                    const beforeCount = dayObj.activities.filter(a => a.type === 'lifestyle').length;
+                    dayObj.activities = dayObj.activities.filter(act => {
+                        if (act.type !== 'lifestyle') return true;
+                        const isAllowed = isAllowedLifestyle(act.title, dayObj.day);
+                        if (!isAllowed) removedLifestyleCount++;
+                        return isAllowed;
+                    });
+                });
+                if (removedLifestyleCount > 0) {
+                    console.warn(`[검증] 사용자가 입력하지 않은 생활패턴 ${removedLifestyleCount}개 제거됨`);
+                }
+            }
             
-            // 4. 피드백 위반 검증 및 수정 (선택적 - 필요시 활성화)
-            // if (opts.userFeedback && opts.userFeedback.trim()) {
-            //     const feedbackLower = opts.userFeedback.toLowerCase();
-            //     
-            //     // 주말 업무 금지 확인 및 수정
-            //     if (feedbackLower.includes('주말') && (feedbackLower.includes('업무') || feedbackLower.includes('작업')) && 
-            //         (feedbackLower.includes('안') || feedbackLower.includes('금지') || feedbackLower.includes('하지'))) {
-            //         let removedTaskCount = 0;
-            //         finalSchedule.forEach(dayObj => {
-            //             if (dayObj.day === 6 || dayObj.day === 7) {
-            //                 dayObj.activities = dayObj.activities.filter(act => {
-            //                     if (act.type === 'task') {
-            //                         removedTaskCount++;
-            //                         console.warn(`[⚠️ 피드백 위반 수정] 주말 업무 금지: day ${dayObj.day}, "${act.title}" 제거`);
-            //                         return false;
-            //                     }
-            //                     return true;
-            //                 });
-            //             }
-            //         });
-            //         if (removedTaskCount > 0) {
-            //             console.warn(`[⚠️ 피드백 위반 수정] 총 ${removedTaskCount}개의 주말 작업이 제거되었습니다.`);
-            //         }
-            //     }
-            //     
-            //     // 회사 끝나고 1시간 이내 작업 금지 확인 및 수정
-            //     if (feedbackLower.includes('회사 끝') && feedbackLower.includes('1시간')) {
-            //         let movedTaskCount = 0;
-            //         finalSchedule.forEach(dayObj => {
-            //             dayObj.activities = dayObj.activities.map(act => {
-            //                 if (act.type === 'task') {
-            //                     const actStart = act.start || '';
-            //                     const actStartHour = parseInt(actStart.split(':')[0]) || 0;
-            //                     if (actStartHour === 17) {
-            //                         const actEnd = act.end || '';
-            //                         const actEndHour = parseInt(actEnd.split(':')[0]) || 0;
-            //                         const actEndMin = parseInt(actEnd.split(':')[1]) || 0;
-            //                         const duration = (actEndHour * 60 + actEndMin) - (actStartHour * 60);
-            //                         
-            //                         const newStart = '18:00';
-            //                         const newEndMinutes = 18 * 60 + duration;
-            //                         const newEndHour = Math.floor(newEndMinutes / 60) % 24;
-            //                         const newEndMin = newEndMinutes % 60;
-            //                         const newEnd = `${String(newEndHour).padStart(2, '0')}:${String(newEndMin).padStart(2, '0')}`;
-            //                         
-            //                         movedTaskCount++;
-            //                         console.warn(`[⚠️ 피드백 위반 수정] 회사 끝나고 1시간 이내 작업 이동: day ${dayObj.day}, "${act.title}" ${act.start} → ${newStart}`);
-            //                         return { ...act, start: newStart, end: newEnd };
-            //                     }
-            //                 }
-            //                 return act;
-            //             });
-            //         });
-            //         if (movedTaskCount > 0) {
-            //             console.warn(`[⚠️ 피드백 위반 수정] 총 ${movedTaskCount}개의 작업이 회사 종료 직후에서 이동되었습니다.`);
-            //         }
-            //     }
-            // }
+            // 4. 마감일 이후 배치 금지 검증
+            const normalizeTitle = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, '');
+            let removedAfterDeadlineCount = 0;
+            finalSchedule.forEach(dayObj => {
+                dayObj.activities = dayObj.activities.filter(act => {
+                    if (act.type !== 'task' && act.type !== 'appointment') return true;
+                    
+                    const actTitle = normalizeTitle(act.title);
+                    const matchedTask = tasksForAI.find(t => {
+                        const tTitle = normalizeTitle(t.title);
+                        return actTitle === tTitle || 
+                               actTitle.includes(tTitle) || 
+                               tTitle.includes(actTitle);
+                    });
+                    if (!matchedTask) return true;
+                    
+                    // deadline_day 이후면 삭제
+                    if (matchedTask.deadline_day !== 999 && dayObj.day > matchedTask.deadline_day) {
+                        removedAfterDeadlineCount++;
+                        return false;
+                    }
+                    return true;
+                });
+            });
+            if (removedAfterDeadlineCount > 0) {
+                console.warn(`[검증] 마감일 이후 배치된 작업 ${removedAfterDeadlineCount}개 제거됨`);
+            }
+            
+            // 5. 피드백 기반 제약 조건 강제 적용
+            // ⚠️ 현재 서버에서 강제 적용되는 제약: 주말 업무 금지만
+            // 나머지 제약(preferMorning, noWorkDuringLunch 등)은 프롬프트에만 포함되어 AI에게 위임
+            if (feedbackConstraints.prohibitWeekendTasks) {
+                let removedWeekendTaskCount = 0;
+                finalSchedule.forEach(dayObj => {
+                    const weekdayNum = relDayToWeekdayNumber(dayObj.day, now); // 1~7
+                    if (weekdayNum === 6 || weekdayNum === 7) { // 토, 일
+                        const beforeCount = dayObj.activities.filter(a => a.type === 'task').length;
+                        dayObj.activities = dayObj.activities.filter(a => a.type !== 'task');
+                        removedWeekendTaskCount += beforeCount;
+                    }
+                });
+                if (removedWeekendTaskCount > 0) {
+                    console.warn(`[검증] 주말 업무 금지: 주말 task ${removedWeekendTaskCount}개 제거됨`);
+                }
+            }
+            
+            // TODO: 향후 추가 가능한 강제 제약 조건
+            // - noWorkDuringLunch: 점심 시간대(12:00~14:00) task 제거
+            // - noWorkWithin1hAfterWork: 퇴근 후 1시간 이내 task 제거
+            // - preferMorning/preferEvening: time_preference 강제 재배치
             
             // notes를 explanation에 통합 (notes가 있으면 우선 사용)
             let finalExplanation = '';
@@ -1194,8 +998,16 @@ ${constraintsText}
             
             const T_END = Date.now();
             
-            // AI 응답과 스케줄 생성 시간만 로그 출력
-            console.log(`[AI 응답]`, JSON.stringify(parsed, null, 2));
+            // AI 응답과 스케줄 생성 시간 로그 출력 (프로덕션에서는 요약만)
+            if (process.env.NODE_ENV !== 'production') {
+                console.log(`[AI 응답]`, JSON.stringify(parsed, null, 2));
+            } else {
+                console.log(`[AI 응답 요약]`, {
+                    days: finalSchedule.length,
+                    activities: finalSchedule.reduce((sum, d) => sum + d.activities.length, 0),
+                    notes: notes.length
+                });
+            }
             console.log(`[스케줄 생성 시간] ${T_END - T0}ms`);
             
             return {

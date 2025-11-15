@@ -171,17 +171,6 @@ const saveScheduleSessionUnified = async ({
   return await firestoreService.saveScheduleSession(uid, data);
 };
 
-// 프롬프트에 강제 규칙 주입 (scheduleUtils에서 사용하지만 여기서도 필요)
-const enforceScheduleRules = (basePrompt) => `${basePrompt}
-
-[반드시 지켜야 할 규칙]
-- [현재 할 일 목록]에 있는 모든 항목은 반드시 스케줄 JSON의 activities에 'type': 'task' 로 포함할 것.
-- lifestyle 항목과 병합/대체 금지. task는 task로 남길 것.
-- 모든 task는 start, end, title, type 필드를 포함해야 한다. (예: {"start":"19:00","end":"21:00","title":"오픽 시험 준비","type":"task"})
-- lifestyle과 task의 시간은 절대 겹치지 않도록 조정할 것. 겹친다면 task를 가장 가까운 빈 시간대로 이동하라.
-- 출력은 day별 객체 배열(JSON 하나)만 반환하라. 불필요한 텍스트 금지.
-`;
-
 // 세션 ID 헬퍼 (사용자별 세션 분리)
 const getOrCreateSessionId = (userId) => {
   const sidKey = `shedai_session_id_${userId ?? 'anon'}`;
@@ -461,12 +450,12 @@ function CalendarPage() {
       
       // 5. 스케줄 생성 (직접 호출로 변경)
       // 수동으로 수정한 스케줄(isManualEdit: true)은 무시하고 완전히 새로 생성
-      const shouldUseLastSchedule = lastSchedule && !lastSchedule.isManualEdit;
-      const promptBase = enforceScheduleRules(
-        shouldUseLastSchedule 
-          ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule)
-          : buildShedAIPrompt(lifestyleText, taskText, today, existingTasksForAI)
-      );
+      // ⚠️ 방어적 처리: lastSchedule이 객체({ schedule, isManualEdit })일 수도 배열일 수도 있음
+      const lastScheduleData = Array.isArray(lastSchedule) ? lastSchedule : (lastSchedule?.schedule || lastSchedule);
+      const shouldUseLastSchedule = lastScheduleData && !(lastSchedule?.isManualEdit);
+      const promptBase = shouldUseLastSchedule 
+        ? buildFeedbackPrompt(lifestyleText, taskText, lastScheduleData, existingTasksForAI)
+        : buildShedAIPrompt(lifestyleText, taskText, today, existingTasksForAI);
       
       // 공통 메시지 빌더 사용 (컨텍스트 초기화 모드)
       const scheduleMessages = buildScheduleMessages({
@@ -600,9 +589,11 @@ function CalendarPage() {
       const lifestyleText = lifestylePatternsOriginal.join("\n");
       
       // 수동으로 수정한 스케줄(isManualEdit: true)은 무시하고 완전히 새로 생성
-      const shouldUseLastSchedule = lastSchedule && !lastSchedule.isManualEdit;
+      // ⚠️ 방어적 처리: lastSchedule이 객체({ schedule, isManualEdit })일 수도 배열일 수도 있음
+      const lastScheduleData = Array.isArray(lastSchedule) ? lastSchedule : (lastSchedule?.schedule || lastSchedule);
+      const shouldUseLastSchedule = lastScheduleData && !(lastSchedule?.isManualEdit);
       const promptBase = shouldUseLastSchedule 
-        ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule, existingTasksForAI)
+        ? buildFeedbackPrompt(lifestyleText, taskText, lastScheduleData, existingTasksForAI)
         : buildShedAIPrompt(lifestyleText, taskText, today, existingTasksForAI);
       
       addAIMessage("DB 데이터를 기반으로 스케줄을 재생성합니다...");
@@ -642,10 +633,17 @@ function CalendarPage() {
         const events = convertScheduleToEvents(processedSchedule, today);
         setAllEvents(events);
         
+        // ⚠️ 수정: lifestyleList는 원본 텍스트 배열로 저장 (파싱된 형식이 아님)
+        const lifestylePatternsOriginalForSave = Array.isArray(savedLifestylePatterns) && typeof savedLifestylePatterns[0] === 'string'
+          ? savedLifestylePatterns  // 원본 텍스트 배열
+          : savedLifestylePatterns.map(p => 
+              typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
+            );
+        
         const scheduleSessionId = await saveScheduleSessionUnified({
           uid: user.uid,
           schedule: processedSchedule,
-          lifestyleList: parsedPatterns, 
+          lifestyleList: lifestylePatternsOriginalForSave, // ✅ 원본 텍스트 저장
           aiPrompt: promptBase,                          
           conversationContext,
           activityAnalysis: apiResp?.activityAnalysis || {} // AI가 생성한 activityAnalysis 전달
@@ -792,7 +790,7 @@ function CalendarPage() {
 
   // 피드백 제출 핸들러 (새로운 훅 사용)
   const handleFeedbackSubmit = () => {
-    handleSubmitFeedbackMessage(currentMessage, (messageText, analysis, advice) => {
+    handleSubmitFeedbackMessage(currentMessage, async (messageText, analysis, advice) => {
       if (analysis) {
         addAIMessage(`피드백 분석: ${analysis}`);
       }
@@ -806,15 +804,47 @@ function CalendarPage() {
       
       addAIMessage("피드백을 반영하여 스케줄을 조정합니다...");
       
-      const lifestyleText = lifestyleList.join("\n");
-      // 수동으로 수정한 스케줄(isManualEdit: true)은 무시하고 완전히 새로 생성
-      const shouldUseLastSchedule = lastSchedule && !lastSchedule.isManualEdit;
-      const feedbackPrompt = enforceScheduleRules(
-        shouldUseLastSchedule 
-          ? buildFeedbackPrompt(lifestyleText, messageText, lastSchedule)
-          : buildShedAIPrompt(lifestyleText, messageText, today, [])
-      );
-      handleScheduleGeneration(feedbackPrompt, "피드백을 반영하여 스케줄을 조정합니다...");
+      try {
+        // 1) 생활패턴 원본 텍스트
+        const lifestyleText = lifestyleList.join("\n");
+        
+        // 2) 최신 할 일 목록 불러오기 (다른 경로와 동일하게)
+        const USE_FIRESTORE = String(process.env.REACT_APP_USE_FIRESTORE || 'true') === 'true';
+        const { existingTasksForAI, taskText } = await buildTasksForAI(
+          user?.uid,
+          USE_FIRESTORE ? firestoreService : null,
+          { fetchLocalTasks: (window?.shedAI && window.shedAI.fetchLocalTasks) ? window.shedAI.fetchLocalTasks : null }
+        );
+        
+        // 3) 직전 스케줄 (방어적 처리)
+        const lastScheduleData = Array.isArray(lastSchedule) 
+          ? lastSchedule 
+          : (lastSchedule?.schedule || lastSchedule);
+        const shouldUseLastSchedule = lastScheduleData && !(lastSchedule?.isManualEdit);
+        
+        // 4) 피드백 프롬프트 생성: taskText는 할 일 목록, messageText는 피드백으로 별도 전달
+        const feedbackPrompt = shouldUseLastSchedule 
+          ? buildFeedbackPrompt(
+              lifestyleText,
+              taskText,              // ✅ 할 일 목록 (피드백이 아님)
+              lastScheduleData,
+              existingTasksForAI,
+              messageText            // ✅ 피드백 텍스트 (별도 인자)
+            )
+          : buildShedAIPrompt(
+              lifestyleText,
+              taskText,              // ✅ 할 일 목록
+              today,
+              existingTasksForAI,
+              messageText            // ✅ 피드백 텍스트 (새로 생성할 때도 반영)
+            );
+        
+        // 5) 스케줄 생성
+        handleScheduleGeneration(feedbackPrompt, "피드백을 반영하여 스케줄을 조정합니다...");
+      } catch (error) {
+        console.error('[handleFeedbackSubmit] 피드백 처리 중 오류:', error);
+        addAIMessage('피드백 반영 중 오류가 발생했습니다. 다시 시도해주세요.');
+      }
     });
   };
   
@@ -960,10 +990,14 @@ function CalendarPage() {
 
     // promptBase 생성 (lastSchedule이 있으면 피드백 프롬프트, 없으면 새 스케줄 프롬프트)
     // 단, 수동으로 수정한 스케줄(isManualEdit: true)은 무시하고 완전히 새로 생성
-    const lastSchedule = user?.uid ? await firestoreService.getLastSchedule(user.uid) : null;
-    const shouldUseLastSchedule = lastSchedule && !lastSchedule.isManualEdit; // 수동 수정 스케줄은 무시
+    const lastScheduleFromDB = user?.uid ? await firestoreService.getLastSchedule(user.uid) : null;
+    // ⚠️ 방어적 처리: lastScheduleFromDB가 객체({ scheduleData, isManualEdit })일 수도 배열일 수도 있음
+    const lastScheduleData = Array.isArray(lastScheduleFromDB) 
+      ? lastScheduleFromDB 
+      : (lastScheduleFromDB?.scheduleData || lastScheduleFromDB?.schedule || lastScheduleFromDB);
+    const shouldUseLastSchedule = lastScheduleData && !(lastScheduleFromDB?.isManualEdit);
     const promptBase = shouldUseLastSchedule 
-      ? buildFeedbackPrompt(lifestyleText, taskText, lastSchedule, existingTasksForAI)
+      ? buildFeedbackPrompt(lifestyleText, taskText, lastScheduleData, existingTasksForAI)
       : buildShedAIPrompt(lifestyleText, taskText, today, existingTasksForAI);
 
     let timeoutId;
@@ -1035,10 +1069,18 @@ function CalendarPage() {
       const events = convertScheduleToEvents(next, today);
       setAllEvents(events);
 
+      // ⚠️ 수정: lifestyleList는 원본 텍스트 배열로 저장 (파싱된 형식이 아님)
+      // patternsForAI는 파싱된 형식이므로, 원본 텍스트를 다시 가져와야 함
+      const lifestylePatternsOriginalForSave = Array.isArray(lifestylePatternsOriginal) && typeof lifestylePatternsOriginal[0] === 'string'
+        ? lifestylePatternsOriginal  // 원본 텍스트 배열
+        : lifestylePatternsOriginal.map(p => 
+            typeof p === 'string' ? p : `${p.title} (${p.start}-${p.end}, 요일: ${p.days?.join(', ') || '미정'})`
+          );
+      
       const scheduleSessionId = await saveScheduleSessionUnified({
         uid: user.uid,
         schedule: next,
-        lifestyleList: patternsForAI, 
+        lifestyleList: lifestylePatternsOriginalForSave, // ✅ 원본 텍스트 저장
         aiPrompt: promptBase,                     
         conversationContext,
         activityAnalysis: newSchedule?.activityAnalysis || {} // AI가 생성한 activityAnalysis 전달
@@ -1513,8 +1555,10 @@ function CalendarPage() {
         alert('스케줄이 저장되었습니다.');
         
         // 저장 후 스케줄 업데이트
-        setLastSchedule(schedule);
-        updateSchedule(schedule);
+        // ⚠️ 수정: updateSchedule은 { schedule } 형태를 기대하며, lastSchedule에도 isManualEdit 플래그 포함
+        const scheduleWithFlag = { schedule, isManualEdit: true };
+        setLastSchedule(scheduleWithFlag);
+        updateSchedule({ schedule });
       } else {
         console.warn('[SaveSchedule] 저장 실패: sessionId가 null입니다.');
         alert('스케줄 저장에 실패했습니다.');

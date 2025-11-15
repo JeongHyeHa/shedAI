@@ -1,10 +1,14 @@
 package com.hajeonghye.shedai.dev;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.webkit.WebView;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.Bridge;
 import com.google.firebase.messaging.FirebaseMessaging;
@@ -14,6 +18,7 @@ import org.json.JSONException;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "MainActivity";
+    private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 1001;
     private static MainActivity instance;
     private String pendingToken = null; // WebView 준비 전 토큰 저장
 
@@ -155,9 +160,54 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onStart() {
         super.onStart();
+        
+        // Android 13+ 알림 권한 요청
+        askNotificationPermission();
+        
         // WebView가 준비되면 토큰 전달 시도
         if (pendingToken != null) {
             sendTokenToJavaScript();
+        }
+    }
+    
+    /**
+     * Android 13 (API 33) 이상에서 알림 권한 요청
+     */
+    private void askNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) { // API 33
+            String permission = Manifest.permission.POST_NOTIFICATIONS;
+            
+            // 권한이 이미 허용되어 있는지 확인
+            if (ContextCompat.checkSelfPermission(this, permission) 
+                    != PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "알림 권한이 없습니다. 권한 요청 중...");
+                // 권한 요청
+                ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{permission},
+                    NOTIFICATION_PERMISSION_REQUEST_CODE
+                );
+            } else {
+                Log.d(TAG, "알림 권한이 이미 허용되어 있습니다.");
+            }
+        } else {
+            Log.d(TAG, "Android 13 미만 버전입니다. 알림 권한 요청이 필요하지 않습니다.");
+        }
+    }
+    
+    /**
+     * 권한 요청 결과 처리
+     */
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "알림 권한이 허용되었습니다.");
+            } else {
+                Log.w(TAG, "알림 권한이 거부되었습니다. 사용자가 설정에서 수동으로 허용해야 합니다.");
+            }
         }
     }
 

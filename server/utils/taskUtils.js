@@ -1,4 +1,8 @@
-// utils/taskParse.js
+/**
+ * Task 관련 유틸리티 함수
+ * 
+ * title 추출 및 정제 로직을 포함합니다.
+ */
 
 // 🔹 앞쪽에 붙은 날짜/시간/오늘·내일 같은 표현 제거 유틸
 function stripLeadingDateTimePhrases(s) {
@@ -45,7 +49,6 @@ function stripLeadingDateTimePhrases(s) {
 
 /**
  * 사용자 입력에서 task title을 정제하여 추출합니다.
- * 서버의 extractTaskTitle과 동일한 로직입니다.
  * 
  * @param {string} input - 사용자 입력 텍스트 또는 여러 줄 요약 텍스트
  * @returns {string} 정제된 title
@@ -153,56 +156,31 @@ function extractTaskTitle(input) {
   return title;
 }
 
-export function parseKoreanTaskSentence(input, baseDate = new Date()) {
-  if (!input || typeof input !== 'string') return null;
-
-  // 마감일: "10월 30일(까지)" 형태
-  const dlMatch = input.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
-  let deadline = null;
-  if (dlMatch) {
-    const yy = baseDate.getFullYear();
-    const mm = parseInt(dlMatch[1], 10) - 1;
-    const dd = parseInt(dlMatch[2], 10);
-    const d = new Date(yy, mm, dd, 23, 59, 0, 0); // 엄격 마감: 23:59로 고정
-    // 이미 지난 날짜면 내년으로 롤오버 (원하면 이 로직은 제거/변경)
-    if (d < new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate())) {
-      deadline = new Date(yy + 1, mm, dd, 23, 59, 0, 0);
-    } else {
-      deadline = d;
-    }
+/**
+ * Task 객체의 title을 정제합니다.
+ * 
+ * @param {Object} task - Task 객체
+ * @param {string} task.title - 원본 title
+ * @param {string} [task.description] - 원본 description (title이 없을 때 사용)
+ * @returns {Object} title이 정제된 task 객체
+ */
+function normalizeTaskTitle(task) {
+  if (!task || typeof task !== 'object') {
+    return task;
   }
 
-  // 중요도/난이도
-  const importance = /중요도\s*상/i.test(input) ? '상'
-                    : /중요도\s*하/i.test(input) ? '하'
-                    : /중요도\s*중/i.test(input) ? '중' : '상'; // default 상
-  const difficulty = /난이도\s*상/i.test(input) ? '상'
-                    : /난이도\s*하/i.test(input) ? '하'
-                    : /난이도\s*중/i.test(input) ? '중' : '상'; // default 상
-
-  // 힌트 플래그
-  const strict = /엄격/.test(input);
-  const focus = /집중\s*필요|집중/.test(input);
-
-  // 제목 정제: extractTaskTitle 함수 사용
-  const cleanTitle = extractTaskTitle(input);
-
-  if (!cleanTitle || cleanTitle === '할 일' || !deadline) return null;
+  // title이 있으면 정제, 없으면 description에서 추출 시도
+  const sourceText = task.title || task.description || '';
+  const normalizedTitle = extractTaskTitle(sourceText);
 
   return {
-    title: cleanTitle,
-    deadline,                 // JS Date
-    deadlineTime: '23:59',    // 일관성
-    importance,
-    difficulty,
-    description: input,
-    isActive: true,
-    persistAsTask: true,      // 우리가 저장한 "실제" 태스크임을 표시
-    strictDeadline: strict,
-    needsFocus: focus,
-    createdAt: new Date()
+    ...task,
+    title: normalizedTitle
   };
 }
 
-// extractTaskTitle을 export하여 다른 곳에서도 사용 가능하도록
-export { extractTaskTitle };
+module.exports = {
+  extractTaskTitle,
+  normalizeTaskTitle
+};
+

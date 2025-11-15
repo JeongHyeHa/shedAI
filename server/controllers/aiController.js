@@ -1,6 +1,7 @@
 // src/controllers/aiController.js
 const aiService = require('../services/aiService');
 const utils = require('../utils/lifestyleParser');
+const { extractTaskTitle } = require('../utils/taskUtils');
 // --- helpers: deadline cap ---
 const toDateSafe = (v) => {
     if (!v) return null;
@@ -235,10 +236,13 @@ class AIController {
                   dl = null;
                 }
                 
+                // title 정제: 사용자 입력에서 핵심 명사구만 추출
+                const rawTitle = t?.title || t?.description || '';
+                const normalizedTitle = extractTaskTitle(rawTitle);
                 
                 return {
                     id: t?.id || null, // id 필드 유지 (마감일 캡핑 시 매칭용)
-                    title: t?.title || '제목없음',
+                    title: normalizedTitle,
                     deadline: dl || null,
                     deadlineTime: t?.deadlineTime || null,
                     startTime: t?.startTime || null, // deadlineTime 별칭
@@ -271,9 +275,13 @@ class AIController {
                         if (dl instanceof Date) dl = dl.toISOString().split('T')[0];
                         if (typeof dl === 'string' && dl.includes('T')) dl = dl.split('T')[0];
 
+                        // title 정제: DB에 저장된 title도 정제 (혹시 모를 잘못된 데이터 대비)
+                        const rawTitle = t?.title || t?.description || '';
+                        const normalizedTitle = extractTaskTitle(rawTitle);
+
                         return {
                             id: t?.id || null, // id 필드 유지 (마감일 캡핑 시 매칭용)
-                            title: t?.title || '제목없음',
+                            title: normalizedTitle,
                             deadline: dl || null,
                             deadlineTime: t?.deadlineTime || null,
                             startTime: t?.startTime || null, // deadlineTime 별칭

@@ -19,6 +19,8 @@ class AuthService {
     }
     this.auth = auth;
     this.googleProvider = new GoogleAuthProvider();
+    // Google Calendar 접근 권한 추가
+    this.googleProvider.addScope('https://www.googleapis.com/auth/calendar');
   }
 
   // 🔧 새 사용자일 때 로컬 스토리지 정리

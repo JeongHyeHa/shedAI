@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 // Firebase Admin SDK 초기화 (이미 app.js에서 초기화됨)
 const db = admin.firestore();
 const lifestyleUtils = require('../utils/lifestyleParser');
+const { extractTaskTitle } = require('../utils/taskUtils');
 
 // YYYY-MM-DD (KST) 표준화: 이미 YYYY-MM-DD면 그대로 반환, Timestamp/Date는 KST로 변환
 function toYMDLocalServer(value) {
@@ -41,7 +42,9 @@ class FirestoreService {
         try {
             const tasksRef = this.db.collection('users').doc(userId).collection('tasks');
 
-            const title = String(taskData?.title || '').trim();
+            // title 정제: 사용자 입력에서 핵심 명사구만 추출
+            const rawTitle = taskData?.title || taskData?.description || '';
+            const title = extractTaskTitle(rawTitle);
             const deadline = taskData?.deadline;
             const deadlineISO = (() => {
                 if (!deadline) return null;
@@ -101,10 +104,16 @@ class FirestoreService {
         try {
             const tasksRef = db.collection('users').doc(userId).collection('tasks');
             const deadlineStr = toYMDLocalServer(taskData?.deadline);
+            
+            // title 정제: 사용자 입력에서 핵심 명사구만 추출
+            const rawTitle = taskData?.title || taskData?.description || '';
+            const normalizedTitle = extractTaskTitle(rawTitle);
+            
             const payload = {
                 ...taskData,
+                title: normalizedTitle, // 정제된 title로 덮어쓰기
                 ...(deadlineStr ? { deadline: deadlineStr } : {}),
-                canonTitle: canonTitle(taskData?.title || ''),
+                canonTitle: canonTitle(normalizedTitle),
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
                 isActive: true
             };
@@ -122,19 +131,32 @@ class FirestoreService {
     async saveTask(userId, taskData) {
         try {
             if (!userId) throw new Error('userId가 없습니다.');
-            if (!taskData?.title) throw new Error('taskData.title이 없습니다.');
+            
+            // title 정제: 사용자 입력에서 핵심 명사구만 추출
+            const rawTitle = taskData?.title || taskData?.description || '';
+            const normalizedTitle = extractTaskTitle(rawTitle);
+            
+            if (!normalizedTitle || normalizedTitle === '할 일') {
+                throw new Error('taskData.title이 없습니다.');
+            }
 
-            if (!taskData.deadlineISO && taskData.deadline) {
-                const d = taskData.deadline?.toDate ? taskData.deadline.toDate() : new Date(taskData.deadline);
+            // 정제된 title로 taskData 업데이트
+            const normalizedTaskData = {
+                ...taskData,
+                title: normalizedTitle
+            };
+
+            if (!normalizedTaskData.deadlineISO && normalizedTaskData.deadline) {
+                const d = normalizedTaskData.deadline?.toDate ? normalizedTaskData.deadline.toDate() : new Date(normalizedTaskData.deadline);
                 if (!isNaN(d)) {
                     const y = d.getFullYear();
                     const m = String(d.getMonth() + 1).padStart(2, '0');
                     const da = String(d.getDate()).padStart(2, '0');
-                    taskData.deadlineISO = `${y}-${m}-${da}`;
+                    normalizedTaskData.deadlineISO = `${y}-${m}-${da}`;
                 }
             }
 
-            const res = await this.upsertTaskByUniqueKey(userId, taskData);
+            const res = await this.upsertTaskByUniqueKey(userId, normalizedTaskData);
             return res.id;
         } catch (error) {
             console.error('[Firestore] saveTask 실패:', error);
