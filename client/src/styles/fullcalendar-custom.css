@@ -92,4 +92,56 @@
 .fc .fc-timegrid-slot.fc-day-sun,
 .fc .fc-timegrid-slot.fc-day-sat {
   background-color: #FFF9C4 !important; /* 연한 노란색 파스텔 */
+}
+
+/* 모바일 반응형 스타일 */
+@media (max-width: 768px) {
+  /* 모바일에서 월간 뷰 셀 크기 조정 (혹시 모바일에서도 월간 뷰를 볼 경우) */
+  .fc .fc-daygrid-day {
+    height: 60px !important;
+    min-height: 60px;
+  }
+
+  .fc .fc-daygrid-day-frame {
+    min-height: 60px;
+    padding: 2px;
+  }
+
+  /* 모바일에서 이벤트 텍스트 크기 조정 */
+  .fc .fc-daygrid-event {
+    font-size: 11px;
+    padding: 1px 3px;
+  }
+
+  .fc .fc-daygrid-day-number {
+    font-size: 0.7rem;
+  }
+
+  /* 모바일에서 시간 그리드 스타일 조정 */
+  .fc .fc-timegrid-slot {
+    height: 2.5em;
+  }
+
+  .fc .fc-timegrid-event {
+    font-size: 12px;
+    padding: 2px 4px;
+  }
+
+  /* 모바일에서 헤더 간소화 */
+  .fc .fc-col-header-cell {
+    font-size: 11px;
+    padding: 4px 2px;
+  }
+
+  /* 모바일에서 버튼 크기 조정 */
+  .fc .fc-button {
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+
+  /* 모바일에서 more-link 스타일 */
+  .fc-more-link {
+    font-size: 10px;
+    padding: 1px 3px;
+  }
 } 

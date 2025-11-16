@@ -6,7 +6,9 @@ const config: CapacitorConfig = {
   webDir: 'client/build',
   server: {
     androidScheme: 'https',
-    iosScheme: 'https'
+    iosScheme: 'https',
+    url: 'http://192.168.219.102:3000',
+    cleartext: true
   },
   plugins: {
     PushNotifications: {

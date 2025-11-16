@@ -1,10 +1,29 @@
 // 달력 컴포넌트 : 달력을 화면에 보여주는 컴포넌트
-import React, { useRef, useEffect } from 'react'; // 웹페이지를 만드는 도구(달력에 접근/변경될 때마다 실행)
+import React, { useRef, useEffect, useState } from 'react'; // 웹페이지를 만드는 도구(달력에 접근/변경될 때마다 실행)
 import FullCalendar from '@fullcalendar/react';  
 import dayGridPlugin from '@fullcalendar/daygrid';  // 월간 달력 뷰
 import timeGridPlugin from '@fullcalendar/timegrid';  // 주간/일간 달력 뷰
 import interactionPlugin from '@fullcalendar/interaction';  // 드래그 앤 드롭 플러그인
 import '../../styles/fullcalendar-custom.css';
+
+// 모바일 화면 크기 감지 헬퍼
+const useIsMobile = () => {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < 768; // 768px 미만을 모바일로 간주
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  return isMobile;
+};
 
 const Calendar = React.forwardRef(({ 
   events = [],        // 달력에 표시할 일정들(기본값 빈 배열)
@@ -16,6 +35,7 @@ const Calendar = React.forwardRef(({
   onEventDrop         // 일정이 드롭될 때 실행할 함수
 }, ref) => {
   // ref는 부모 컴포넌트에서 전달받음
+  const isMobile = useIsMobile();
 
   // 이벤트 처리 함수 (lifestyle 타입 스타일링)
   const processEvents = (eventsToProcess) => {
@@ -103,18 +123,28 @@ const Calendar = React.forwardRef(({
     };
   }, []);
 
+  // 모바일/데스크톱에 따른 초기 뷰 및 헤더 설정
+  const initialView = isMobile ? 'timeGridDay' : 'dayGridMonth';
+  const headerToolbar = isMobile
+    ? {
+        start: "prev,next today",
+        center: "title",
+        end: "timeGridDay,timeGridWeek"  // 모바일: 일간/주간만
+      }
+    : {
+        start: "prev,next today",
+        center: "title",
+        end: "dayGridMonth,timeGridWeek,timeGridDay"  // 데스크톱: 월간/주간/일간
+      };
+
   // 실제 달력 화면 만들기 
   return (
     <div className="calendar-container">
       <FullCalendar
         ref={ref} // 달력에 리모컨 연결 
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-        initialView="dayGridMonth"
-        headerToolbar={{
-          start: "prev,next today",
-          center: "title",
-          end: "dayGridMonth,timeGridWeek,timeGridDay"
-        }}
+        initialView={initialView}
+        headerToolbar={headerToolbar}
         height="auto"
         aspectRatio={1.35}  // 가로 세로 비율
         contentHeight="auto"
