@@ -2,10 +2,128 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // DEV-ONLY permissive rules. Do NOT use in production.
-    match /{document=**} {
-      allow read, write: if true;
+    // Helper function: 현재 로그인한 사용자 확인
+    function isAuthenticated() {
+      return request.auth != null;
     }
+    
+    // Helper function: 자신의 문서인지 확인
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // users 컬렉션: 이메일 검색을 위한 읽기 권한 (제한적)
+    match /users/{userId} {
+      // 자신의 프로필은 읽기/쓰기 가능
+      allow read, write: if isOwner(userId);
+      
+      // 다른 사용자의 프로필은 이메일 검색을 위해 제한적 읽기만 가능
+      // (민감한 정보는 제외하고 기본 정보만)
+      allow read: if isAuthenticated();
+      
+      // users/{uid}/friends 서브컬렉션
+      match /friends/{friendId} {
+        // 읽기: 주인 또는 친구 본인이면 허용
+        allow read: if isOwner(userId) || isOwner(friendId);
+        
+        // 쓰기(생성/수정/삭제): 주인 또는 친구 본인이면 허용
+        // 친구 수락 시 양방향 친구 문서 생성에 필요
+        allow write: if isOwner(userId) || isOwner(friendId);
+      }
+      
+      // users/{uid}/tasks 서브컬렉션
+      match /tasks/{taskId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // users/{uid}/schedules 서브컬렉션
+      match /schedules/{scheduleId} {
+        // 본인 일정은 읽기/쓰기
+        allow read, write: if isOwner(userId);
+        
+        // 친구는 읽기만 허용 (친구 관계가 Firestore에 존재하는지 확인)
+        allow read: if isAuthenticated() &&
+                     exists(/databases/$(database)/documents/users/$(userId)/friends/$(request.auth.uid));
+      }
+      
+      // users/{uid}/devices 서브컬렉션
+      match /devices/{deviceId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // users/{uid}/preferences 서브컬렉션
+      match /preferences/{preferenceId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // users/{uid}/lifestylePatterns 서브컬렉션 (생활 패턴)
+      match /lifestylePatterns/{patternId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // users/{uid}/feedbacks 서브컬렉션 (피드백)
+      match /feedbacks/{feedbackId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // users/{uid}/scheduleSessions 서브컬렉션 (스케줄 세션)
+      match /scheduleSessions/{sessionId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // users/{uid}/aiAdvices 서브컬렉션 (AI 조언)
+      match /aiAdvices/{adviceId} {
+        allow read, write: if isOwner(userId);
+      }
+      
+      // users/{uid}/habits 서브컬렉션 (습관)
+      match /habits/{habitId} {
+        allow read, write: if isOwner(userId);
+        
+        // habits/{habitId}/logs 서브컬렉션 (습관 로그)
+        match /logs/{logId} {
+          allow read, write: if isOwner(userId);
+        }
+      }
+    }
+
+    // friendRequests 컬렉션: 친구 요청 관리
+    match /friendRequests/{requestId} {
+      // ✅ 개별 문서 존재 여부/읽기 (getDoc) - 로그인만 되어 있으면 허용
+      //    sendFriendRequest()에서 existingRequest 확인용
+      allow get: if isAuthenticated();
+      
+      // ✅ 쿼리/목록 조회 (getDocs with where toUid == myUid 등)
+      //    클라이언트에서 toUid 또는 fromUid 필터를 사용하도록 함
+      allow list: if isAuthenticated();
+      
+      // ✅ 요청 생성 (fromUid = 로그인한 사용자)
+      allow create: if isAuthenticated() &&
+                      request.resource.data.fromUid == request.auth.uid;
+      
+      // ✅ 요청 수락/거절 (toUid = 로그인 사용자, status 필드 값 제한)
+      allow update: if isAuthenticated() &&
+                      resource.data.toUid == request.auth.uid &&
+                      request.resource.data.status in ['accepted', 'rejected'];
+      
+      // ✅ 삭제 (본인이 보낸 요청 또는 받은 요청)
+      allow delete: if isAuthenticated() &&
+                      (resource.data.fromUid == request.auth.uid ||
+                       resource.data.toUid == request.auth.uid);
+    }
+
+    // 기타 컬렉션들 (기존 기능 유지)
+    match /schedules/{scheduleId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    match /tasks/{taskId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // 개발 환경에서는 모든 권한 허용 (필요시 주석 해제)
+    // match /{document=**} {
+    //   allow read, write: if true;
+    // }
   }
 }
-

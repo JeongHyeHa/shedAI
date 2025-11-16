@@ -601,6 +601,12 @@ class FirestoreService {
     }
   }
 
+  // 친구의 최신 스케줄 조회 (읽기 전용)
+  async getFriendLastSchedule(friendUid) {
+    // getLastSchedule과 동일한 로직이지만 friendUid를 사용
+    return this.getLastSchedule(friendUid);
+  }
+
   // 최신 스케줄을 "삭제" 처리 (빈 scheduleData를 가진 초기화 세션 저장)
   async deleteLatestSchedule(userId) {
     try {

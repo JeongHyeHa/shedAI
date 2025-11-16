@@ -287,6 +287,40 @@
   box-shadow: 0 2px 8px rgba(66, 133, 244, 0.3);
 }
 
+/* 친구 탭 토글 버튼 */
+.friends-toggle-button {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 80px;
+  background: linear-gradient(135deg, #4285f4 0%, #34a853 100%);
+  color: white;
+  border: none;
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  z-index: 1001;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+  font-size: 20px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: left 0.3s ease, width 0.2s ease;
+  padding: 0;
+}
+
+.friends-toggle-button:hover {
+  background: linear-gradient(135deg, #357ae8 0%, #2d8f47 100%);
+  box-shadow: 3px 0 12px rgba(0, 0, 0, 0.2);
+  width: 45px;
+}
+
+.friends-toggle-button:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
 /* 챗봇 닫기 버튼 */
 .chatbot-close-btn {
   background-color: #f2f2f2 !important;

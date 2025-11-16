@@ -21,6 +21,8 @@ import { useAuth } from '../contexts/AuthContext';
 // 서비스 & 유틸리티
 import apiService from '../services/apiService';
 import firestoreService from '../services/firestoreService';
+import FriendsTab from '../components/Friends/FriendsTab';
+import FriendScheduleModal from '../components/Friends/FriendScheduleModal';
 import { UI_CONSTANTS } from '../constants/ui';
 import { 
   buildShedAIPrompt,
@@ -317,6 +319,13 @@ function CalendarPage() {
   const [taskInputMode, setTaskInputMode] = useState(UI_CONSTANTS.TASK_INPUT_MODES.CHATBOT);
   const [editingTaskId, setEditingTaskId] = useState(null); // 수정 중인 할 일 ID
   const [currentView, setCurrentView] = useState('dayGridMonth'); // 현재 캘린더 뷰
+  
+  // 친구 관련 상태
+  const [selectedFriend, setSelectedFriend] = useState(null); // 선택된 친구 정보
+  const [friendEvents, setFriendEvents] = useState([]); // 친구 일정 이벤트
+  const [loadingFriendSchedule, setLoadingFriendSchedule] = useState(false);
+  const [friendModalOpen, setFriendModalOpen] = useState(false); // 친구 일정 모달 열림 상태
+  const [friendsTabOpen, setFriendsTabOpen] = useState(false); // 친구 탭 열림/닫힘 상태
 
   // 로딩 시작 시 공통 처리 함수
   const startLoading = useCallback(() => {
@@ -1654,6 +1663,73 @@ function CalendarPage() {
     }
   }, [user?.uid, googleCalendarAccessToken, getGoogleCalendarAccessToken, addAIMessage]);
 
+  // 친구 선택 핸들러 (모달 열기)
+  const handleSelectFriend = useCallback(async (friend) => {
+    if (!friend) {
+      setSelectedFriend(null);
+      setFriendEvents([]);
+      setFriendModalOpen(false);
+      return;
+    }
+
+    setSelectedFriend(friend);
+    setLoadingFriendSchedule(true);
+    setFriendModalOpen(true); // 모달 먼저 열기
+
+    try {
+      // 친구의 최신 스케줄 가져오기
+      const friendScheduleData = await firestoreService.getFriendLastSchedule(friend.friendUid || friend.id);
+      
+      if (!friendScheduleData || !friendScheduleData.scheduleData) {
+        setFriendEvents([]);
+        return;
+      }
+
+      // 스케줄 데이터 처리
+      const scheduleArray = Array.isArray(friendScheduleData.scheduleData) 
+        ? friendScheduleData.scheduleData 
+        : friendScheduleData.scheduleData.days || [];
+
+      // postprocessSchedule로 후처리
+      const processed = postprocessSchedule({
+        raw: scheduleArray,
+        existingTasksForAI: [], // 친구 일정은 task 메타 정보 없음
+        today,
+      });
+
+      // convertScheduleToEvents로 이벤트 변환
+      const events = convertScheduleToEvents(processed, today);
+
+      // 친구 일정임을 표시하기 위해 색상 및 메타데이터 추가
+      const friendEventsWithStyle = events.map(ev => ({
+        ...ev,
+        backgroundColor: '#FFE4CC',
+        borderColor: '#FF9966',
+        textColor: '#333',
+        extendedProps: {
+          ...ev.extendedProps,
+          source: 'friend',
+          friendUid: friend.friendUid || friend.id,
+          friendName: friend.displayName || friend.email,
+        },
+      }));
+
+      setFriendEvents(friendEventsWithStyle);
+    } catch (error) {
+      console.error('[handleSelectFriend] 친구 일정 로드 실패:', error);
+      setFriendEvents([]);
+    } finally {
+      setLoadingFriendSchedule(false);
+    }
+  }, [today]);
+
+  // 모달 닫기 핸들러
+  const handleCloseFriendModal = useCallback(() => {
+    setFriendModalOpen(false);
+    setSelectedFriend(null);
+    setFriendEvents([]);
+  }, []);
+
   return (
     <div className="calendar-page">
       <CalendarHeader isLoading={isLoading} loadingProgress={loadingProgress} />
@@ -1663,14 +1739,14 @@ function CalendarPage() {
         events={
           currentView === 'dayGridMonth'
             ? (() => {
-                // lifestyle 제외하고 task 중복 제거
+                // lifestyle 제외하고 task 중복 제거 (내 일정만)
                 const filtered = allEvents.filter(e => (e?.extendedProps?.type || '').toLowerCase() !== 'lifestyle');
                 const tasks = filtered.filter(e => (e?.extendedProps?.type || '').toLowerCase() === 'task');
                 const nonTasks = filtered.filter(e => (e?.extendedProps?.type || '').toLowerCase() !== 'task');
                 const dedupedTasks = dedupeEventsForMonthView(tasks);
                 return [...nonTasks, ...dedupedTasks];
               })()
-            : allEvents
+            : allEvents // 내 일정만 표시 (친구 일정은 모달에서 별도 표시)
         }
         onEventMount={handleEventMount}
         onViewDidMount={handleViewDidMount}
@@ -1700,6 +1776,52 @@ function CalendarPage() {
         onReportClick={() => navigate('/report')}
         onResetClick={handleResetCalendar}
         onExportToGoogleCalendar={handleExportToGoogleCalendar}
+      />
+
+      {/* 친구 탭 토글 버튼 */}
+      <button
+        className="friends-toggle-button"
+        onClick={() => setFriendsTabOpen(!friendsTabOpen)}
+        title={friendsTabOpen ? '친구 탭 닫기' : '친구 탭 열기'}
+        style={{
+          left: friendsTabOpen ? '300px' : '0'
+        }}
+      >
+        {friendsTabOpen ? '←' : '→'}
+      </button>
+
+      {/* 친구 탭 */}
+      <div 
+        className={`friends-panel ${friendsTabOpen ? 'open' : 'closed'}`}
+        style={{
+          position: 'fixed',
+          left: friendsTabOpen ? 0 : '-300px',
+          top: '60px',
+          width: '300px',
+          height: 'calc(100vh - 60px)',
+          backgroundColor: 'white',
+          borderRight: '1px solid #ddd',
+          boxShadow: '2px 0 8px rgba(0,0,0,0.1)',
+          zIndex: 1000,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          transition: 'left 0.3s ease'
+        }}
+      >
+        <FriendsTab 
+          onSelectFriend={handleSelectFriend}
+          selectedFriendUid={selectedFriend?.friendUid || selectedFriend?.id}
+        />
+      </div>
+
+      {/* 친구 일정 모달 */}
+      <FriendScheduleModal
+        visible={friendModalOpen}
+        onClose={handleCloseFriendModal}
+        events={friendEvents}
+        friend={selectedFriend}
+        loading={loadingFriendSchedule}
       />
 
       <Modals

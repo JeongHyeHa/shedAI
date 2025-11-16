@@ -195,6 +195,15 @@ button:disabled {
 }
 
 /* ✅ daygrid(월간/종일) + 팝오버에서 lifestyle 숨김 (안전망) */
+/* 친구 일정 스타일 */
+.fc .fc-daygrid .is-friend-event,
+.fc .fc-timegrid .is-friend-event,
+.fc .fc-popover .is-friend-event {
+  background-color: #FFCCAA !important;
+  border-color: #FF9966 !important;
+  color: #333 !important;
+}
+
 .fc .fc-daygrid .is-lifestyle { 
   display: none !important; 
   visibility: hidden !important; 
