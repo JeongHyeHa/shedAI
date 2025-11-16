@@ -61,6 +61,7 @@ async function generateAndApplySchedule({
   messagesBasePrompt,
   tasksForAI,
   updateSchedule,
+  setAllEvents,  // ✅ 추가: FullCalendar 이벤트 업데이트용
 }) {
   const messages = buildScheduleMessages({
     basePrompt: messagesBasePrompt,
@@ -89,8 +90,15 @@ async function generateAndApplySchedule({
 
   const schedule = baseProcessed; // AI가 생성한 스케줄 그대로 사용
 
+  // 🔥 실제 캘린더 반영
   calendarApi?.removeAllEvents();
   updateSchedule({ schedule });
+
+  // ✅ FullCalendar 이벤트 업데이트 (runSchedule 경로에서도 캘린더 UI가 갱신되도록)
+  if (setAllEvents) {
+    const events = convertScheduleToEvents(schedule, today);
+    setAllEvents(events);
+  }
 
   // 세션 저장은 호출하는 쪽에서 처리
   // AI 응답 전체를 반환하여 activityAnalysis도 함께 전달
@@ -367,12 +375,13 @@ function CalendarPage() {
         messagesBasePrompt: promptBase,
         tasksForAI,
         updateSchedule,
+        setAllEvents,  // ✅ 추가: FullCalendar 이벤트 업데이트용
       });
       
       await saveScheduleSessionUnified({
         uid: user.uid,
         schedule,
-        lifestyleList: parsedLifestylePatterns,
+        lifestyleList: lifestylePatternsOriginal,  // ✅ 수정: 원본 텍스트로 저장 (파싱된 형식이 아님)
         aiPrompt: promptBase,
         conversationContext,
         activityAnalysis: apiResp?.activityAnalysis || {} // AI가 생성한 activityAnalysis 전달
@@ -1677,28 +1686,33 @@ function CalendarPage() {
     setFriendModalOpen(true); // 모달 먼저 열기
 
     try {
-      // 친구의 최신 스케줄 가져오기
-      const friendScheduleData = await firestoreService.getFriendLastSchedule(friend.friendUid || friend.id);
+      // 친구 UID 확인 및 로깅
+      const friendUid = friend.friendUid || friend.id;
+      console.log('[handleSelectFriend] friend =', friend);
+      console.log('[handleSelectFriend] friendUid =', friendUid);
       
-      if (!friendScheduleData || !friendScheduleData.scheduleData) {
+      // ✅ 친구의 전체 일정 가져오기 (scheduleSessions에서 최신 세션의 scheduleData 사용)
+      const scheduleArray = await firestoreService.getFriendSchedules(friendUid);
+      console.log('[handleSelectFriend] scheduleArray =', scheduleArray, 'length =', scheduleArray.length);
+      
+      if (!scheduleArray || scheduleArray.length === 0) {
+        console.log('[handleSelectFriend] 일정 데이터 없음');
         setFriendEvents([]);
         return;
       }
 
-      // 스케줄 데이터 처리
-      const scheduleArray = Array.isArray(friendScheduleData.scheduleData) 
-        ? friendScheduleData.scheduleData 
-        : friendScheduleData.scheduleData.days || [];
-
-      // postprocessSchedule로 후처리
+      // scheduleArray는 [{ day: 1, activities: [...] }, ...] 형태
+      // postprocessSchedule로 후처리 (자기 일정과 동일한 방식)
       const processed = postprocessSchedule({
         raw: scheduleArray,
         existingTasksForAI: [], // 친구 일정은 task 메타 정보 없음
         today,
       });
+      console.log('[handleSelectFriend] processed =', processed, 'length =', processed.length);
 
-      // convertScheduleToEvents로 이벤트 변환
+      // convertScheduleToEvents로 FullCalendar 이벤트 변환 (자기 일정과 동일한 방식)
       const events = convertScheduleToEvents(processed, today);
+      console.log('[handleSelectFriend] events =', events, 'length =', events.length);
 
       // 친구 일정임을 표시하기 위해 색상 및 메타데이터 추가
       const friendEventsWithStyle = events.map(ev => ({
@@ -1709,10 +1723,12 @@ function CalendarPage() {
         extendedProps: {
           ...ev.extendedProps,
           source: 'friend',
-          friendUid: friend.friendUid || friend.id,
+          friendUid: friendUid,
           friendName: friend.displayName || friend.email,
         },
       }));
+      
+      console.log('[handleSelectFriend] friendEventsWithStyle =', friendEventsWithStyle, 'length =', friendEventsWithStyle.length);
 
       setFriendEvents(friendEventsWithStyle);
     } catch (error) {

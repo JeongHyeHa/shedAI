@@ -601,10 +601,54 @@ class FirestoreService {
     }
   }
 
-  // 친구의 최신 스케줄 조회 (읽기 전용)
+  // 친구의 최신 스케줄 조회 (읽기 전용) - scheduleSessions 사용
   async getFriendLastSchedule(friendUid) {
+    console.log('[getFriendLastSchedule] friendUid =', friendUid);
     // getLastSchedule과 동일한 로직이지만 friendUid를 사용
-    return this.getLastSchedule(friendUid);
+    const result = await this.getLastSchedule(friendUid);
+    console.log('[getFriendLastSchedule] result =', result);
+    return result;
+  }
+
+  // 친구의 전체 일정 조회 (캘린더용) - scheduleSessions에서 최신 세션의 scheduleData 사용
+  async getFriendSchedules(friendUid) {
+    if (!friendUid) {
+      console.log('[getFriendSchedules] friendUid가 없습니다.');
+      return [];
+    }
+
+    try {
+      console.log('[getFriendSchedules] friendUid =', friendUid);
+      
+      // scheduleSessions에서 최신 활성 세션 가져오기
+      const lastSession = await this.getFriendLastSchedule(friendUid);
+      console.log('[getFriendSchedules] lastSession =', lastSession);
+      
+      if (!lastSession || !lastSession.scheduleData) {
+        console.log('[getFriendSchedules] 친구의 활성 스케줄 세션이 없습니다.');
+        return [];
+      }
+
+      // scheduleData를 배열 형태로 정규화
+      let scheduleArray = [];
+      if (Array.isArray(lastSession.scheduleData)) {
+        scheduleArray = lastSession.scheduleData;
+      } else if (lastSession.scheduleData.days && Array.isArray(lastSession.scheduleData.days)) {
+        scheduleArray = lastSession.scheduleData.days;
+      } else {
+        console.log('[getFriendSchedules] scheduleData 형식이 예상과 다릅니다:', lastSession.scheduleData);
+        return [];
+      }
+
+      console.log('[getFriendSchedules] scheduleArray =', scheduleArray, 'length =', scheduleArray.length);
+      
+      // scheduleArray를 그대로 반환 (CalendarPageRefactored에서 convertScheduleToEvents로 변환)
+      // scheduleData 구조: [{ day: 1, activities: [...] }, { day: 2, activities: [...] }, ...]
+      return scheduleArray;
+    } catch (error) {
+      console.error('[getFriendSchedules] 친구 일정 조회 실패:', error);
+      return [];
+    }
   }
 
   // 최신 스케줄을 "삭제" 처리 (빈 scheduleData를 가진 초기화 세션 저장)

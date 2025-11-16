@@ -11,6 +11,12 @@ service cloud.firestore {
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
+    
+    // Helper function: 내가 userId를 친구로 등록했으면 친구로 인정
+    function isFriend(userId) {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)/friends/$(userId));
+    }
 
     // users 컬렉션: 이메일 검색을 위한 읽기 권한 (제한적)
     match /users/{userId} {
@@ -38,12 +44,11 @@ service cloud.firestore {
       
       // users/{uid}/schedules 서브컬렉션
       match /schedules/{scheduleId} {
-        // 본인 일정은 읽기/쓰기
-        allow read, write: if isOwner(userId);
+        // 읽기: 주인 또는 내 친구 목록에 있는 사람
+        allow read: if isOwner(userId) || isFriend(userId);
         
-        // 친구는 읽기만 허용 (친구 관계가 Firestore에 존재하는지 확인)
-        allow read: if isAuthenticated() &&
-                     exists(/databases/$(database)/documents/users/$(userId)/friends/$(request.auth.uid));
+        // 쓰기: 주인만
+        allow write: if isOwner(userId);
       }
       
       // users/{uid}/devices 서브컬렉션
@@ -68,7 +73,11 @@ service cloud.firestore {
       
       // users/{uid}/scheduleSessions 서브컬렉션 (스케줄 세션)
       match /scheduleSessions/{sessionId} {
-        allow read, write: if isOwner(userId);
+        // 읽기: 주인 또는 내 친구 목록에 있는 사람
+        allow read: if isOwner(userId) || isFriend(userId);
+        
+        // 쓰기: 주인만
+        allow write: if isOwner(userId);
       }
       
       // users/{uid}/aiAdvices 서브컬렉션 (AI 조언)
