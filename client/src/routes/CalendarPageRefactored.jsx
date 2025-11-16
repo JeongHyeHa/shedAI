@@ -1806,9 +1806,27 @@ function CalendarPage() {
         {friendsTabOpen ? '←' : '→'}
       </button>
 
+      {/* 친구 탭 배경 오버레이 (외부 클릭 시 닫기) */}
+      {friendsTabOpen && (
+        <div
+          onClick={() => setFriendsTabOpen(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.1)',
+            zIndex: 999,
+            cursor: 'pointer'
+          }}
+        />
+      )}
+
       {/* 친구 탭 */}
       <div 
         className={`friends-panel ${friendsTabOpen ? 'open' : 'closed'}`}
+        onClick={(e) => e.stopPropagation()} // 탭 내부 클릭 시 닫히지 않도록
         style={{
           position: 'fixed',
           left: friendsTabOpen ? 0 : '-300px',
