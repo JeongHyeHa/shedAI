@@ -2,6 +2,98 @@ const axios = require('axios');
 const https = require('https');
 const { normalizeHHMM, mapDayToWeekday, relDayToWeekdayNumber, extractAllowedDays } = require('../utils/scheduleUtils');
 const { parseLifestyleString } = require('../utils/lifestyleUtils');
+const DAY_TOTAL_MINUTES = 24 * 60;
+const LUNCH_START_MIN = 12 * 60;
+const LUNCH_END_MIN = 14 * 60;
+const WORK_KEYWORDS = /(근무|퇴근|회사|업무|work|job|office|출근|재택)/i;
+
+function toMinutesSafe(timeStr) {
+    if (!timeStr || typeof timeStr !== 'string') return null;
+    const parts = timeStr.split(':').map(Number);
+    if (parts.length < 2 || parts.some(n => Number.isNaN(n))) return null;
+    const [h, m] = parts;
+    return h * 60 + m;
+}
+
+function toTimeString(minutes) {
+    if (!Number.isFinite(minutes)) return null;
+    const wrapped = ((minutes % DAY_TOTAL_MINUTES) + DAY_TOTAL_MINUTES) % DAY_TOTAL_MINUTES;
+    const h = Math.floor(wrapped / 60);
+    const m = wrapped % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function normalizeTitleForMatch(title = '') {
+    return String(title || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function getOccupiedIntervals(dayObj, excludeActivity = null) {
+    return (dayObj.activities || [])
+        .filter(act => act && act !== excludeActivity)
+        .map(act => {
+            const start = toMinutesSafe(act.start);
+            const end = toMinutesSafe(act.end);
+            if (start === null || end === null || end <= start) return null;
+            return { start, end };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.start - b.start);
+}
+
+function findAvailableSlotInWindow(dayObj, duration, windowStart, windowEnd, excludeActivity = null) {
+    const intervals = getOccupiedIntervals(dayObj, excludeActivity);
+    let cursor = windowStart;
+    for (const interval of intervals) {
+        if (interval.end <= cursor) {
+            continue;
+        }
+        if (interval.start >= windowEnd) {
+            break;
+        }
+        if (interval.start > cursor && interval.start - cursor >= duration) {
+            return cursor;
+        }
+        cursor = Math.max(cursor, interval.end);
+        if (cursor >= windowEnd) break;
+    }
+    if (windowEnd - cursor >= duration) {
+        return cursor;
+    }
+    return null;
+}
+
+function moveActivity(activity, newStartMin, duration) {
+    activity.start = toTimeString(newStartMin);
+    activity.end = toTimeString(newStartMin + duration);
+}
+
+function relocateActivityWithinWindow(dayObj, activity, duration, windowStart, windowEnd) {
+    const slot = findAvailableSlotInWindow(dayObj, duration, windowStart, windowEnd, activity);
+    if (slot === null) return false;
+    moveActivity(activity, slot, duration);
+    return true;
+}
+
+function getLatestWorkEndMinute(dayObj) {
+    const workActs = (dayObj.activities || []).filter(
+        act => act && act.type === 'lifestyle' && WORK_KEYWORDS.test(String(act.title || ''))
+    );
+    const ends = workActs
+        .map(act => toMinutesSafe(act.end))
+        .filter(end => end !== null);
+    if (!ends.length) return null;
+    return Math.max(...ends);
+}
+
+function findMatchingActivity(dayObj, taskTitleNorm) {
+    return (dayObj.activities || []).find(act => {
+        if (!act || (act.type !== 'task' && act.type !== 'appointment')) return false;
+        const actTitle = normalizeTitleForMatch(act.title);
+        return actTitle === taskTitleNorm ||
+            actTitle.includes(taskTitleNorm) ||
+            taskTitleNorm.includes(actTitle);
+    });
+}
 
 class AIService {
     constructor() {
@@ -279,6 +371,8 @@ class AIService {
                     timePreference = 'evening';
                 }
                 
+                const requireDaily = task.require_daily === true || bothHigh || highPriority || highDifficulty || urgent || veryUrgent;
+                
                 const taskForAI = {
                     id: taskId,
                     title: task.title,
@@ -294,7 +388,7 @@ class AIService {
                     days_until_deadline: daysUntilDeadline,
                     can_focus_finish: canFocusFinish,
                     // 매일 배치 필요 플래그 (중요도+난이도 모두 상이거나, 긴급한 경우)
-                    require_daily: bothHigh || urgent || veryUrgent,
+                    require_daily: requireDaily,
                     // 메타 정보 (검증용 - 서버에서만 사용)
                     _original: {
                         deadline: task.deadline,
@@ -302,7 +396,7 @@ class AIService {
                         importance: task.importance || '중',
                         difficulty: task.difficulty || '중',
                         daysUntil: daysUntilDeadline,
-                        estimatedMinutes: task.estimatedMinutes || task.durationMin || 60
+                        estimatedMinutes: requiredMinutes
                     }
                 };
                 
@@ -456,17 +550,32 @@ class AIService {
                 const hasWeekendKeyword = feedbackLower.includes('주말');
                 const hasWeekendWorkKeyword = feedbackLower.includes('업무') || feedbackLower.includes('일할') || 
                                       feedbackLower.includes('작업') || feedbackLower.includes('생성') ||
-                                      feedbackLower.includes('배치');
+                                      feedbackLower.includes('배치') || feedbackLower.includes('공부');
+                const weekendDenyPatterns = [
+                    /주말[^.]*쉬고/,
+                    /주말엔 쉬고/,
+                    /주말에는 쉬어/,
+                    /주말 쉬고 싶/,
+                    /평일에만/,
+                    /주말은 비워/,
+                    /주말.*일.*안/,
+                    /주말.*작업.*안/,
+                    /주말.*일하기 싫/
+                ];
+                const weekendAllowPatterns = [
+                    /주말에도/,
+                    /주말에만/,
+                    /주말 위주/,
+                    /주말 시간이 가능/,
+                    /주말 시간만/
+                ];
+                const weekendDeny = weekendDenyPatterns.some(pattern => pattern.test(feedbackLower));
+                const weekendAllow = weekendAllowPatterns.some(pattern => pattern.test(feedbackLower));
                 if (hasWeekendKeyword && hasWeekendWorkKeyword) {
-                    // 주말 업무 금지 키워드 확인
-                    const weekendDeny = feedbackLower.includes('안') || feedbackLower.includes('금지') ||
-                                       feedbackLower.includes('하지') || feedbackLower.includes('싶지') ||
-                                       feedbackLower.includes('원하지') || feedbackLower.includes('ㄴㄴ');
-                    
                     if (weekendDeny) {
                         feedbackConstraints.prohibitWeekendTasks = true;
                         feedbackSection += `\n- 주말(day:6,7)에 task 배치 금지`;
-                    } else {
+                    } else if (weekendAllow) {
                         feedbackConstraints.allowWeekendTasks = true;
                         feedbackSection += `\n- 주말(day:6,7)에도 task 배치`;
                     }
@@ -524,6 +633,10 @@ class AIService {
             // 최종 스케줄 범위 계산
             const finalStartDay = baseRelDay;
             const finalEndDay = baseRelDay + scheduleLength - 1;
+            const getEffectiveDeadlineDay = (task) =>
+                Number.isFinite(task?.deadline_day) && task.deadline_day !== 999
+                    ? task.deadline_day
+                    : finalEndDay;
             
             
             // 생활 패턴 매핑 텍스트 생성 (간단한 버전)
@@ -785,11 +898,10 @@ class AIService {
                     }
                     
                     // 해당 일정 찾기 (느슨한 제목 매칭 + 타입 확인)
-                    const normalizeTitle = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, '');
-                    const targetTitle = normalizeTitle(apt.title);
+                    const targetTitle = normalizeTitleForMatch(apt.title);
                     const activity = dayObj.activities.find(a => {
                         if (a.type !== 'task' && a.type !== 'appointment') return false;
-                        const actTitle = normalizeTitle(a.title);
+                        const actTitle = normalizeTitleForMatch(a.title);
                         // 완전 일치 또는 포함 관계 확인
                         return actTitle === targetTitle || 
                                actTitle.includes(targetTitle) || 
@@ -832,99 +944,131 @@ class AIService {
             }
             
             // 2. time_preference 검증 및 수정 (전체 범위 검사)
-            const morningTasks = tasksForAI.filter(t => t.timePreference === 'morning');
-            if (morningTasks.length > 0) {
+            if (feedbackConstraints.preferMorning) {
+                const morningTasks = tasksForAI.filter(t => t.timePreference === 'morning');
                 morningTasks.forEach(task => {
-                    // deadline_day까지의 모든 day에서 검사
-                    const targetDays = finalSchedule.filter(d => 
-                        d.day >= baseRelDay && d.day <= task.deadline_day
-                    );
-                    
-                    targetDays.forEach(dayObj => {
-                        // 해당 작업 찾기 (느슨한 제목 매칭)
-                        const normalizeTitle = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, '');
-                        const targetTitle = normalizeTitle(task.title);
-                        const activity = dayObj.activities.find(a => {
-                            if (a.type !== 'task' && a.type !== 'appointment') return false;
-                            const actTitle = normalizeTitle(a.title);
-                            return actTitle === targetTitle || 
-                                   actTitle.includes(targetTitle) || 
-                                   targetTitle.includes(actTitle);
-                        });
-                    
-                        if (activity) {
-                            const [startH] = (activity.start || '').split(':').map(Number);
-                            // 12:00 이후에 배치되어 있으면 오전으로 이동 시도
-                            if (startH >= 12) {
-                                // 오전 빈 시간 찾기 (06:00~12:00)
-                                const morningSlots = [];
-                                const sortedActivities = [...dayObj.activities]
-                                    .filter(a => {
-                                        // 현재 작업이 아닌 것만 필터
-                                        const aTitle = normalizeTitle(a.title);
-                                        return a.type !== 'task' || aTitle !== targetTitle;
-                                    })
-                                    .sort((a, b) => {
-                                        const [ah, am] = (a.start || '00:00').split(':').map(Number);
-                                        const [bh, bm] = (b.start || '00:00').split(':').map(Number);
-                                        return (ah * 60 + am) - (bh * 60 + bm);
-                                    });
-                                
-                                // 오전 시간대 빈 슬롯 찾기
-                                let lastEnd = 6 * 60; // 06:00
-                                for (const act of sortedActivities) {
-                                    const [sh, sm] = (act.start || '00:00').split(':').map(Number);
-                                    const [eh, em] = (act.end || '00:00').split(':').map(Number);
-                                    const startMin = sh * 60 + sm;
-                                    const endMin = eh * 60 + em;
-                                    
-                                    if (startMin >= 12 * 60) break; // 오후는 무시
-                                    if (startMin > lastEnd && startMin < 12 * 60) {
-                                        morningSlots.push({ start: lastEnd, end: startMin });
-                                    }
-                                    if (endMin > lastEnd) lastEnd = endMin;
-                                }
-                                
-                                // 12:00까지 빈 슬롯이 있으면 추가
-                                if (lastEnd < 12 * 60) {
-                                    morningSlots.push({ start: lastEnd, end: 12 * 60 });
-                                }
-                                
-                                // 작업 시간 계산
-                                const [actStartH, actStartM] = (activity.start || '00:00').split(':').map(Number);
-                                const [actEndH, actEndM] = (activity.end || '00:00').split(':').map(Number);
-                                const duration = (actEndH * 60 + actEndM) - (actStartH * 60 + actStartM);
-                                
-                                // 적합한 오전 슬롯 찾기
-                                const suitableSlot = morningSlots.find(slot => (slot.end - slot.start) >= duration);
-                                
-                                if (suitableSlot) {
-                                    const newStartH = Math.floor(suitableSlot.start / 60);
-                                    const newStartM = suitableSlot.start % 60;
-                                    const newEndMin = suitableSlot.start + duration;
-                                    const newEndH = Math.floor(newEndMin / 60);
-                                    const newEndM = newEndMin % 60;
-                                    
-                                    activity.start = `${String(newStartH).padStart(2, '0')}:${String(newStartM).padStart(2, '0')}`;
-                                    activity.end = `${String(newEndH).padStart(2, '0')}:${String(newEndM).padStart(2, '0')}`;
-                                }
+                    const targetTitle = normalizeTitleForMatch(task.title);
+                    finalSchedule
+                        .filter(dayObj => {
+                            const effectiveDeadline = getEffectiveDeadlineDay(task);
+                            return dayObj.day >= baseRelDay && dayObj.day <= effectiveDeadline;
+                        })
+                        .forEach(dayObj => {
+                            const activity = findMatchingActivity(dayObj, targetTitle);
+                            const startMin = activity ? toMinutesSafe(activity.start) : null;
+                            const endMin = activity ? toMinutesSafe(activity.end) : null;
+                            if (!activity || startMin === null || endMin === null) return;
+                            if (startMin >= 12 * 60) {
+                                const duration = endMin - startMin;
+                                relocateActivityWithinWindow(dayObj, activity, duration, 6 * 60, 12 * 60);
                             }
+                        });
+                });
+            }
+
+            if (feedbackConstraints.preferEvening) {
+                const eveningTasks = tasksForAI.filter(t => t.timePreference === 'evening');
+                eveningTasks.forEach(task => {
+                    const targetTitle = normalizeTitleForMatch(task.title);
+                    finalSchedule
+                        .filter(dayObj => {
+                            const effectiveDeadline = getEffectiveDeadlineDay(task);
+                            return dayObj.day >= baseRelDay && dayObj.day <= effectiveDeadline;
+                        })
+                        .forEach(dayObj => {
+                            const activity = findMatchingActivity(dayObj, targetTitle);
+                            const startMin = activity ? toMinutesSafe(activity.start) : null;
+                            const endMin = activity ? toMinutesSafe(activity.end) : null;
+                            if (!activity || startMin === null || endMin === null) return;
+                            if (startMin < 18 * 60) {
+                                const duration = endMin - startMin;
+                                relocateActivityWithinWindow(dayObj, activity, duration, 18 * 60, 23 * 60);
+                            }
+                        });
+                });
+            }
+
+            if (feedbackConstraints.noWorkDuringLunch) {
+                let lunchRelocated = 0;
+                let lunchRemoved = 0;
+                finalSchedule.forEach(dayObj => {
+                    dayObj.activities = (dayObj.activities || []).filter(act => {
+                        if (!act || act.type !== 'task') return true;
+                        const startMin = toMinutesSafe(act.start);
+                        const endMin = toMinutesSafe(act.end);
+                        if (startMin === null || endMin === null) return true;
+                        const overlap = !(endMin <= LUNCH_START_MIN || startMin >= LUNCH_END_MIN);
+                        if (!overlap) return true;
+                        const duration = endMin - startMin;
+                        const moved =
+                            relocateActivityWithinWindow(dayObj, act, duration, LUNCH_END_MIN, DAY_TOTAL_MINUTES) ||
+                            relocateActivityWithinWindow(dayObj, act, duration, 0, LUNCH_START_MIN);
+                        if (moved) {
+                            lunchRelocated++;
+                            return true;
                         }
+                        lunchRemoved++;
+                        return false;
                     });
                 });
+                if (lunchRelocated || lunchRemoved) {
+                    console.warn(`[검증] 점심 시간 제약 적용 - 재배치:${lunchRelocated}, 제거:${lunchRemoved}`);
+                }
+            }
+
+            if (feedbackConstraints.noWorkWithin1hAfterWork) {
+                let afterWorkRelocated = 0;
+                let afterWorkRemoved = 0;
+                finalSchedule.forEach(dayObj => {
+                    const workEnd = getLatestWorkEndMinute(dayObj);
+                    if (workEnd === null) return;
+                    const restrictedStart = workEnd;
+                    const restrictedEnd = Math.min(DAY_TOTAL_MINUTES, workEnd + 60);
+                    dayObj.activities = (dayObj.activities || []).filter(act => {
+                        if (!act || act.type !== 'task') return true;
+                        const startMin = toMinutesSafe(act.start);
+                        const endMin = toMinutesSafe(act.end);
+                        if (startMin === null || endMin === null) return true;
+                        if (startMin >= restrictedStart && startMin < restrictedEnd) {
+                            const duration = endMin - startMin;
+                            const movedForward = relocateActivityWithinWindow(dayObj, act, duration, restrictedEnd, DAY_TOTAL_MINUTES);
+                            const beforeWindowEnd = Math.max(0, restrictedStart - 5);
+                            const movedBackward = !movedForward && beforeWindowEnd > 0
+                                ? relocateActivityWithinWindow(dayObj, act, duration, 0, beforeWindowEnd)
+                                : false;
+                            const moved = movedForward || movedBackward;
+                            if (moved) {
+                                afterWorkRelocated++;
+                                return true;
+                            }
+                            afterWorkRemoved++;
+                            return false;
+                        }
+                        return true;
+                    });
+                });
+                if (afterWorkRelocated || afterWorkRemoved) {
+                    console.warn(`[검증] 퇴근 후 1시간 제약 적용 - 재배치:${afterWorkRelocated}, 제거:${afterWorkRemoved}`);
+                }
             }
             
             // 3. 생활패턴 필터링: 사용자가 입력하지 않은 lifestyle 제거
             if (lifestyleTexts.length > 0) {
                 const parsedLifestyle = lifestyleTexts
                     .map(text => parseLifestyleString(text))
-                    .filter(p => p && Array.isArray(p.days) && p.days.length > 0);
+                    .filter(p => p && Array.isArray(p.days) && p.days.length > 0)
+                    .map(p => ({ ...p, normTitle: normalizeTitleForMatch(p.title) }));
                 
-                // title + 요일로 허용 여부 판단
                 const isAllowedLifestyle = (title, relDay) => {
                     const weekdayNum = relDayToWeekdayNumber(relDay, now); // 1~7
+                    const normTitle = normalizeTitleForMatch(title);
                     return parsedLifestyle.some(p => 
-                        p.title === title && p.days.includes(weekdayNum)
+                        p.days.includes(weekdayNum) &&
+                        (
+                            normTitle === p.normTitle ||
+                            (!normTitle && !p.normTitle) ||
+                            (normTitle && p.normTitle && (normTitle.includes(p.normTitle) || p.normTitle.includes(normTitle)))
+                        )
                     );
                 };
                 
@@ -945,15 +1089,14 @@ class AIService {
             }
             
             // 4. 마감일 이후 배치 금지 검증
-            const normalizeTitle = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, '');
             let removedAfterDeadlineCount = 0;
             finalSchedule.forEach(dayObj => {
                 dayObj.activities = dayObj.activities.filter(act => {
                     if (act.type !== 'task' && act.type !== 'appointment') return true;
                     
-                    const actTitle = normalizeTitle(act.title);
+                    const actTitle = normalizeTitleForMatch(act.title);
                     const matchedTask = tasksForAI.find(t => {
-                        const tTitle = normalizeTitle(t.title);
+                        const tTitle = normalizeTitleForMatch(t.title);
                         return actTitle === tTitle || 
                                actTitle.includes(tTitle) || 
                                tTitle.includes(actTitle);
@@ -972,9 +1115,7 @@ class AIService {
                 console.warn(`[검증] 마감일 이후 배치된 작업 ${removedAfterDeadlineCount}개 제거됨`);
             }
             
-            // 5. 피드백 기반 제약 조건 강제 적용
-            // ⚠️ 현재 서버에서 강제 적용되는 제약: 주말 업무 금지만
-            // 나머지 제약(preferMorning, noWorkDuringLunch 등)은 프롬프트에만 포함되어 AI에게 위임
+            // 5. 피드백 기반 제약 조건 강제 적용 (주말 업무 금지)
             if (feedbackConstraints.prohibitWeekendTasks) {
                 let removedWeekendTaskCount = 0;
                 finalSchedule.forEach(dayObj => {
@@ -989,12 +1130,7 @@ class AIService {
                     console.warn(`[검증] 주말 업무 금지: 주말 task ${removedWeekendTaskCount}개 제거됨`);
                 }
             }
-            
-            // TODO: 향후 추가 가능한 강제 제약 조건
-            // - noWorkDuringLunch: 점심 시간대(12:00~14:00) task 제거
-            // - noWorkWithin1hAfterWork: 퇴근 후 1시간 이내 task 제거
-            // - preferMorning/preferEvening: time_preference 강제 재배치
-            
+
             // notes를 explanation에 통합 (notes가 있으면 우선 사용)
             let finalExplanation = '';
             if (notes.length > 0) {

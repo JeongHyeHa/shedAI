@@ -250,6 +250,8 @@ class AIController {
                 const normalizedTitle = shouldNormalizeTitle(rawTitle)
                   ? extractTaskTitle(rawTitle)
                   : rawTitle.trim();
+                const importance = t?.importance || '중';
+                const difficulty = t?.difficulty || '중';
                 
                 return {
                     id: t?.id || null, // id 필드 유지 (마감일 캡핑 시 매칭용)
@@ -258,8 +260,8 @@ class AIController {
                     deadlineTime: t?.deadlineTime || null,
                     startTime: t?.startTime || null, // deadlineTime 별칭
                     type: t?.type || 'task',
-                    importance: t?.importance || '중',
-                    difficulty: t?.difficulty || '중',
+                    importance,
+                    difficulty,
                     description: t?.description || '',
                     estimatedMinutes: t?.estimatedMinutes || t?.durationMin || null,
                     durationMin: t?.durationMin || t?.estimatedMinutes || null,
@@ -291,6 +293,8 @@ class AIController {
                         const normalizedTitle = shouldNormalizeTitle(rawTitle)
                           ? extractTaskTitle(rawTitle)
                           : rawTitle.trim();
+                        const importance = t?.importance || '중';
+                        const difficulty = t?.difficulty || '중';
 
                         return {
                             id: t?.id || null, // id 필드 유지 (마감일 캡핑 시 매칭용)
@@ -299,8 +303,8 @@ class AIController {
                             deadlineTime: t?.deadlineTime || null,
                             startTime: t?.startTime || null, // deadlineTime 별칭
                             type: t?.type || 'task',
-                            importance: t?.importance || '중',
-                            difficulty: t?.difficulty || '중',
+                            importance,
+                            difficulty,
                             description: t?.description || '',
                             estimatedMinutes: t?.estimatedMinutes || t?.durationMin || null,
                             durationMin: t?.durationMin || t?.estimatedMinutes || null,
