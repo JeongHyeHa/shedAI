@@ -116,7 +116,7 @@ class AIService {
                     // extractAllowedDays는 baseRelDay 기준 상대 day 값 반환
                     const maxDay = Math.max(...extractedDays);
                     taskDays = Array.from({ length: maxDay - baseRelDay + 1 }, (_, i) => baseRelDay + i);
-                    scheduleLength = maxDay - baseRelDay + 1;
+                    scheduleLength = Math.max(14, maxDay - baseRelDay + 1);
                 } else {
                     let windowDays = 14;
                     const mDayWithin = rawUser.match(/(\d+)\s*일\s*(내|이내|안에)/);
@@ -139,7 +139,7 @@ class AIService {
                         }
                     }
                     taskDays = Array.from({ length: windowDays }, (_, i) => baseRelDay + i);
-                    scheduleLength = windowDays;
+                    scheduleLength = Math.max(14, windowDays);
                 }
                 lifestyleDays = Array.from({ length: scheduleLength }, (_, i) => baseRelDay + i);
             } else {

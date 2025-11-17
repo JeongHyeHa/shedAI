@@ -2,6 +2,7 @@
 const aiService = require('../services/aiService');
 const utils = require('../utils/lifestyleParser');
 const { extractTaskTitle } = require('../utils/taskUtils');
+const META_INFO_REGEX = /(중요도|난이도|priority|difficulty|중요\s*도|난이\s*도)/i;
 // --- helpers: deadline cap ---
 const toDateSafe = (v) => {
     if (!v) return null;
@@ -225,6 +226,14 @@ class AIController {
             }
 
             // 기존 할 일 준비
+            const shouldNormalizeTitle = (title = '') => {
+                const trimmed = (title || '').trim();
+                if (!trimmed) return true;
+                if (trimmed.length > 40) return true;
+                if (META_INFO_REGEX.test(trimmed)) return true;
+                return /해야|해야\s*해|해야\s*함|만들어야|준비해야/.test(trimmed);
+            };
+
             const normFromClient = t => {
                 let dl = t?.deadline;
                 if (dl?.toDate) dl = dl.toDate();
@@ -238,7 +247,9 @@ class AIController {
                 
                 // title 정제: 사용자 입력에서 핵심 명사구만 추출
                 const rawTitle = t?.title || t?.description || '';
-                const normalizedTitle = extractTaskTitle(rawTitle);
+                const normalizedTitle = shouldNormalizeTitle(rawTitle)
+                  ? extractTaskTitle(rawTitle)
+                  : rawTitle.trim();
                 
                 return {
                     id: t?.id || null, // id 필드 유지 (마감일 캡핑 시 매칭용)
@@ -277,7 +288,9 @@ class AIController {
 
                         // title 정제: DB에 저장된 title도 정제 (혹시 모를 잘못된 데이터 대비)
                         const rawTitle = t?.title || t?.description || '';
-                        const normalizedTitle = extractTaskTitle(rawTitle);
+                        const normalizedTitle = shouldNormalizeTitle(rawTitle)
+                          ? extractTaskTitle(rawTitle)
+                          : rawTitle.trim();
 
                         return {
                             id: t?.id || null, // id 필드 유지 (마감일 캡핑 시 매칭용)

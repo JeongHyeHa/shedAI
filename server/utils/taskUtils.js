@@ -17,9 +17,9 @@ const ACTION_VERBS = [
 const ACTION_VERB_PATTERN = `(${ACTION_VERBS.map(v => v.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')).join('|')})`;
 
 function cleanupTitle(title, sourceText = '') {
-  if (!title || typeof title !== 'string') return title;
+  if (!title || typeof title !== 'string') return '할 일';
   let out = stripLeadingDateTimePhrases(title).replace(/\s+/g, ' ').trim();
-  out = out.replace(/\s*(해서|하려고|하려|하려면|하려고|하려니|하려함|하고|하고자|하고싶|하고싶어|하고싶다|싶어|싶다)\s.*$/g, '').trim();
+  out = out.replace(/\s*(해서|하려고|하려|하려면|하려니|하려함|하고|하고자|하고싶|하고싶어|하고싶다|싶어|싶다)\s.*$/g, '').trim();
   const metaIdx = out.search(META_INFO_REGEX);
   if (metaIdx !== -1) {
     out = out.slice(0, metaIdx).trim();
@@ -37,7 +37,10 @@ function cleanupTitle(title, sourceText = '') {
   if (DEBUG_TITLE) {
     console.debug('[taskTitle:cleanup]', out);
   }
-  return out || '할 일';
+  if (!out || out.length < 2 || ['오늘','내일','모레','이번주','다음주','다음','주말'].includes(out)) {
+    return '할 일';
+  }
+  return out;
 }
 
 // 🔹 앞쪽에 붙은 날짜/시간/오늘·내일 같은 표현 제거 유틸
@@ -140,6 +143,9 @@ function extractTaskTitle(input) {
 
   const actionSourceText = text;
 
+  // 날짜/시간 접두어 제거를 가장 먼저 적용
+  text = stripLeadingDateTimePhrases(text);
+
   // 메타 정보 제거 (중요도/난이도 등)
   const metaIdx = text.search(META_INFO_REGEX);
   if (metaIdx !== -1) {
@@ -200,13 +206,9 @@ function extractTaskTitle(input) {
   );
   const fallbackActionMatch = text.match(fallbackActionRegex);
   if (fallbackActionMatch) {
-    let cand = stripLeadingDateTimePhrases(fallbackActionMatch[1].trim());
+    let cand = fallbackActionMatch[1].trim();
     const verb = fallbackActionMatch[2];
     if (cand) {
-      if (DEBUG_TITLE) {
-        console.debug('[taskTitle:fallbackAction]', { cand, verb });
-      }
-      return cleanupTitle(`${cand} ${verb}`, actionSourceText);
       return cleanupTitle(`${cand} ${verb}`, actionSourceText);
     }
   }
@@ -249,12 +251,11 @@ function extractTaskTitle(input) {
   title = title.replace(/^(은|는|을|를|이|가)\s+/, '').trim();
 
   // 7) 최종 정제: 앞뒤 공백 제거 및 빈 문자열 체크
-  if (!title || title.length < 1) {
+  if (!title || title.length < 2 || ['오늘','내일','모레','이번주','다음주','다음','주말'].includes(title)) {
     // 그래도 못 뽑았으면 원문에서 한 번 더 시도
-    let verbMatch = input.match(/([가-힣A-Za-z0-9\s]{2,40})\s*(만들어야|준비해야|해야|작성해야)/);
+    let verbMatch = input.match(/([가-힣A-Za-z0-9\s]{2,60})\s*(만들어야|준비해야|해야|작성해야)/);
     if (verbMatch && verbMatch[1]) {
       title = verbMatch[1].trim();
-      // 👉 여기서도 날짜/시간/조사 제거
       title = stripLeadingDateTimePhrases(title);
       title = title.replace(/(을|를|은|는|이|가)\s*$/g, '').trim();
       const metaIdx3 = title.search(META_INFO_REGEX);
