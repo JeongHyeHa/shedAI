@@ -336,8 +336,21 @@ class AIService {
             }
             
             
-            // 사용자 메시지만 최근 6개 유지
-            let userMessages = (messages || []).filter(m => m && m.role === 'user').slice(-6);
+            // 사용자 메시지는 파싱 용도로만 원본을 보관하고,
+            // OpenAI로 전달할 때는 간결한 지시 한 줄만 보낸다.
+            const rawUserMessages = (messages || []).filter(m => m && m.role === 'user').slice(-6);
+            const lastUserMessage = [...(messages || [])].reverse().find(m => m && m.role === 'user');
+
+            const conciseInstruction = lastUserMessage
+                ? '위에 정리된 lifestyle, tasks, 제약 조건을 바탕으로 scheduleData JSON을 생성해줘.'
+                : '위의 데이터와 규칙에 맞춰 scheduleData를 JSON으로 생성해줘.';
+
+            const userMessages = [
+                {
+                    role: 'user',
+                    content: conciseInstruction
+                }
+            ];
             
             // AI에 넘길 tasks (간소화된 스키마)
             const tasksForAIJSON = tasksForAI.map(t => {
@@ -393,7 +406,7 @@ class AIService {
             
             // 3) userMessages에서 [생활 패턴] 섹션 추출 (fallback)
             if (lifestyleTexts.length === 0) {
-                const allUserContent = userMessages.map(m => m.content || '').join('\n');
+                const allUserContent = rawUserMessages.map(m => m.content || '').join('\n');
                 const lifestyleSectionMatch = allUserContent.match(/\[생활 패턴\]([\s\S]*?)(?:\[할 일 목록\]|$)/i);
                 if (lifestyleSectionMatch && lifestyleSectionMatch[1]) {
                     const extractedTexts = lifestyleSectionMatch[1]
@@ -561,12 +574,6 @@ class AIService {
             // 프롬프트 길이 체크 (대략적 토큰 추정: 1토큰 ≈ 4자)
             const totalChars = systemPrompt.content.length + userMessages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
             const approxTokens = Math.ceil(totalChars / 4);
-            
-            if (approxTokens > 120000) { // gpt-4o-mini 컨텍스트 한계 대략 128k
-                console.warn(`[경고] 프롬프트가 매우 깁니다 (${approxTokens}토큰). 일부 메시지를 축약합니다.`);
-                // userMessages를 최근 3개로 제한
-                userMessages = userMessages.slice(-3);
-            }
             
             // 시스템 프롬프트를 맨 앞에 추가 (userMessages 줄인 후에 생성)
             const enhancedMessages = [systemPrompt, ...userMessages]
