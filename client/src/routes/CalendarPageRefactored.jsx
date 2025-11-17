@@ -45,6 +45,7 @@ import {
   toYMDLocal
 } from '../utils/dateUtils';
 import { toISODateLocal, toKoreanDate, toLocalMidnightDate } from '../utils/dateNormalize';
+import { extractTaskTitle as extractTaskTitleClient } from '../utils/taskParse';
 import { serverTimestamp } from 'firebase/firestore';
 import '../styles/calendar.css';
 import '../styles/floating.css';
@@ -904,8 +905,12 @@ function CalendarPage() {
         if (user?.uid) {
           // 제목 정리: 꼬리 제거 및 간단화
           const cleanTitle = (() => {
-            let t = (parsed.title || messageText || '').trim();
-            t = t
+            const baseText = (parsed.title || messageText || '').trim();
+            const extracted = extractTaskTitleClient(baseText);
+            if (extracted && extracted !== '할 일') {
+              return extracted;
+            }
+            let fallback = baseText
               .replace(/일정\s*(?:좀|좀만)?\s*추가해줘\.?$/i, '')
               .replace(/일정\s*(?:좀|좀만)?\s*넣어줘\.?$/i, '')
               .replace(/일정\s*잡아줘\.?$/i, '')
@@ -913,12 +918,11 @@ function CalendarPage() {
               .replace(/해줘\.?$/i, '')
               .replace(/\s+/g, ' ')
               .trim();
-            t = t.replace(/(일정)$/i, '').trim();
-            if (t.length > 30) {
-              const m = t.match(/([가-힣A-Za-z0-9]+)(?:\s|$)/);
-              if (m) t = m[1];
+            fallback = fallback.replace(/(일정)$/i, '').trim();
+            if (fallback.length > 50) {
+              fallback = fallback.slice(0, 50).trim();
             }
-            return t || '회의';
+            return fallback || '할 일';
           })();
           const isApptCmd = endsWithAppointmentCommand(messageText);
           if (isApptCmd) {
@@ -927,6 +931,7 @@ function CalendarPage() {
             parsed.estimatedMinutes = parsed.estimatedMinutes ?? 60;
           } else {
             parsed.type = 'task';
+            parsed.title = cleanTitle;
           }
           await firestoreService.saveTask(user.uid, {
             title: cleanTitle,
