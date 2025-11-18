@@ -1258,16 +1258,27 @@ class AIService {
                 }
             }
             
-            // AI 응답 검증: day 범위 확인
+            // AI 응답 검증: day 범위 확인 및 누락된 day 자동 추가
             const generatedDays = Array.from(dayMap.keys()).sort((a, b) => a - b);
             const expectedStartDay = finalStartDay;
             const expectedEndDay = finalEndDay;
             const actualStartDay = generatedDays.length > 0 ? generatedDays[0] : null;
             const actualEndDay = generatedDays.length > 0 ? generatedDays[generatedDays.length - 1] : null;
             
-            // 경고: day 범위가 부족하면 경고 로그만 출력
-            if (actualEndDay < expectedEndDay) {
-                console.warn(`[경고] AI 응답이 불완전합니다. day ${expectedEndDay}까지 생성해야 하는데 day ${actualEndDay}까지만 생성했습니다.`);
+            // 누락된 day 자동 추가
+            for (let day = expectedStartDay; day <= expectedEndDay; day++) {
+                if (!dayMap.has(day)) {
+                    const weekdayNames = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+                    const weekdayNum = relDayToWeekdayNumber(day, now);
+                    const weekday = weekdayNames[weekdayNum];
+                    
+                    dayMap.set(day, {
+                        day: day,
+                        weekday: weekday,
+                        activities: []
+                    });
+                    console.warn(`[보정] 누락된 day ${day}(${weekday}) 자동 추가됨`);
+                }
             }
             
             dayArrays = Array.from(dayMap.values()).sort((a, b) => a.day - b.day);
