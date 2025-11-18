@@ -1,6 +1,6 @@
 const axios = require('axios');
 const https = require('https');
-const { normalizeHHMM, mapDayToWeekday, relDayToWeekdayNumber, extractAllowedDays } = require('../utils/scheduleUtils');
+const { normalizeHHMM, mapDayToWeekday, relDayToWeekdayNumber, extractAllowedDays, minutesToTime } = require('../utils/scheduleUtils');
 const { parseLifestyleString } = require('../utils/lifestyleUtils');
 const DAY_TOTAL_MINUTES = 24 * 60;
 const LUNCH_START_MIN = 12 * 60;
@@ -93,6 +93,406 @@ function findMatchingActivity(dayObj, taskTitleNorm) {
             actTitle.includes(taskTitleNorm) ||
             taskTitleNorm.includes(actTitle);
     });
+}
+
+function ensureDayEntry(finalSchedule, relDay, now) {
+    let dayObj = finalSchedule.find(d => d.day === relDay);
+    if (!dayObj) {
+        dayObj = {
+            day: relDay,
+            weekday: mapDayToWeekday(relDay, now),
+            activities: []
+        };
+        finalSchedule.push(dayObj);
+    }
+    if (!Array.isArray(dayObj.activities)) {
+        dayObj.activities = [];
+    }
+    return dayObj;
+}
+
+function maybeAddLifestyleBlock(dayObj, title, startMin, endMin) {
+    if (!dayObj || endMin <= startMin) return 0;
+    const start = minutesToTime(startMin);
+    const end = minutesToTime(endMin);
+    const norm = normalizeTitleForMatch(title);
+    const exists = (dayObj.activities || []).some(
+        act =>
+            act.type === 'lifestyle' &&
+            normalizeTitleForMatch(act.title) === norm &&
+            act.start === start &&
+            act.end === end
+    );
+    if (exists) return 0;
+    dayObj.activities.push({
+        start,
+        end,
+        title,
+        type: 'lifestyle'
+    });
+    return 1;
+}
+
+function ensureLifestyleCoverage(finalSchedule, lifestyleTexts, finalStartDay, finalEndDay, now) {
+    if (!Array.isArray(lifestyleTexts) || lifestyleTexts.length === 0) {
+        return { inserted: 0 };
+    }
+    const parsed = lifestyleTexts
+        .map(text => parseLifestyleString(text))
+        .filter(p => p && p.start && p.end && Array.isArray(p.days) && p.days.length > 0)
+        .map(p => ({
+            ...p,
+            startMin: toMinutesSafe(p.start),
+            endMin: toMinutesSafe(p.end),
+            normTitle: normalizeTitleForMatch(p.title)
+        }))
+        .filter(p => p.startMin !== null && p.endMin !== null);
+    if (parsed.length === 0) {
+        return { inserted: 0 };
+    }
+    let inserted = 0;
+    const dayCache = new Map();
+    const getDay = (relDay) => {
+        if (!dayCache.has(relDay)) {
+            dayCache.set(relDay, ensureDayEntry(finalSchedule, relDay, now));
+        }
+        return dayCache.get(relDay);
+    };
+    for (let relDay = finalStartDay; relDay <= finalEndDay; relDay++) {
+        const dayObj = getDay(relDay);
+        const weekdayNum = relDayToWeekdayNumber(relDay, now);
+        parsed.forEach(pattern => {
+            if (!pattern.days.includes(weekdayNum)) return;
+            if (pattern.startMin < pattern.endMin) {
+                inserted += maybeAddLifestyleBlock(dayObj, pattern.title, pattern.startMin, pattern.endMin);
+            } else {
+                inserted += maybeAddLifestyleBlock(dayObj, pattern.title, pattern.startMin, DAY_TOTAL_MINUTES);
+                if (relDay < finalEndDay) {
+                    const nextDay = getDay(relDay + 1);
+                    inserted += maybeAddLifestyleBlock(nextDay, pattern.title, 0, pattern.endMin);
+                }
+            }
+        });
+    }
+    finalSchedule.sort((a, b) => a.day - b.day);
+    finalSchedule.forEach(day => {
+        day.activities = (day.activities || []).sort((a, b) => {
+            const as = toMinutesSafe(a.start);
+            const bs = toMinutesSafe(b.start);
+            if (as === null && bs === null) return 0;
+            if (as === null) return 1;
+            if (bs === null) return -1;
+            return as - bs;
+        });
+    });
+    return { inserted };
+}
+
+function getPreferredWindows(timePreference) {
+    const baseWindows = [
+        [6 * 60, 12 * 60],   // 06:00~12:00
+        [12 * 60, 15 * 60],  // 12:00~15:00
+        [15 * 60, 18 * 60],  // 15:00~18:00
+        [18 * 60, 23 * 60],  // 18:00~23:00
+    ];
+    if (timePreference === 'morning') {
+        return [
+            [6 * 60, 11 * 60],
+            [11 * 60, 14 * 60],
+            [14 * 60, 18 * 60],
+            [18 * 60, 23 * 60]
+        ];
+    }
+    if (timePreference === 'evening') {
+        return [
+            [18 * 60, 23 * 60],
+            [14 * 60, 18 * 60],
+            [11 * 60, 14 * 60],
+            [6 * 60, 11 * 60]
+        ];
+    }
+    return baseWindows;
+}
+
+function selectDistributionDays(startDay, endDay, desiredCount = 3) {
+    const total = endDay - startDay + 1;
+    if (total <= 0) return [];
+    const count = Math.min(desiredCount, total);
+    if (count <= 0) return [];
+    if (count === 1) return [startDay];
+    const step = total / count;
+    const days = [];
+    for (let i = 0; i < count; i++) {
+        const rel = Math.round(startDay + i * step);
+        if (rel >= startDay && rel <= endDay) {
+            days.push(rel);
+        }
+    }
+    return Array.from(new Set(days)).sort((a, b) => a - b);
+}
+
+function placeTaskBlock(dayObj, task, duration) {
+    if (!dayObj) return false;
+    const pref = (typeof task.timePreference === 'string' && task.timePreference.trim().length > 0)
+        ? task.timePreference
+        : 'any';
+    const windows = getPreferredWindows(pref);
+    for (const [start, end] of windows) {
+        const slot = findAvailableSlotInWindow(dayObj, duration, start, end);
+        if (slot !== null) {
+            dayObj.activities.push({
+                start: minutesToTime(slot),
+                end: minutesToTime(slot + duration),
+                title: task.title,
+                type: 'task',
+                __autoInserted: true
+            });
+            dayObj.activities.sort((a, b) => {
+                const as = toMinutesSafe(a.start);
+                const bs = toMinutesSafe(b.start);
+                if (as === null && bs === null) return 0;
+                if (as === null) return 1;
+                if (bs === null) return -1;
+                return as - bs;
+            });
+            return true;
+        }
+    }
+    const fallbackSlot = findAvailableSlotInWindow(dayObj, duration, 0, DAY_TOTAL_MINUTES);
+    if (fallbackSlot !== null) {
+        dayObj.activities.push({
+            start: minutesToTime(fallbackSlot),
+            end: minutesToTime(fallbackSlot + duration),
+            title: task.title,
+            type: 'task',
+            __autoInserted: true
+        });
+        dayObj.activities.sort((a, b) => {
+            const as = toMinutesSafe(a.start);
+            const bs = toMinutesSafe(b.start);
+            if (as === null && bs === null) return 0;
+            if (as === null) return 1;
+            if (bs === null) return -1;
+            return as - bs;
+        });
+        return true;
+    }
+    return false;
+}
+
+function ensureTaskCoverage(finalSchedule, tasksForAI, finalStartDay, finalEndDay, now, getEffectiveDeadlineDay) {
+    if (!Array.isArray(tasksForAI) || tasksForAI.length === 0) {
+        return { insertedBlocks: 0, recoveredTasks: 0, missingTasks: 0 };
+    }
+    let insertedBlocks = 0;
+    let recoveredTasks = 0;
+    let missingTasks = 0;
+    const titleMap = new Map();
+    tasksForAI.forEach(task => {
+        if (!task || (task.type && task.type !== 'task')) return;
+        const norm = normalizeTitleForMatch(task.title);
+        if (!norm) return;
+        titleMap.set(norm, task);
+    });
+    for (const [, task] of titleMap) {
+        const norm = normalizeTitleForMatch(task.title);
+        const effectiveDeadline = Math.min(
+            getEffectiveDeadlineDay ? getEffectiveDeadlineDay(task) : finalEndDay,
+            finalEndDay
+        );
+        const hasPlacement = finalSchedule.some(dayObj => {
+            if (!dayObj || dayObj.day > effectiveDeadline) return false;
+            return !!findMatchingActivity(dayObj, norm);
+        });
+        if (hasPlacement) continue;
+        missingTasks++;
+        const distributionDays = selectDistributionDays(finalStartDay, effectiveDeadline, task.require_daily ? 5 : 3);
+        let placedThisTask = false;
+        const duration = Math.max(30, Number(task.min_block_minutes) || 60);
+        distributionDays.forEach(relDay => {
+            if (relDay > effectiveDeadline) return;
+            const dayObj = ensureDayEntry(finalSchedule, relDay, now);
+            if (placeTaskBlock(dayObj, task, duration)) {
+                insertedBlocks++;
+                placedThisTask = true;
+            }
+        });
+        if (placedThisTask) {
+            recoveredTasks++;
+        }
+    }
+    if (insertedBlocks > 0) {
+        finalSchedule.sort((a, b) => a.day - b.day);
+    }
+    return { insertedBlocks, recoveredTasks, missingTasks };
+}
+
+function rebalanceTasksWithinDays(finalSchedule, tasksForAI) {
+    if (!Array.isArray(finalSchedule) || finalSchedule.length === 0) {
+        return 0;
+    }
+    const taskMetaMap = new Map();
+    (tasksForAI || []).forEach(task => {
+        if (!task || !task.title) return;
+        const norm = normalizeTitleForMatch(task.title);
+        if (!norm) return;
+        taskMetaMap.set(norm, task);
+    });
+    let movedCount = 0;
+    finalSchedule.forEach(dayObj => {
+        const taskActivities = (dayObj.activities || []).filter(act => act && act.type === 'task');
+        taskActivities.sort((a, b) => {
+            const as = toMinutesSafe(a.start);
+            const bs = toMinutesSafe(b.start);
+            if (as === null && bs === null) return 0;
+            if (as === null) return 1;
+            if (bs === null) return -1;
+            return as - bs;
+        });
+        taskActivities.forEach(activity => {
+            const startMin = toMinutesSafe(activity.start);
+            const endMin = toMinutesSafe(activity.end);
+            if (startMin === null || endMin === null) return;
+            const duration = endMin - startMin;
+            if (duration <= 0) return;
+            const meta = taskMetaMap.get(normalizeTitleForMatch(activity.title)) || {};
+            const pref = (typeof meta.timePreference === 'string' && meta.timePreference.trim().length > 0)
+                ? meta.timePreference
+                : 'any';
+            const windows = getPreferredWindows(pref);
+            let moved = false;
+            for (const [windowStart, windowEnd] of windows) {
+                if (relocateActivityWithinWindow(dayObj, activity, duration, windowStart, windowEnd)) {
+                    movedCount++;
+                    moved = true;
+                    break;
+                }
+            }
+            if (!moved) {
+                if (relocateActivityWithinWindow(dayObj, activity, duration, 6 * 60, 23 * 60)) {
+                    movedCount++;
+                }
+            }
+        });
+    });
+    return movedCount;
+}
+
+function findFreeTimeSlots(dayObj, minDuration = 30) {
+    const intervals = getOccupiedIntervals(dayObj);
+    const freeSlots = [];
+    let cursor = 6 * 60; // 06:00부터 시작 (너무 이른 시간 제외)
+    const endOfDay = 23 * 60; // 23:00까지
+    
+    for (const interval of intervals) {
+        if (interval.start > cursor && interval.start - cursor >= minDuration) {
+            freeSlots.push({
+                start: cursor,
+                end: interval.start,
+                duration: interval.start - cursor
+            });
+        }
+        cursor = Math.max(cursor, interval.end);
+        if (cursor >= endOfDay) break;
+    }
+    
+    if (endOfDay - cursor >= minDuration) {
+        freeSlots.push({
+            start: cursor,
+            end: endOfDay,
+            duration: endOfDay - cursor
+        });
+    }
+    
+    return freeSlots.sort((a, b) => b.duration - a.duration); // 큰 시간대부터
+}
+
+function fillFreeTimeWithTasks(finalSchedule, tasksForAI, finalStartDay, finalEndDay, now, getEffectiveDeadlineDay) {
+    if (!Array.isArray(finalSchedule) || finalSchedule.length === 0) {
+        return { addedBlocks: 0 };
+    }
+    
+    const taskMetaMap = new Map();
+    (tasksForAI || []).forEach(task => {
+        if (!task || !task.title || (task.type && task.type !== 'task')) return;
+        const norm = normalizeTitleForMatch(task.title);
+        if (!norm) return;
+        if (!taskMetaMap.has(norm)) {
+            taskMetaMap.set(norm, []);
+        }
+        taskMetaMap.get(norm).push(task);
+    });
+    
+    let addedBlocks = 0;
+    
+    finalSchedule.forEach(dayObj => {
+        if (!dayObj || dayObj.day < finalStartDay || dayObj.day > finalEndDay) return;
+        
+        const existingTasks = (dayObj.activities || [])
+            .filter(act => act && act.type === 'task')
+            .map(act => normalizeTitleForMatch(act.title));
+        
+        const freeSlots = findFreeTimeSlots(dayObj, 60); // 최소 1시간 빈 시간대만
+        
+        for (const slot of freeSlots) {
+            if (slot.duration < 60) continue; // 최소 1시간 이상만
+            
+            // 이미 배치된 task 중에서 빈 시간대에 추가 배치 가능한 것 찾기
+            for (const [normTitle, taskList] of taskMetaMap.entries()) {
+                if (existingTasks.includes(normTitle)) {
+                    // 이미 배치된 task는 추가 배치 가능
+                    const task = taskList[0];
+                    const effectiveDeadline = Math.min(
+                        getEffectiveDeadlineDay ? getEffectiveDeadlineDay(task) : finalEndDay,
+                        finalEndDay
+                    );
+                    
+                    if (dayObj.day > effectiveDeadline) continue;
+                    
+                    const duration = Math.min(
+                        Math.max(30, Number(task.min_block_minutes) || 60),
+                        slot.duration
+                    );
+                    
+                    if (duration < 30) continue;
+                    
+                    const slotStart = slot.start;
+                    const slotEnd = Math.min(slot.start + duration, slot.end);
+                    
+                    // 겹침 확인
+                    const overlaps = (dayObj.activities || []).some(act => {
+                        const as = toMinutesSafe(act.start);
+                        const ae = toMinutesSafe(act.end);
+                        if (as === null || ae === null) return false;
+                        return !(slotEnd <= as || slotStart >= ae);
+                    });
+                    
+                    if (!overlaps) {
+                        dayObj.activities.push({
+                            start: minutesToTime(slotStart),
+                            end: minutesToTime(slotEnd),
+                            title: task.title,
+                            type: 'task',
+                            __autoInserted: true,
+                            __fillFreeTime: true
+                        });
+                        dayObj.activities.sort((a, b) => {
+                            const as = toMinutesSafe(a.start);
+                            const bs = toMinutesSafe(b.start);
+                            if (as === null && bs === null) return 0;
+                            if (as === null) return 1;
+                            if (bs === null) return -1;
+                            return as - bs;
+                        });
+                        addedBlocks++;
+                        break; // 이 slot은 사용했으므로 다음 slot으로
+                    }
+                }
+            }
+        }
+    });
+    
+    return { addedBlocks };
 }
 
 class AIService {
@@ -345,6 +745,11 @@ class AIService {
                     minBlockMinutes = 90; // 1.5시간
                 }
                 
+                const requiredMinutes = Math.max(
+                    30,
+                    Number(task.estimatedMinutes || task.durationMin || minBlockMinutes || 60)
+                );
+                
                 // DB의 deadline을 직접 사용하여 deadline_day 계산
                 let deadlineDay = getDeadlineDay(task.deadline);
                 
@@ -361,15 +766,8 @@ class AIService {
                 // 중요도와 난이도가 모두 상이면 매일 배치 필요
                 const bothHigh = highPriority && highDifficulty;
                 
-                // timePreference 파싱 (description이나 title에서 추출)
-                let timePreference = 'any';
-                const taskText = (task.title || '') + ' ' + (task.description || '');
-                const lowerText = taskText.toLowerCase();
-                if (/(오전|아침|모닝|morning|아침형|오전에)/.test(lowerText)) {
-                    timePreference = 'morning';
-                } else if (/(오후|저녁|이브닝|evening|저녁에|밤에)/.test(lowerText)) {
-                    timePreference = 'evening';
-                }
+                // timePreference 항상 'any'로 설정 (선호 시간대 제거)
+                const timePreference = 'any';
                 
                 const requireDaily = task.require_daily === true || bothHigh || highPriority || highDifficulty || urgent || veryUrgent;
                 
@@ -382,7 +780,7 @@ class AIService {
                     difficulty: highDifficulty ? '상' : (task.difficulty === '중' ? '중' : '하'),
                     min_block_minutes: minBlockMinutes,
                     type: task.type || 'task', // type 정보 추가 (appointment인 경우 특별 처리)
-                    timePreference: task.timePreference || timePreference, // 오전/오후 선호도
+                    timePreference: 'any', // 항상 'any'로 설정 (선호 시간대 제거)
                     // 긴급도 정보 추가 (AI가 우선순위 판단에 사용)
                     urgency_level: bothHigh ? '매우중요' : (veryUrgent ? '매우긴급' : (urgent ? '긴급' : '보통')),
                     days_until_deadline: daysUntilDeadline,
@@ -456,7 +854,7 @@ class AIService {
                 difficulty: t.difficulty,
                 min_block_minutes: t.min_block_minutes,
                     type: t.type || 'task', // type 정보 추가 (appointment인 경우 특별 처리)
-                    time_preference: t.timePreference || 'any', // 오전/오후 선호도
+                    time_preference: 'any', // 항상 'any'로 설정 (선호 시간대 제거)
                     require_daily: t.require_daily || false // 마감일까지 매일 배치 필요 여부
                 };
                 
@@ -669,8 +1067,8 @@ class AIService {
             }
             
             // 시스템 프롬프트 생성 (별도 파일에서 관리)
-            // slimMode: 운영 환경에서는 true로 설정하여 프롬프트 길이 최적화
-            const slimMode = process.env.PROMPT_SLIM_MODE === 'true' || process.env.NODE_ENV === 'production';
+            // slimMode: 항상 true로 설정하여 프롬프트 길이 최적화
+            const slimMode = true;
             const { buildSystemPrompt } = require('../prompts/systemPrompt');
             const systemPrompt = buildSystemPrompt({
                 finalStartDay,
@@ -884,6 +1282,37 @@ class AIService {
                 activities: Array.isArray(dayObj.activities) ? dayObj.activities : []
             }));
             
+            // 후보정 비활성화 (AI 원본 그대로 사용)
+            // const lifestyleCoverageStats = ensureLifestyleCoverage(
+            //     finalSchedule,
+            //     lifestyleTexts,
+            //     finalStartDay,
+            //     finalEndDay,
+            //     now
+            // );
+            // if (lifestyleCoverageStats.inserted > 0) {
+            //     console.warn(`[보정] 누락된 lifestyle ${lifestyleCoverageStats.inserted}개 자동 보완됨`);
+            // }
+            
+            // const taskCoverageStats = ensureTaskCoverage(
+            //     finalSchedule,
+            //     tasksForAI,
+            //     finalStartDay,
+            //     finalEndDay,
+            //     now,
+            //     getEffectiveDeadlineDay
+            // );
+            // if (taskCoverageStats.recoveredTasks > 0) {
+            //     console.warn(`[보정] 누락된 task ${taskCoverageStats.recoveredTasks}건에 대해 ${taskCoverageStats.insertedBlocks}개 블록 자동 추가`);
+            // } else if (taskCoverageStats.missingTasks > 0) {
+            //     console.warn(`[경고] ${taskCoverageStats.missingTasks}개 task를 자동 배치하지 못했습니다.`);
+            // }
+            
+            // const rebalancedTaskCount = rebalanceTasksWithinDays(finalSchedule, tasksForAI);
+            // if (rebalancedTaskCount > 0) {
+            //     console.warn(`[보정] task 시간대 재배치 ${rebalancedTaskCount}회 수행`);
+            // }
+            
             // ===== 서버 측 검증 및 수정 =====
             // 1. appointment 검증 및 수정
             const appointmentTasks = tasksForAI.filter(t => t.type === 'appointment' && t.deadlineTime);
@@ -943,50 +1372,50 @@ class AIService {
                 });
             }
             
-            // 2. time_preference 검증 및 수정 (전체 범위 검사)
-            if (feedbackConstraints.preferMorning) {
-                const morningTasks = tasksForAI.filter(t => t.timePreference === 'morning');
-                morningTasks.forEach(task => {
-                    const targetTitle = normalizeTitleForMatch(task.title);
-                    finalSchedule
-                        .filter(dayObj => {
-                            const effectiveDeadline = getEffectiveDeadlineDay(task);
-                            return dayObj.day >= baseRelDay && dayObj.day <= effectiveDeadline;
-                        })
-                        .forEach(dayObj => {
-                            const activity = findMatchingActivity(dayObj, targetTitle);
-                            const startMin = activity ? toMinutesSafe(activity.start) : null;
-                            const endMin = activity ? toMinutesSafe(activity.end) : null;
-                            if (!activity || startMin === null || endMin === null) return;
-                            if (startMin >= 12 * 60) {
-                                const duration = endMin - startMin;
-                                relocateActivityWithinWindow(dayObj, activity, duration, 6 * 60, 12 * 60);
-                            }
-                        });
-                });
-            }
+            // 2. time_preference 검증 및 수정 비활성화 (선호 시간대 제거)
+            // if (feedbackConstraints.preferMorning) {
+            //     const morningTasks = tasksForAI.filter(t => t.timePreference === 'morning');
+            //     morningTasks.forEach(task => {
+            //         const targetTitle = normalizeTitleForMatch(task.title);
+            //         finalSchedule
+            //             .filter(dayObj => {
+            //                 const effectiveDeadline = getEffectiveDeadlineDay(task);
+            //                 return dayObj.day >= baseRelDay && dayObj.day <= effectiveDeadline;
+            //             })
+            //             .forEach(dayObj => {
+            //                 const activity = findMatchingActivity(dayObj, targetTitle);
+            //                 const startMin = activity ? toMinutesSafe(activity.start) : null;
+            //                 const endMin = activity ? toMinutesSafe(activity.end) : null;
+            //                 if (!activity || startMin === null || endMin === null) return;
+            //                 if (startMin >= 12 * 60) {
+            //                     const duration = endMin - startMin;
+            //                     relocateActivityWithinWindow(dayObj, activity, duration, 6 * 60, 12 * 60);
+            //                 }
+            //             });
+            //     });
+            // }
 
-            if (feedbackConstraints.preferEvening) {
-                const eveningTasks = tasksForAI.filter(t => t.timePreference === 'evening');
-                eveningTasks.forEach(task => {
-                    const targetTitle = normalizeTitleForMatch(task.title);
-                    finalSchedule
-                        .filter(dayObj => {
-                            const effectiveDeadline = getEffectiveDeadlineDay(task);
-                            return dayObj.day >= baseRelDay && dayObj.day <= effectiveDeadline;
-                        })
-                        .forEach(dayObj => {
-                            const activity = findMatchingActivity(dayObj, targetTitle);
-                            const startMin = activity ? toMinutesSafe(activity.start) : null;
-                            const endMin = activity ? toMinutesSafe(activity.end) : null;
-                            if (!activity || startMin === null || endMin === null) return;
-                            if (startMin < 18 * 60) {
-                                const duration = endMin - startMin;
-                                relocateActivityWithinWindow(dayObj, activity, duration, 18 * 60, 23 * 60);
-                            }
-                        });
-                });
-            }
+            // if (feedbackConstraints.preferEvening) {
+            //     const eveningTasks = tasksForAI.filter(t => t.timePreference === 'evening');
+            //     eveningTasks.forEach(task => {
+            //         const targetTitle = normalizeTitleForMatch(task.title);
+            //         finalSchedule
+            //             .filter(dayObj => {
+            //                 const effectiveDeadline = getEffectiveDeadlineDay(task);
+            //                 return dayObj.day >= baseRelDay && dayObj.day <= effectiveDeadline;
+            //             })
+            //             .forEach(dayObj => {
+            //                 const activity = findMatchingActivity(dayObj, targetTitle);
+            //                 const startMin = activity ? toMinutesSafe(activity.start) : null;
+            //                 const endMin = activity ? toMinutesSafe(activity.end) : null;
+            //                 if (!activity || startMin === null || endMin === null) return;
+            //                 if (startMin < 18 * 60) {
+            //                     const duration = endMin - startMin;
+            //                     relocateActivityWithinWindow(dayObj, activity, duration, 18 * 60, 23 * 60);
+            //                 }
+            //             });
+            //     });
+            // }
 
             if (feedbackConstraints.noWorkDuringLunch) {
                 let lunchRelocated = 0;
@@ -1151,6 +1580,7 @@ class AIService {
                     notes: notes.length
                 });
             }
+            
             console.log(`[스케줄 생성 시간] ${T_END - T0}ms`);
             
             return {

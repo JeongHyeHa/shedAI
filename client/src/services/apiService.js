@@ -25,8 +25,23 @@ class ApiService {
         throw new Error(`API 요청 실패: ${response.status} ${response.statusText} - ${errorText}`);
       }
 
-      const data = await response.json();
-      return data;
+      // Content-Type 확인
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('[API] JSON이 아닌 응답 수신:', text.substring(0, 200));
+        throw new Error(`API 응답이 JSON 형식이 아닙니다. Content-Type: ${contentType}`);
+      }
+
+      try {
+        const data = await response.json();
+        return data;
+      } catch (jsonError) {
+        // JSON 파싱 실패 시 원본 텍스트 확인
+        const text = await response.clone().text();
+        console.error('[API] JSON 파싱 실패. 응답 내용:', text.substring(0, 200));
+        throw new Error(`JSON 파싱 실패: ${jsonError.message}`);
+      }
     } catch (error) {
       console.error('[API] 요청 실패:', error);
       throw error;

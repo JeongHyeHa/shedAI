@@ -150,8 +150,10 @@ export const parseDateString = (text, today = new Date()) => {
       { regex: /다음\s*(월|화|수|목|금|토|일)요일/, type: 'nextWeekday' },
       { regex: /오는\s*(월|화|수|목|금|토|일)요일/, type: 'comingWeekday' },
       { regex: /이번\s*(월|화|수|목|금|토|일)요일/, type: 'thisWeekday' },
-      { regex: /(\d+)일\s*(후|뒤)/, type: 'daysAfter' },
-      { regex: /(\d+)주\s*(후|뒤)/, type: 'weeksAfter' }
+      { regex: /(\d+)\s*일\s*(후|뒤)/, type: 'daysAfter' },
+      { regex: /(\d+)\s*주\s*(후|뒤)/, type: 'weeksAfter' },
+      { regex: /(\d+)\s*일\s*(안|안에|내|이내)/, type: 'daysWithin' },
+      { regex: /(\d+)\s*주\s*(안|안에|내|이내)/, type: 'weeksWithin' }
     ];
 
     for (const pattern of patterns) {
@@ -174,6 +176,22 @@ export const parseDateString = (text, today = new Date()) => {
     if (relDT) {
       dt = relDT;
       console.log('[parseDateString] 상대일+시각 매칭:', dt);
+    }
+  }
+
+  // "이번 달/다음 달"과 같은 월 마감 표현 처리
+  if (!dt) {
+    const monthRangeMatch = norm.match(/(이번|이\s*번|이달|다음)\s*달\s*(?:안|안에|까지|내|말|말까지)?/);
+    if (monthRangeMatch) {
+      const keyword = monthRangeMatch[1].replace(/\s+/g, '');
+      const year = base.getFullYear();
+      const month = base.getMonth();
+      if (keyword === '다음') {
+        dt = new Date(year, month + 2, 0, 0, 0, 0, 0); // 다음 달의 마지막 날
+      } else {
+        dt = new Date(year, month + 1, 0, 0, 0, 0, 0); // 이번 달의 마지막 날
+      }
+      console.log('[parseDateString] 월 마감 표현 매칭:', keyword === '다음' ? '다음달' : '이번달', dt);
     }
   }
 
@@ -248,7 +266,15 @@ const parseDateByType = (match, type, today) => {
       daysAfterDate.setDate(today.getDate() + days);
       return daysAfterDate;
       
+    case 'daysWithin':
+      // "N일 안에"는 오늘을 포함한 N일이므로, 실제로는 (N-1)일 후가 마감일
+      const daysWithin = parseInt(match[1]);
+      const daysWithinDate = new Date(today);
+      daysWithinDate.setDate(today.getDate() + (daysWithin - 1));
+      return daysWithinDate;
+      
     case 'weeksAfter':
+    case 'weeksWithin':
       const weeks = parseInt(match[1]);
       const weeksAfterDate = new Date(today);
       weeksAfterDate.setDate(today.getDate() + (weeks * 7));
